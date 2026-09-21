@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,interactive-widget=resizes-content">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Mobile Codex</title>
+  <link rel="stylesheet" href="app.css">
+  <script src="ui-core.js" defer></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <svg class="symbols" aria-hidden="true" xmlns="http://www.w3.org/2000/svg"><defs>
+    <symbol id="i-code" viewBox="0 0 24 24"><path d="m8 6-6 6 6 6m8-12 6 6-6 6m-3-15-2 18"/></symbol>
+    <symbol id="i-panel" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-edit" viewBox="0 0 24 24"><path d="m15 4 5 5M4 20l5-1L21 7a2 2 0 0 0-5-5L4 14v6Z"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9ZM14 3v6h6M8 13h8M8 17h5"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></symbol>
+    <symbol id="i-up" viewBox="0 0 24 24"><path d="M12 19V5m-6 6 6-6 6 6"/></symbol>
+    <symbol id="i-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+    <symbol id="i-back" viewBox="0 0 24 24"><path d="m14 6-6 6 6 6"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M6 18 18 6"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="3"/><circle cx="15" cy="17" r="3"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+    <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></symbol>
+    <symbol id="i-attach" viewBox="0 0 24 24"><path d="m20.5 11.5-8.8 8.8a6 6 0 0 1-8.5-8.5L13.1 1.9a4 4 0 0 1 5.7 5.7l-10 10a2 2 0 0 1-2.9-2.9l9.2-9.2"/></symbol>
+    <symbol id="i-chevron-right" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18m-2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></symbol>
+  </defs></svg>
+  <div id="scrim" class="scrim" hidden></div>
+  <aside id="sidebar" class="sidebar">
+    <div class="sidebar-top"><div class="brand"><svg><use href="#i-code"/></svg><span>Codex</span><span class="mobile-tag">mobile</span></div><button class="icon-button sidebar-toggle" aria-label="사이드바 접기"><svg><use href="#i-panel"/></svg></button></div>
+    <button id="new-chat" class="nav-button"><svg><use href="#i-edit"/></svg>새 대화<span class="keyhint">+</span></button>
+    <button id="show-files" class="nav-button"><svg><use href="#i-folder"/></svg>파일 탐색</button>
+    <button id="show-terminal" class="nav-button"><svg><use href="#i-code"/></svg>터미널</button>
+    <button id="show-tools" class="nav-button"><svg><use href="#i-settings"/></svg>플러그인 · 스킬 · MCP</button>
+    <button id="show-recovery" class="nav-button"><svg><use href="#i-clock"/></svg>복구 사본</button>
+    <div class="sidebar-scroll">
+    <div class="section-title"><span>프로젝트</span><button id="add-project" class="icon-button" aria-label="프로젝트 추가"><svg><use href="#i-plus"/></svg></button></div>
+    <span id="project-label" hidden>폴더 선택</span><div id="projects" class="projects" aria-label="프로젝트 목록"></div>
+    <div class="section-title history-title">일반 대화</div>
+    <div id="sessions" class="sessions"><p class="sidebar-empty">대화를 시작하면 여기에 표시됩니다.</p></div>
+    </div>
+    <div class="sidebar-bottom"><button id="settings" class="nav-button"><svg><use href="#i-settings"/></svg>설정</button><button id="account-button" class="account-button"><span id="avatar">M</span><span><strong id="account-name">계정 연결</strong><small id="account-plan">ChatGPT로 로그인</small></span><span id="connection-dot" class="connection-dot"></span></button></div>
+  </aside>
+  <main class="main">
+    <header class="topbar"><div class="topbar-left"><button class="icon-button sidebar-toggle" aria-label="사이드바 열기"><svg><use href="#i-panel"/></svg></button><span id="header-project">새 대화</span><span class="topbar-divider">/</span><span id="header-title">Mobile Codex</span></div><button id="files-toggle" class="outline-button"><svg><use href="#i-panel"/></svg><span>파일</span></button></header>
+    <div class="workspace-body">
+      <section class="conversation">
+        <div id="chat-scroll" class="chat-scroll">
+          <div id="welcome" class="welcome">
+            <div id="welcome-character" class="welcome-character"></div><div class="welcome-mark"><svg><use href="#i-code"/></svg></div>
+            <h1>어떤 작업을 할까요?</h1>
+            <p>아이디어부터 코드, 기기의 파일까지. Codex와 함께 작업하세요.</p>
+            <div class="onboarding" id="onboarding">
+              <button id="connect" class="setup-row"><span class="step" id="login-step">1</span><span><strong>ChatGPT 계정 연결</strong><small>사용 중인 계정으로 시작하세요</small></span><span class="row-arrow">→</span></button>
+              <button id="choose-folder" class="setup-row"><span class="step" id="folder-step">2</span><span><strong>작업 폴더 선택</strong><small>프로젝트 폴더를 연결하세요</small></span><span class="row-arrow">→</span></button>
+            </div>
+            <div class="suggestions" id="suggestions" hidden><button data-prompt="이 폴더에 어떤 파일이 있는지 살펴보고 정리해줘."><svg><use href="#i-folder"/></svg>폴더 살펴보기</button><button data-prompt="이 프로젝트를 살펴보고 실행 방법과 개선할 부분을 알려줘."><svg><use href="#i-edit"/></svg>프로젝트 이해하기</button><button data-prompt="이 프로젝트의 변경 사항을 검토하고 버그가 있는지 찾아줘."><svg><use href="#i-search"/></svg>변경 사항 검토</button></div>
+          </div>
+          <div id="messages" class="messages" aria-live="polite"></div>
+          <div id="activity" class="activity" hidden><span id="activity-character" class="activity-character"></span><span class="pulse-dot"></span><span id="activity-text">작업 중</span></div>
+        </div>
+        <div class="composer-wrap">
+          <button id="jump-latest" class="jump-latest" aria-label="최신 메시지로 이동" hidden><svg><use href="#i-down"/></svg><span>최신 메시지</span></button>
+          <form id="composer" class="composer">
+            <div id="draft-context" class="draft-context" hidden aria-label="첨부와 대화 컨텍스트"></div>
+            <textarea id="prompt" rows="1" aria-controls="autocomplete" aria-expanded="false" aria-autocomplete="list" aria-label="Codex에게 요청" placeholder="무엇이든 요청하세요. @ 파일·앱, $ 스킬" maxlength="50000"></textarea>
+            <div id="autocomplete" class="autocomplete" role="listbox" aria-label="자동 완성" hidden></div>
+            <div class="composer-bottom">
+              <button id="add-attachment" type="button" class="icon-button composer-attach" aria-label="파일 또는 이미지 첨부"><svg><use href="#i-plus"/></svg></button>
+              <button id="composer-folder" type="button" class="context-button" aria-label="작업 폴더 선택"><svg><use href="#i-folder"/></svg><span id="context-folder">폴더 선택</span></button>
+              <div class="composer-actions">
+                <button id="composer-options" type="button" class="context-button options-button" aria-haspopup="dialog" aria-controls="options-dialog"><svg><use href="#i-settings"/></svg><span id="model-summary">기본 모델</span><svg><use href="#i-down"/></svg></button>
+                <button id="send" type="submit" class="send-button" aria-label="보내기" disabled><svg><use href="#i-up"/></svg></button>
+                <button id="stop" type="button" class="send-button" aria-label="작업 중지" hidden><svg><use href="#i-stop"/></svg></button>
+              </div>
+            </div>
+          </form>
+          <div class="composer-footnote"><span id="runtime-status" role="status">기기에서 파일 작업</span><button id="show-activity"><svg><use href="#i-clock"/></svg>작업 기록</button></div>
+        </div>
+      </section>
+      <aside id="file-panel" class="file-panel" hidden><div class="panel-head"><strong>파일</strong><div><button id="file-up" class="icon-button" aria-label="상위 폴더"><svg><use href="#i-up"/></svg></button><button id="file-new" class="icon-button" aria-label="새 파일"><svg><use href="#i-plus"/></svg></button><button id="folder-new" class="icon-button" aria-label="새 폴더"><svg><use href="#i-folder"/></svg></button><button id="file-close" class="icon-button" aria-label="파일 탐색 닫기"><svg><use href="#i-close"/></svg></button></div></div><div class="file-search"><svg><use href="#i-search"/></svg><input id="file-query" placeholder="파일 이름 검색" aria-label="파일 이름 검색"></div><div id="breadcrumbs" class="breadcrumbs">작업 폴더</div><div id="file-list" class="file-list"></div></aside>
+    </div>
+  </main>
+  <dialog id="options-dialog" class="sheet-dialog options-sheet" aria-labelledby="options-title">
+    <div class="dialog-head"><div><p class="eyebrow">대화 설정</p><h2 id="options-title">모델 및 작업 방식</h2></div><button class="icon-button" data-close="options-dialog" aria-label="닫기"><svg><use href="#i-close"/></svg></button></div>
+    <p class="muted">모델과 추론 강도는 이 대화의 초안에 저장됩니다. 작업 권한은 앱 전체에 적용됩니다.</p>
+    <div class="option-field"><span>모델</span><div id="model-list" class="model-list" role="radiogroup" aria-label="모델"></div><select id="model" class="sr-only" aria-hidden="true" tabindex="-1"><option value="">기본 모델</option></select><small id="model-help">기본 모델을 사용합니다.</small></div>
+    <label class="option-field" for="effort"><span>추론 강도</span><select id="effort"><option value="">기본</option></select><small>지원되는 경우에만 선택할 수 있습니다.</small></label>
+    <fieldset class="permission-field"><legend>작업 권한</legend><label><input type="radio" name="permission" value="read-only"> <span><strong>읽기 전용</strong><small>파일을 살펴보고 제안합니다.</small></span></label><label><input type="radio" name="permission" value="workspace-write" checked> <span><strong>프로젝트 쓰기</strong><small>선택한 폴더 안에서 파일을 바꿀 수 있습니다.</small></span></label><label><input type="radio" name="permission" value="danger-full-access"> <span><strong>전체 접근</strong><small>앱에 허용된 기기 파일과 명령을 사용합니다.</small></span></label><select id="permissions" hidden><option value="read-only">읽기 전용</option><option value="workspace-write" selected>프로젝트 쓰기</option><option value="danger-full-access">전체 접근</option></select></fieldset>
+    <p id="permission-help" class="muted"></p>
+    <button class="primary-button sheet-done" data-close="options-dialog">완료</button>
+  </dialog>
+  <dialog id="file-actions-dialog" class="sheet-dialog" aria-labelledby="file-actions-title"><div class="dialog-head"><h2 id="file-actions-title">파일 관리</h2><button class="icon-button" data-close="file-actions-dialog" aria-label="닫기"><svg><use href="#i-close"/></svg></button></div><div id="file-actions"></div></dialog>
+  <dialog id="session-actions-dialog" class="sheet-dialog" aria-labelledby="session-actions-title"><div class="dialog-head"><h2 id="session-actions-title">대화 관리</h2><button class="icon-button" data-close="session-actions-dialog" aria-label="닫기"><svg><use href="#i-close"/></svg></button></div><div id="session-actions"></div></dialog>
+  <dialog id="login-dialog"><div class="dialog-head"><h2>ChatGPT 계정 연결</h2><button class="icon-button" data-close="login-dialog" aria-label="닫기"><svg><use href="#i-close"/></svg></button></div><p>아래 코드를 복사한 뒤 브라우저에서 로그인하세요.</p><button id="device-code" class="device-code" aria-label="로그인 코드 복사">연결 준비 중</button><button id="open-login" class="primary-button" disabled>브라우저에서 로그인</button><p id="login-help" class="muted">로그인이 완료되면 이 화면으로 돌아오세요.</p></dialog>
+  <dialog id="settings-dialog" class="settings-dialog"><div class="dialog-head"><div><p class="eyebrow">Mobile Codex</p><h2>설정</h2></div><button class="icon-button" data-close="settings-dialog" aria-label="닫기"><svg><use href="#i-close"/></svg></button></div><div class="settings-layout"><nav class="settings-nav" aria-label="설정 분류"><button class="active" data-settings-tab="general">일반</button><button data-settings-tab="personal">맞춤 지침</button><button data-settings-tab="account">계정</button><button data-settings-tab="tools">도구</button><button data-settings-tab="advanced">고급</button></nav><div class="settings-content"><section class="settings-section" data-settings-panel="general"><h3>일반</h3><div class="settings-row"><span><strong>테마</strong><small>시스템 설정을 따르거나 직접 고릅니다.</small></span><select id="theme"><option value="system">시스템</option><option value="light">라이트</option><option value="dark">다크</option></select></div><div class="settings-row"><span><strong id="chat-icons-label">대화 아이콘</strong><small id="chat-icons-description">답변과 작업 상태에 캐릭터 아이콘을 표시합니다.</small></span><label class="toggle-switch"><input id="chat-icons-toggle" type="checkbox" role="switch" aria-labelledby="chat-icons-label" aria-describedby="chat-icons-description"><span class="toggle-track" aria-hidden="true"></span></label></div></section><section class="settings-section" data-settings-panel="personal" hidden><h3>개인 맞춤 지침</h3><p class="muted">답변 언어, 말투, 작업 방식 등 모든 대화에 적용할 기본 지침을 작성하세요. 프로젝트의 AGENTS.md와 함께 사용됩니다.</p><label for="instructions-editor">Codex가 알아야 할 지침</label><textarea id="instructions-editor" class="instructions-editor" rows="8" placeholder="예: 한국어로 답변하고, 수정 전에 관련 코드를 확인해 주세요." disabled></textarea><p id="instructions-path" class="muted"></p><p id="instructions-status" role="status" class="muted"></p><div class="instructions-actions"><button id="instructions-reload" class="secondary-button">다시 불러오기</button><button id="instructions-save" class="primary-button" disabled>저장</button></div><p class="muted">앱의 .codex 폴더에 저장하며 다음 요청부터 적용합니다. 비워서 저장하면 현재 파일의 지침을 해제합니다. override를 비우면 기본 AGENTS.md가 다시 적용됩니다.</p></section><section class="settings-section" data-settings-panel="account" hidden><h3>계정</h3><div class="settings-row"><span><strong>실행 상태</strong><small id="settings-status">연결 종료</small></span><span id="settings-indicator" class="status-pill">확인 중</span></div><section class="devtools-card" aria-labelledby="usage-title"><strong id="usage-title">사용 한도</strong><p id="usage-status" class="muted" role="status">로그인 후 사용 한도를 조회할 수 있습니다.</p><div id="usage-limits" class="devtools-versions" aria-live="polite"></div><button id="usage-refresh" class="secondary-button">조회 / 새로고침</button></section><p id="pending-deletions" class="muted" role="status" hidden></p><button id="restart" class="secondary-button">Codex 시작 / 다시 연결</button><button id="engine-stop" class="secondary-button subtle-danger">실행 종료</button><button id="logout" class="secondary-button">로그아웃</button></section><section class="settings-section" data-settings-panel="tools" hidden><h3>도구</h3><p id="storage-status" class="muted"></p><button id="storage-access" class="secondary-button">기기 파일 접근 허용</button><section class="devtools-card" aria-labelledby="devtools-title"><strong id="devtools-title">번들 개발 도구</strong><p id="devtools-status" class="muted" role="status">개발 도구 정보를 확인하는 중입니다.</p><div id="devtools-versions" class="devtools-versions" aria-label="개발 도구 버전"></div><button id="devtools-check" class="secondary-button">도구 실행 확인</button><pre id="devtools-output" class="console devtools-output" aria-live="polite" hidden></pre><p class="muted">Python·Node.js·Git을 포함합니다. npm·pip 확장은 Android용 네이티브 빌드가 필요할 수 있으며, Git HTTPS 인증 정보는 직접 입력해야 합니다.</p></section></section><section class="settings-section" data-settings-panel="advanced" hidden><h3>고급</h3><button id="edit-config" class="secondary-button">Codex 설정 편집</button><p class="muted">설정을 저장하면 실행 엔진을 다시 시작합니다.</p></section></div></div><p class="about">Mobile Codex · 0.1.7 alpha<br>제작: nokryong<br>OpenAI 공식 앱이 아닌 개인용 클라이언트입니다.<br>Android용 Codex 포트 0.155.1 · Apache-2.0<br>요청 처리에 사용되는 파일 내용은 AI 서비스로 전송됩니다.</p></dialog>
+  <dialog id="editor-dialog" class="editor-dialog"><div class="dialog-head"><h2 id="editor-title">파일</h2><button class="icon-button" data-close="editor-dialog" aria-label="닫기"><svg><use href="#i-close"/></svg></button></div><textarea id="editor" spellcheck="false" aria-label="파일 내용"></textarea><div class="editor-actions"><button id="editor-rename" class="secondary-button">이름 변경</button><button id="editor-move" class="secondary-button">이동</button><button id="editor-delete" class="secondary-button danger">삭제</button><button id="editor-save" class="primary-button">저장</button></div></dialog>
+  <dialog id="input-dialog"><div class="dialog-head"><h2 id="input-title">입력</h2><button class="icon-button" data-close="input-dialog" aria-label="닫기"><svg><use href="#i-close"/></svg></button></div><p id="input-description" class="muted"></p><input id="input-value" class="text-input" autocomplete="off" aria-labelledby="input-title" enterkeyhint="done"><button id="input-confirm" class="primary-button">계속</button></dialog>
+  <dialog id="recovery-dialog"><div class="dialog-head"><h2>복구 사본</h2><button class="icon-button" data-close="recovery-dialog" aria-label="닫기"><svg><use href="#i-close"/></svg></button></div><p class="muted">수정·삭제 전의 파일을 새 파일로 저장할 수 있습니다. 앱을 삭제하면 복구 사본도 삭제됩니다.</p><div id="recovery-list"></div></dialog>
+  <dialog id="terminal-dialog" class="wide-dialog"><div class="dialog-head"><h2>터미널</h2><button class="icon-button" data-close="terminal-dialog" aria-label="닫기"><svg><use href="#i-close"/></svg></button></div><p id="terminal-cwd" class="muted"></p><p id="terminal-tools-note" class="muted"></p><pre id="terminal-output" class="console" aria-live="polite"></pre><form id="terminal-form" class="terminal-form"><input id="terminal-command" class="text-input" placeholder="명령 입력" aria-label="셸 명령" autocomplete="off" spellcheck="false"><button class="primary-button" type="submit">실행</button><button class="secondary-button" id="terminal-stop" type="button">중지</button></form><p class="muted">기기에 설치된 명령을 Android 앱 권한으로 실행합니다.</p></dialog>
+  <dialog id="tools-dialog" class="wide-dialog"><div class="dialog-head"><h2>플러그인 · 스킬 · MCP</h2><button class="icon-button" data-close="tools-dialog" aria-label="닫기"><svg><use href="#i-close"/></svg></button></div><div class="toolbar"><button id="refresh-tools" class="secondary-button">새로고침</button><button id="marketplace-add" class="secondary-button">마켓플레이스 추가</button><button id="skill-import" class="secondary-button">스킬 가져오기</button><button id="tools-config" class="secondary-button">서버 설정</button></div><div id="tools-list"></div></dialog>
+  <dialog id="config-dialog" class="editor-dialog"><div class="dialog-head"><h2>config.toml</h2><button class="icon-button" data-close="config-dialog" aria-label="닫기"><svg><use href="#i-close"/></svg></button></div><p class="muted">Codex의 모델, 기능, 스킬, MCP 등 원래 설정을 사용할 수 있습니다. 저장 후 실행 엔진을 다시 시작합니다.</p><textarea id="config-editor" spellcheck="false" aria-label="Codex TOML 설정"></textarea><div class="editor-actions"><button id="config-save" class="primary-button">저장하고 다시 시작</button></div></dialog>
+  <dialog id="activity-dialog" class="wide-dialog"><div class="dialog-head"><h2>작업 기록</h2><button class="icon-button" data-close="activity-dialog" aria-label="닫기"><svg><use href="#i-close"/></svg></button></div><div id="event-log"></div></dialog>
+  <dialog id="request-dialog" class="wide-dialog"><div class="dialog-head"><h2 id="request-title">Codex 요청</h2></div><p id="request-reason"></p><div id="request-fields"></div><details><summary>요청 상세</summary><pre id="request-detail" class="console"></pre></details><div id="request-actions" class="editor-actions"></div></dialog>
+  <dialog id="image-dialog" class="image-dialog" aria-labelledby="image-title"><div class="dialog-head"><h2 id="image-title">이미지</h2><button class="icon-button" data-close="image-dialog" aria-label="닫기"><svg><use href="#i-close"/></svg></button></div><div id="image-stage" class="image-stage"><img id="image-preview" alt="이미지"></div><div id="image-thumbnails" class="image-thumbnails" aria-label="이미지 목록" hidden></div><div class="image-viewer-bottom"><div id="image-navigation" class="image-navigation" hidden><button id="image-prev" class="icon-button" aria-label="이전 이미지"><svg><use href="#i-back"/></svg></button><span id="image-counter" role="status"></span><button id="image-next" class="icon-button" aria-label="다음 이미지"><svg class="next-arrow"><use href="#i-back"/></svg></button></div><div class="editor-actions"><button id="image-zoom" class="secondary-button" aria-pressed="false">원본 크기</button><button id="image-save" class="primary-button">기기에 저장</button></div></div></dialog>
+  <div id="toast" class="toast" role="status" hidden></div>
+</body>
+</html>
