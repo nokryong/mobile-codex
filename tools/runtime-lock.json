@@ -1,0 +1,10 @@
+{
+  "package": "@mmmbuto/codex-cli-termux",
+  "version": "0.155.1",
+  "url": "https://registry.npmjs.org/@mmmbuto/codex-cli-termux/-/codex-cli-termux-0.155.1.tgz",
+  "integrity": "sha512-bFHl3o1j9dj+SlZC65IxlQmTEa/17SUfz4e97pqyAoSd966RSKDVPEuct3BLecIBf/g+qVJb2j4IryTZDi62oQ==",
+  "source": "https://github.com/DioNanos/codex-termux/tree/v0.155.1",
+  "license": "Apache-2.0",
+  "abi": "arm64-v8a",
+  "minimumAndroidApi": 29
+}
