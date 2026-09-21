@@ -1,0 +1,418 @@
+package dev.mobilecodex.app;
+
+import android.Manifest;
+import android.annotation.SuppressLint;
+import android.app.*;
+import android.content.*;
+import android.content.pm.PackageManager;
+import android.graphics.Color;
+import android.net.Uri;
+import android.provider.Settings;
+import android.os.*;
+import android.view.View;
+import android.widget.FrameLayout;
+import android.webkit.*;
+import android.widget.ScrollView;
+import android.widget.TextView;
+import androidx.core.view.WindowCompat;
+import androidx.core.view.WindowInsetsCompat;
+import org.json.JSONObject;
+import java.io.ByteArrayInputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.Map;
+import static dev.mobilecodex.app.core.Json.*;
+
+public final class MainActivity extends Activity implements Engine.Ui {
+    static boolean isChatIconPath(String path) {
+        return path != null && path.matches("/chat-icons/[0-9]{2}-[a-z]+(?:-[a-z]+)*\\.png");
+    }
+    static boolean isBrowserUri(Uri uri, boolean allowHttp) {
+        return ("https".equals(uri.getScheme()) || (allowHttp && "http".equals(uri.getScheme())))
+            && uri.getHost() != null && !uri.getHost().isEmpty() && uri.getUserInfo() == null;
+    }
+    private static final String HOST = "appassets.androidplatform.net";
+    private static final int PICK_FOLDER = 31, EXPORT_RECOVERY = 32, IMPORT_SKILL = 33, EXPORT_IMAGE = 34, PICK_ATTACHMENTS = 35, EXPORT_ATTACHMENT = 36;
+    private WebView web;
+    private SafeWebViewLayout root;
+    private boolean keyboardVisible;
+    private String theme = "system";
+    private Engine engine;
+    private boolean loaded;
+    private AlertDialog approvalDialog;
+    private String approvalId = "", exportId = "";
+    private String pendingPickerId, pendingSkillId;
+    private String pendingImageId;
+    private String reconnectProjectKey = "", pendingAttachmentRequest, attachmentDraftKey, exportAttachmentId;
+    private final java.util.ArrayDeque<String> pendingUiEvents = new java.util.ArrayDeque<>();
+
+    @SuppressLint("SetJavaScriptEnabled")
+    @Override public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
+        getWindow().setStatusBarColor(Color.TRANSPARENT);
+        getWindow().setNavigationBarColor(Color.TRANSPARENT);
+        getWindow().setNavigationBarContrastEnforced(false);
+        engine = ((MobileCodexApp) getApplication()).engine();
+        if (savedInstanceState != null) { exportId = savedInstanceState.getString("exportId", ""); pendingPickerId = savedInstanceState.getString("pickerId"); pendingSkillId = savedInstanceState.getString("skillId"); }
+        if (savedInstanceState != null) pendingImageId = savedInstanceState.getString("imageId");
+        if (savedInstanceState != null) {
+            reconnectProjectKey = savedInstanceState.getString("reconnectProjectKey", "");
+            attachmentDraftKey = savedInstanceState.getString("attachmentDraftKey");
+            exportAttachmentId = savedInstanceState.getString("exportAttachmentId");
+        }
+        web = new WebView(this);
+        web.setBackgroundColor(Color.WHITE);
+        WebSettings s = web.getSettings();
+        s.setJavaScriptEnabled(true);
+        s.setDomStorageEnabled(true);
+        s.setAllowFileAccess(false);
+        s.setAllowContentAccess(false);
+        s.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
+        s.setJavaScriptCanOpenWindowsAutomatically(false);
+        s.setSupportMultipleWindows(false);
+        web.addJavascriptInterface(new Bridge(), "Native");
+        web.setWebViewClient(new WebViewClient() {
+            @Override public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+                Uri uri = request.getUrl();
+                if (!"https".equals(uri.getScheme()) || !HOST.equals(uri.getHost())) return denied();
+                String path = uri.getPath();
+                if (path != null && path.startsWith("/images/")) {
+                    try {
+                        String id = path.substring("/images/".length());
+                        return new WebResourceResponse(engine.images.mime(id), null, 200, "OK",
+                            Map.of("Cache-Control", "private, max-age=86400", "X-Content-Type-Options", "nosniff"), engine.images.open(id));
+                    } catch (Exception e) { return denied(); }
+                }
+                // Only this dedicated packaged PNG directory is exposed; no arbitrary asset or file paths.
+                if (isChatIconPath(path)) {
+                    try { return new WebResourceResponse("image/png", null, 200, "OK",
+                        Map.of("Cache-Control", "private, max-age=86400", "X-Content-Type-Options", "nosniff"), getAssets().open("web" + path)); }
+                    catch (Exception e) { return denied(); }
+                }
+                if (path == null || !(path.equals("/index.html") || path.equals("/app.css") || path.equals("/app.js") || path.equals("/ui-core.js"))) return denied();
+                String mime = path.endsWith(".css") ? "text/css" : path.endsWith(".js") ? "application/javascript" : "text/html";
+                try {
+                    return new WebResourceResponse(mime, "UTF-8", 200, "OK",
+                        Map.of("Cache-Control", "no-store", "X-Content-Type-Options", "nosniff"), getAssets().open("web" + path));
+                } catch (Exception e) { return denied(); }
+            }
+            @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) { return true; }
+            @Override public void onPageFinished(WebView view, String url) {
+                if (url.equals("https://" + HOST + "/index.html")) {
+                    loaded = true;
+                    while (!pendingUiEvents.isEmpty()) web.evaluateJavascript(pendingUiEvents.removeFirst(), null);
+                    engine.attach(MainActivity.this);
+                    event("viewport", obj("keyboardVisible", keyboardVisible));
+                }
+            }
+        });
+        web.setWebChromeClient(new WebChromeClient() {
+            @Override public boolean onJsConfirm(WebView view, String url, String message, JsResult result) {
+                new AlertDialog.Builder(MainActivity.this).setTitle("Mobile Codex").setMessage(message)
+                    .setPositiveButton("확인", (dialog, which) -> result.confirm())
+                    .setNegativeButton("취소", (dialog, which) -> result.cancel())
+                    .setOnCancelListener(dialog -> result.cancel()).show();
+                return true;
+            }
+        });
+        root = new SafeWebViewLayout(this, visible -> {
+            if (keyboardVisible != visible) {
+                keyboardVisible = visible;
+                event("viewport", obj("keyboardVisible", visible));
+            }
+        });
+        root.addView(web, new FrameLayout.LayoutParams(-1, -1));
+        setContentView(root);
+        applyTheme("system");
+        if (Build.VERSION.SDK_INT >= 33) getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
+            android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT, this::handleBack);
+        web.loadUrl("https://" + HOST + "/index.html");
+    }
+    private WebResourceResponse denied() {
+        return new WebResourceResponse("text/plain", "UTF-8", 403, "Forbidden", Map.of(), new ByteArrayInputStream(new byte[0]));
+    }
+    @Override protected void onStart() { super.onStart(); if (loaded) engine.attach(this); }
+    @Override protected void onResume() { super.onResume(); if (loaded) engine.attach(this); }
+    @Override protected void onStop() { engine.detach(this); super.onStop(); }
+    @Override protected void onSaveInstanceState(Bundle out) {
+        out.putString("reconnectProjectKey", reconnectProjectKey);
+        out.putString("attachmentDraftKey", attachmentDraftKey);
+        out.putString("exportAttachmentId", exportAttachmentId);
+        out.putString("imageId", pendingImageId);
+        out.putString("skillId", pendingSkillId); out.putString("exportId", exportId); out.putString("pickerId", pendingPickerId); super.onSaveInstanceState(out);
+    }
+    @Override protected void onDestroy() {
+        engine.detach(this);
+        if (approvalDialog != null) approvalDialog.dismiss();
+        web.removeJavascriptInterface("Native"); web.destroy(); super.onDestroy();
+    }
+    @Override public void onBackPressed() { handleBack(); }
+    private void handleBack() {
+        if (keyboardVisible) {
+            WindowCompat.getInsetsController(getWindow(), web).hide(WindowInsetsCompat.Type.ime());
+            return;
+        }
+        if (!loaded) { moveTaskToBack(true); return; }
+        web.evaluateJavascript("window.mobileCodexBack ? window.mobileCodexBack() : false", handled -> {
+            if (!"true".equals(handled) && !isDestroyed()) moveTaskToBack(true);
+        });
+    }
+    private void applyTheme(String choice) {
+        theme = choice;
+        boolean dark = "dark".equals(choice) || ("system".equals(choice)
+            && (getResources().getConfiguration().uiMode & android.content.res.Configuration.UI_MODE_NIGHT_MASK)
+            == android.content.res.Configuration.UI_MODE_NIGHT_YES);
+        int background = Color.parseColor(dark ? "#212121" : "#ffffff");
+        root.setBackgroundColor(background); web.setBackgroundColor(background);
+        var controller = WindowCompat.getInsetsController(getWindow(), web);
+        controller.setAppearanceLightStatusBars(!dark);
+        controller.setAppearanceLightNavigationBars(!dark);
+        event("theme", obj("theme", dark ? "dark" : "light"));
+    }
+    @Override public void onConfigurationChanged(android.content.res.Configuration configuration) {
+        super.onConfigurationChanged(configuration); applyTheme(theme);
+    }
+    @Override public void event(String name, JSONObject data) {
+        runOnUiThread(() -> {
+            if (isDestroyed()) return;
+            String script = "window.mobileCodexEvent(" + JSONObject.quote(name) + "," + data + ");";
+            if (loaded) web.evaluateJavascript(script, null); else pendingUiEvents.addLast(script);
+        });
+    }
+    private void respond(String id, JSONObject result, Throwable error) {
+        event("response", obj("id", id, "result", result, "error", error == null ? null : error.getMessage()));
+    }
+    @Override public void approval(Engine.Approval approval) {
+        runOnUiThread(() -> {
+            if (isDestroyed() || isFinishing() || approval.decision.isDone() || approvalId.equals(approval.id)) return;
+            approvalId = approval.id;
+            TextView text = new TextView(this);
+            text.setText(approval.message); text.setTextIsSelectable(true); text.setTextSize(14); text.setPadding(40, 24, 40, 24);
+            ScrollView scroll = new ScrollView(this); scroll.addView(text);
+            approvalDialog = new AlertDialog.Builder(this).setTitle(approval.title).setView(scroll)
+                .setPositiveButton("적용", (dialog, which) -> approval.decision.complete(true))
+                .setNegativeButton("취소", (dialog, which) -> approval.decision.complete(false))
+                .setOnCancelListener(dialog -> approval.decision.complete(false)).create();
+            approvalDialog.setOnDismissListener(dialog -> approvalId = "");
+            approvalDialog.show();
+            approval.decision.whenComplete((result, error) -> runOnUiThread(() -> {
+                if (approvalId.equals(approval.id) && approvalDialog != null) approvalDialog.dismiss();
+            }));
+        });
+    }
+    private void chooseFolder(String id, String projectKey) {
+        if (engine.isBusy()) { respond(id, null, new IllegalStateException("진행 중인 작업을 먼저 중지해 주세요.")); return; }
+        if (pendingPickerId != null) { respond(id, null, new IllegalStateException("폴더 선택이 진행 중입니다.")); return; }
+        pendingPickerId = id;
+        reconnectProjectKey = projectKey;
+        Intent pick = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+        try { startActivityForResult(pick, PICK_FOLDER); }
+        catch (Exception e) { pendingPickerId = null; reconnectProjectKey = ""; respond(id, null, e); }
+    }
+    @SuppressLint("WrongConstant") // URI grant flags are explicitly masked to the two accepted constants.
+    @Override protected void onActivityResult(int request, int result, Intent data) {
+        super.onActivityResult(request, result, data);
+        if (request == PICK_ATTACHMENTS) {
+            String id = pendingAttachmentRequest, scope = attachmentDraftKey;
+            pendingAttachmentRequest = null; attachmentDraftKey = null;
+            java.util.LinkedHashSet<Uri> uris = new java.util.LinkedHashSet<>();
+            if (result == RESULT_OK && data != null) {
+                ClipData clips = data.getClipData();
+                if (clips != null) for (int i = 0; i < clips.getItemCount(); i++) uris.add(clips.getItemAt(i).getUri());
+                else if (data.getData() != null) uris.add(data.getData());
+            }
+            engine.io.execute(() -> {
+                org.json.JSONArray attachments = new org.json.JSONArray(), errors = new org.json.JSONArray();
+                for (Uri uri : uris) {
+                    try { attachments.put(engine.attachments.importUri(uri)); }
+                    catch (Exception e) { errors.put(e.getMessage() == null ? "파일을 읽지 못했습니다." : e.getMessage()); }
+                }
+                JSONObject receipt = obj("receiptId", java.util.UUID.randomUUID().toString(), "draftKey", scope,
+                    "attachments", attachments, "errors", errors, "cancelled", uris.isEmpty());
+                // Persist before notifying: Android can recreate the WebView while the picker is open.
+                getSharedPreferences("attachment-result", 0).edit().putString("pending", receipt.toString()).commit();
+                event("attachments.picked", receipt);
+                if (id != null) respond(id, receipt, null);
+            });
+        } else if (request == EXPORT_ATTACHMENT) {
+            String attachmentId = exportAttachmentId; exportAttachmentId = null;
+            if (result != RESULT_OK || data == null || data.getData() == null || attachmentId == null) return;
+            Uri destination = data.getData();
+            engine.io.execute(() -> {
+                try (var in = engine.attachments.open(attachmentId); var out = getContentResolver().openOutputStream(destination)) {
+                    if (out == null) throw new java.io.IOException("저장 위치를 열 수 없습니다.");
+                    byte[] buffer = new byte[32768]; int count;
+                    while ((count = in.read(buffer)) != -1) out.write(buffer, 0, count);
+                    event("notice", obj("message", "첨부 파일을 저장했습니다."));
+                } catch (Exception e) { event("error", obj("message", e.getMessage())); }
+            });
+        } else if (request == EXPORT_IMAGE) {
+            String id = pendingImageId; pendingImageId = null;
+            if (result != RESULT_OK || data == null || data.getData() == null || id == null) return;
+            Uri destination = data.getData();
+            engine.io.execute(() -> {
+                try {
+                    try (var in = engine.images.open(id); var out = getContentResolver().openOutputStream(destination)) {
+                        if (out == null) throw new java.io.IOException("저장 위치를 열 수 없습니다.");
+                        byte[] buffer = new byte[32768]; int count;
+                        while ((count = in.read(buffer)) != -1) out.write(buffer, 0, count);
+                    }
+                    event("notice", obj("message", "이미지를 저장했습니다."));
+                } catch (Exception e) { event("error", obj("message", e.getMessage())); }
+            });
+        } else if (request == IMPORT_SKILL) {
+            String id = pendingSkillId; pendingSkillId = null;
+            if (result != RESULT_OK || data == null || data.getData() == null) { respond(id, obj("cancelled", true), null); return; }
+            Uri uri = data.getData();
+            engine.io.execute(() -> {
+                try { respond(id, obj("path", SkillImporter.install(this, uri)), null); }
+                catch (Exception e) { respond(id, null, e); }
+            });
+        } else if (request == PICK_FOLDER) {
+            String id = pendingPickerId; pendingPickerId = null;
+            String projectKey = reconnectProjectKey; reconnectProjectKey = "";
+            if (result != RESULT_OK || data == null || data.getData() == null) { respond(id, obj("cancelled", true), null); return; }
+            Uri uri = data.getData();
+            try {
+                int flags = data.getFlags() & (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+                getContentResolver().takePersistableUriPermission(uri, flags);
+                engine.io.execute(() -> {
+                    try {
+                        if (engine.isBusy()) throw new IllegalStateException("진행 중인 작업을 먼저 중지해 주세요.");
+                        JSONObject workspace = engine.documents.select(uri, projectKey); engine.workspaceChanged(); respond(id, workspace, null);
+                    }
+                    catch (Exception e) { respond(id, null, e); }
+                });
+            } catch (Exception e) { respond(id, null, e); }
+        } else if (request == EXPORT_RECOVERY && result == RESULT_OK && data != null && data.getData() != null) {
+            String id = exportId; exportId = ""; Uri destination = data.getData();
+            engine.io.execute(() -> {
+                try { engine.documents.exportRecovery(id, destination); event("notice", obj("message", "복구 사본을 저장했습니다.")); }
+                catch (Exception e) { event("error", obj("message", e.getMessage())); }
+            });
+        }
+    }
+    private final class Bridge {
+        @JavascriptInterface public void postMessage(String raw) {
+            if (raw == null || raw.length() > 2 * 1024 * 1024) return;
+            String requestId = null;
+            try {
+                JSONObject message = parse(raw);
+                String id = message.getString("id"), action = message.getString("action");
+                requestId = id;
+                JSONObject args = message.optJSONObject("args"); if (args == null) args = new JSONObject();
+                JSONObject parameters = args;
+                if (action.equals("attachments.recover")) {
+                    String saved = getSharedPreferences("attachment-result", 0).getString("pending", "");
+                    respond(id, saved.isEmpty() ? obj("attachments", new org.json.JSONArray()) : new JSONObject(saved), null); return;
+                }
+                if (action.equals("attachments.ack")) {
+                    var prefs = getSharedPreferences("attachment-result", 0);
+                    String saved = prefs.getString("pending", "");
+                    if (!saved.isEmpty() && new JSONObject(saved).optString("receiptId").equals(args.optString("receiptId"))) prefs.edit().remove("pending").apply();
+                    respond(id, obj("ok", true), null); return;
+                }
+                if (action.equals("attachments.pick")) {
+                    String scope = args.getString("draftKey");
+                    runOnUiThread(() -> {
+                        if (attachmentDraftKey != null) { respond(id, null, new IllegalStateException("파일 선택이 진행 중입니다.")); return; }
+                        pendingAttachmentRequest = id; attachmentDraftKey = scope;
+                        try {
+                            startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("*/*")
+                                .addCategory(Intent.CATEGORY_OPENABLE).putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+                                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION), PICK_ATTACHMENTS);
+                        } catch (Exception e) { pendingAttachmentRequest = null; attachmentDraftKey = null; respond(id, null, e); }
+                    }); return;
+                }
+                if (action.equals("attachments.export")) {
+                    JSONObject attachment = engine.attachments.get(args.getString("id"));
+                    runOnUiThread(() -> {
+                        if (exportAttachmentId != null) { respond(id, null, new IllegalStateException("첨부 파일 저장 위치를 선택 중입니다.")); return; }
+                        exportAttachmentId = attachment.optString("id");
+                        try {
+                            startActivityForResult(new Intent(Intent.ACTION_CREATE_DOCUMENT).setType(attachment.optString("mime", "application/octet-stream"))
+                                .addCategory(Intent.CATEGORY_OPENABLE).putExtra(Intent.EXTRA_TITLE, attachment.optString("name")), EXPORT_ATTACHMENT);
+                            respond(id, obj("ok", true), null);
+                        } catch (Exception e) { exportAttachmentId = null; respond(id, null, e); }
+                    }); return;
+                }
+                if (action.equals("images.export")) {
+                    String imageId = args.getString("id"), name = args.optString("name", "codex-image.png");
+                    String mime = engine.images.mime(imageId);
+                    runOnUiThread(() -> {
+                        if (pendingImageId != null) { respond(id, null, new IllegalStateException("이미지 저장 위치를 선택 중입니다.")); return; }
+                        pendingImageId = imageId;
+                        try {
+                            startActivityForResult(new Intent(Intent.ACTION_CREATE_DOCUMENT).setType(mime)
+                                .addCategory(Intent.CATEGORY_OPENABLE).putExtra(Intent.EXTRA_TITLE, name), EXPORT_IMAGE);
+                            respond(id, obj("ok", true), null);
+                        } catch (Exception e) { pendingImageId = null; respond(id, null, e); }
+                    }); return;
+                }
+                if (action.equals("ui.theme")) {
+                    String choice = args.optString("theme", "system");
+                    runOnUiThread(() -> { applyTheme(choice); respond(id, obj("ok", true), null); }); return;
+                }
+                if (action.equals("skills.import")) {
+                    runOnUiThread(() -> {
+                        if (pendingSkillId != null) { respond(id, null, new IllegalStateException("스킬 선택이 진행 중입니다.")); return; }
+                        pendingSkillId = id;
+                        startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION), IMPORT_SKILL);
+                    }); return;
+                }
+                if (action.equals("ui.externalBrowser") || action.equals("ui.openLink")) {
+                    Uri uri = Uri.parse(args.getString("url"));
+                    boolean messageLink = action.equals("ui.openLink");
+                    if (!isBrowserUri(uri, messageLink))
+                        throw new IllegalArgumentException(messageLink ? "올바른 HTTP 또는 HTTPS 주소만 열 수 있습니다." : "HTTPS 주소만 열 수 있습니다.");
+                    runOnUiThread(() -> {
+                        try { startActivity(new Intent(Intent.ACTION_VIEW, uri)); respond(id, obj("ok", true), null); }
+                        catch (Exception e) { respond(id, null, e); }
+                    }); return;
+                }
+                if (action.equals("ui.storageAccess")) {
+                    runOnUiThread(() -> {
+                        try {
+                            if (Build.VERSION.SDK_INT >= 30) {
+                                startActivity(new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                                    Uri.parse("package:" + getPackageName())));
+                            } else requestPermissions(new String[]{Manifest.permission.READ_EXTERNAL_STORAGE, Manifest.permission.WRITE_EXTERNAL_STORAGE}, 42);
+                            respond(id, obj("ok", true), null);
+                        } catch (Exception e) { respond(id, null, e); }
+                    }); return;
+                }
+                if (action.equals("files.pick")) { String key = args.optString("projectKey", ""); runOnUiThread(() -> chooseFolder(id, key)); return; }
+                if (action.equals("ui.loginBrowser")) {
+                    Uri uri = Uri.parse(args.getString("url"));
+                    if (!"https".equals(uri.getScheme()) || !("auth.openai.com".equals(uri.getHost()) || "chatgpt.com".equals(uri.getHost())))
+                        throw new IllegalArgumentException("잘못된 로그인 주소입니다.");
+                    runOnUiThread(() -> { startActivity(new Intent(Intent.ACTION_VIEW, uri)); respond(id, obj("ok", true), null); }); return;
+                }
+                if (action.equals("ui.copyCode")) {
+                    String code = args.getString("code");
+                    runOnUiThread(() -> {
+                        ClipboardManager clipboard = getSystemService(ClipboardManager.class);
+                        clipboard.setPrimaryClip(ClipData.newPlainText("ChatGPT 로그인 코드", code)); respond(id, obj("ok", true), null);
+                    }); return;
+                }
+                if (action.equals("recovery.export")) {
+                    exportId = args.getString("id"); String name = args.getString("name");
+                    runOnUiThread(() -> {
+                        startActivityForResult(new Intent(Intent.ACTION_CREATE_DOCUMENT).setType("application/octet-stream")
+                            .addCategory(Intent.CATEGORY_OPENABLE).putExtra(Intent.EXTRA_TITLE, name), EXPORT_RECOVERY);
+                        respond(id, obj("ok", true), null);
+                    }); return;
+                }
+                if (action.equals("runtime.start") || action.equals("auth.login")) {
+                    runOnUiThread(() -> {
+                        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
+                            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 41);
+                        engine.handle(action, parameters, (value, error) -> respond(id, value, error));
+                    }); return;
+                }
+                engine.handle(action, args, (value, error) -> respond(id, value, error));
+            } catch (Exception e) { if (requestId != null) respond(requestId, null, e); else event("error", obj("message", e.getMessage())); }
+        }
+    }
+}
