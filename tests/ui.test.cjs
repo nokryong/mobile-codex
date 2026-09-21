@@ -60,6 +60,48 @@ test('plugin, skill, MCP screens query real protocol routes',async()=>{
  const routes=calls.filter(m=>m.action==='rpc').map(m=>m.args.method);
  assert.deepEqual(routes,['plugin/list','skills/list','mcpServerStatus/list']);
 });
+test('tool refresh keeps a prior category list when one protocol request fails',async()=>{
+ let pluginCalls=0;
+ const {w}=setup({'rpc':m=>{
+   if(m.args.method==='plugin/list') { pluginCalls++; if(pluginCalls > 1) throw new Error('transport closed'); return {marketplaces:[{name:'local',plugins:[{name:'Keep me',id:'keep'}]}]}; }
+   if(m.args.method==='skills/list') return {data:[]};
+   return {data:[]};
+ }});await tick();w.document.getElementById('show-tools').click();await tick();await tick();
+ assert.match(w.document.getElementById('tools-list').textContent,/Keep me/);
+ w.document.getElementById('refresh-tools').click();await tick();await tick();
+ assert.match(w.document.getElementById('tools-list').textContent,/이전 목록을 표시합니다/);
+ assert.match(w.document.getElementById('tools-list').textContent,/Keep me/);
+});
+test('account usage reads the app-server snapshot and prefers multi-bucket limits',async()=>{
+ const {w,calls}=setup({'rpc':m=>m.args.method==='account/rateLimits/read'?{rateLimits:{primary:{usedPercent:1}},rateLimitsByLimitId:{codex:{limitName:'Codex',primary:{usedPercent:42,windowDurationMins:300,resetsAt:2000000000}}}}:{data:[]}});await tick();
+ w.document.querySelector('[data-settings-tab="account"]').click();await tick();await tick();
+ assert.equal(calls.filter(c=>c.action==='rpc'&&c.args.method==='account/rateLimits/read').length,1);
+ const text=w.document.getElementById('usage-limits').textContent;
+ assert.match(text,/Codex/);assert.match(text,/남은 58%/);assert.match(text,/5시간/);
+});
+
+test('usage never turns missing limits into zero and drops a response from a previous account',async()=>{
+ let finish, delayed=false;
+ const {w,snapshot}=setup({'rpc':m=>m.args.method==='account/rateLimits/read'?(delayed?new Promise(r=>finish=r):{rateLimits:{primary:{usedPercent:null}}}):{data:[]}});await tick();
+ w.document.getElementById('usage-refresh').click();await tick();await tick();
+ assert.equal(w.document.getElementById('usage-limits').textContent,'');
+ assert.match(w.document.getElementById('usage-status').textContent,/제공/);
+ delayed=true;w.document.getElementById('usage-refresh').click();await tick();
+ w.mobileCodexEvent('state',{...snapshot,account:{}});
+ finish({rateLimits:{primary:{usedPercent:42}}});await tick();await tick();
+ assert.equal(w.document.getElementById('usage-limits').textContent,'');
+ assert.match(w.document.getElementById('usage-status').textContent,/계정이 바뀌/);
+});
+
+test('a different project cannot inherit the previous project tool cache after a failure',async()=>{
+ let offline=false;
+ const {w,snapshot}=setup({'rpc':m=>{if(offline)throw new Error('offline');return m.args.method==='skills/list'?{data:[{skills:[{name:'project-only-skill',description:'local',path:'/first/SKILL.md'}]}]}:{data:[],marketplaces:[]};}});await tick();
+ w.document.getElementById('show-tools').click();await tick();await tick();
+ assert.match(w.document.getElementById('tools-list').textContent,/project-only-skill/);
+ offline=true;w.mobileCodexEvent('state',{...snapshot,cwd:'/second',threadId:'second'});
+ w.document.getElementById('refresh-tools').click();await tick();await tick();
+ assert.doesNotMatch(w.document.getElementById('tools-list').textContent,/project-only-skill/);
+});
 
 test('MCP forms collect typed answers without asking users to write JSON',async()=>{
  const {w,responses}=setup();await tick();
@@ -464,4 +506,41 @@ test('offline deletion is reported as pending instead of claiming the original i
  assert.match(d.getElementById('pending-deletions').textContent,/원본 삭제 대기 1건/);
  w.mobileCodexEvent('state',{...snapshot,sessions:[],pendingDeletionCount:0});
  assert.equal(d.getElementById('pending-deletions').hidden,true);
+});
+
+test('development tools use an honest old-backend fallback and retain the project terminal cwd',async()=>{
+ const {w}=setup();await tick();const d=w.document;
+ d.querySelector('[data-settings-tab="tools"]').click();await tick();
+ assert.match(d.getElementById('devtools-status').textContent,/정보를 제공하지 않는/);
+ assert.match(d.getElementById('terminal-cwd').textContent,/\/test\/project/);
+ assert.match(d.getElementById('terminal-tools-note').textContent,/상태는 설정/);
+});
+
+test('development tool check shows checked versions and HTML-looking command output as text',async()=>{
+ const devtools={bundled:true,prepared:true,tools:[{name:'Python',version:'3.13.1'},{name:'Node.js',version:'22.0.0'},{name:'Git',version:'2.47.0'},{name:'npm',version:'10.9.0'},{name:'pip',version:'24.3'}]};
+ const {w,calls,snapshot}=setup({'state':()=>({...snapshot,devtools}),'devtools.check':()=>({ok:true,checks:[{name:'Python',ok:true,output:'Python 3.13.1 <img src=x onerror=alert(1)>'}]})});await tick();const d=w.document;
+ d.querySelector('[data-settings-tab="tools"]').click();await tick();assert.match(d.getElementById('devtools-versions').textContent,/Node.js 22.0.0/);
+ assert.match(d.getElementById('terminal-tools-note').textContent,/Python · Node.js · Git · npm · pip/);
+ d.getElementById('devtools-check').click();await tick();
+ assert.equal(calls.filter(c=>c.action==='devtools.check').length,1);assert.match(d.getElementById('devtools-status').textContent,/완료/);
+ assert.match(d.getElementById('devtools-output').textContent,/<img src=x/);assert.equal(d.getElementById('devtools-output').querySelector('img'),null);
+});
+
+test('development tool partial failures and rejected checks keep output and allow retry',async()=>{
+ let attempt=0;const devtools={bundled:true,prepared:false,tools:[{name:'Python',version:'확인 전'}]};
+ const {w,snapshot}=setup({'state':()=>({...snapshot,devtools}),'devtools.check':()=>{attempt++;if(attempt===1)return {ok:false,checks:[{name:'Python',ok:true,output:'Python 3.13'},{name:'Git',ok:false,output:'not found'}]};if(attempt===2)throw new Error('runtime unavailable');return {ok:true,checks:[{name:'Git',ok:true,output:'git version'}]};}});await tick();const d=w.document;
+ d.getElementById('devtools-check').click();await tick();assert.match(d.getElementById('devtools-status').textContent,/일부 도구/);assert.match(d.getElementById('devtools-output').textContent,/✕ Git/);
+ d.getElementById('devtools-check').click();await tick();assert.match(d.getElementById('devtools-status').textContent,/실패했습니다/);assert.match(d.getElementById('devtools-output').textContent,/runtime unavailable/);assert.equal(d.getElementById('devtools-check').disabled,false);
+ d.getElementById('devtools-check').click();await tick();assert.match(d.getElementById('devtools-status').textContent,/완료/);assert.match(d.getElementById('devtools-output').textContent,/✓ Git/);
+});
+
+test('removing a project keeps its conversations and draft scope in the detached group',async()=>{
+ const {w,calls,snapshot}=setup({'projects.remove':()=>({...snapshot,workspace:{selected:false},projects:[]})});await tick();const d=w.document;
+ const project={key:'gone',name:'Keep files',selected:true,available:true};
+ w.mobileCodexEvent('state',{...snapshot,workspace:{selected:true,key:'gone',name:'Keep files'},projects:[project],sessions:[{id:'old',title:'보존 대화',workspaceKey:'gone'}]});
+ const draft='draft:'+C.draftKey('gone','old');w.localStorage.setItem(draft,'첨부와 초안');
+ const menu=d.querySelector('.project-more');assert.ok(menu);menu.click();await tick();assert.deepEqual(calls.filter(c=>c.action==='projects.remove').at(-1).args,{key:'gone'});
+ w.mobileCodexEvent('state',{...snapshot,workspace:{selected:false},projects:[],sessions:[{id:'old',title:'보존 대화',workspaceKey:'gone'}]});
+ assert.match(d.querySelector('.detached-projects').textContent,/연결 해제된 프로젝트/);assert.match(d.querySelector('.detached-projects').textContent,/보존 대화/);assert.equal(w.localStorage.getItem(draft),'첨부와 초안');
+ d.querySelector('.detached-projects .session').click();await tick();assert.deepEqual(calls.filter(c=>c.action==='chat.resume').at(-1).args,{id:'old'});
 });

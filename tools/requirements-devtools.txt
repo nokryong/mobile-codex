@@ -1,0 +1,3 @@
+# ELF rewrite library used by tools/prepare_devtools.py. Pinning keeps the
+# generated Android native-library layout reproducible in local and CI builds.
+lief==1.0.0
