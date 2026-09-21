@@ -3,14 +3,14 @@ plugins { id 'com.android.application' }
 def suppliedSigningStore = System.getenv('MOBILE_CODEX_KEYSTORE')
 
 android {
-    namespace 'com.seeusoon.mobilecodex'
+    namespace 'dev.mobilecodex.app'
     compileSdk 35
     defaultConfig {
-        applicationId 'com.seeusoon.mobilecodex'
+        applicationId 'dev.mobilecodex.app'
         minSdk 29
         targetSdk 35
-        versionCode 7
-        versionName '0.1.6-alpha'
+        versionCode 8
+        versionName '0.1.7-alpha'
         ndk { abiFilters 'arm64-v8a' }
         testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
     }
@@ -22,7 +22,7 @@ android {
     packaging {
         jniLibs {
             useLegacyPackaging = true
-            keepDebugSymbols += ['**/libcodex.so', '**/libcodexmodehostx.so', '**/libc++_shared.so']
+            keepDebugSymbols += ['**/*.so']
         }
     }
     signingConfigs {
@@ -55,6 +55,13 @@ dependencies {
 
 tasks.register('verifyRuntime') {
     doLast {
+        def toolsManifest = file('src/main/assets/devtools/manifest.json')
+        if (!toolsManifest.isFile() || !file('src/main/assets/devtools/payload.zip').isFile())
+            throw new GradleException('Run tools/prepare_devtools.py and tools/build_native.py before building.')
+        def bundled = new groovy.json.JsonSlurper().parse(toolsManifest)
+        def required = (bundled.nativeFiles.keySet() + bundled.requiredNative).unique()
+        if (!required.every { file('src/main/jniLibs/arm64-v8a/' + it).isFile() })
+            throw new GradleException('Bundled development tools are incomplete; run the runtime preparation scripts.')
         if (!['libcodex.so', 'libcodexmodehostx.so', 'libc++_shared.so'].every { file('src/main/jniLibs/arm64-v8a/' + it).exists() }) {
             throw new GradleException('Run python3 tools/prepare_runtime.py before building. The application must include its runtime.')
         }
