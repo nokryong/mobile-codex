@@ -1,0 +1,63 @@
+plugins { id 'com.android.application' }
+
+def suppliedSigningStore = System.getenv('MOBILE_CODEX_KEYSTORE')
+
+android {
+    namespace 'com.seeusoon.mobilecodex'
+    compileSdk 35
+    defaultConfig {
+        applicationId 'com.seeusoon.mobilecodex'
+        minSdk 29
+        targetSdk 35
+        versionCode 7
+        versionName '0.1.6-alpha'
+        ndk { abiFilters 'arm64-v8a' }
+        testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
+    }
+    compileOptions {
+        coreLibraryDesugaringEnabled true
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+            keepDebugSymbols += ['**/libcodex.so', '**/libcodexmodehostx.so', '**/libc++_shared.so']
+        }
+    }
+    signingConfigs {
+        if (suppliedSigningStore) {
+            provided {
+                storeFile file(suppliedSigningStore)
+                storePassword System.getenv('MOBILE_CODEX_STORE_PASSWORD')
+                keyAlias System.getenv('MOBILE_CODEX_KEY_ALIAS')
+                keyPassword System.getenv('MOBILE_CODEX_KEY_PASSWORD')
+            }
+        }
+    }
+    buildTypes {
+        debug { if (suppliedSigningStore) signingConfig signingConfigs.provided }
+        release { minifyEnabled false }
+    }
+    testOptions { unitTests { returnDefaultValues = true; includeAndroidResources = true } }
+    lint { abortOnError true }
+}
+
+dependencies {
+    implementation 'androidx.core:core:1.15.0'
+    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.5'
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.json:json:20240303'
+    testImplementation 'org.robolectric:robolectric:4.14.1'
+    androidTestImplementation 'androidx.test:runner:1.6.2'
+    androidTestImplementation 'androidx.test.ext:junit:1.2.1'
+}
+
+tasks.register('verifyRuntime') {
+    doLast {
+        if (!['libcodex.so', 'libcodexmodehostx.so', 'libc++_shared.so'].every { file('src/main/jniLibs/arm64-v8a/' + it).exists() }) {
+            throw new GradleException('Run python3 tools/prepare_runtime.py before building. The application must include its runtime.')
+        }
+    }
+}
+tasks.named('preBuild').configure { dependsOn 'verifyRuntime' }
