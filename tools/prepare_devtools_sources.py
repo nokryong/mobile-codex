@@ -63,6 +63,8 @@ def prepare() -> Path:
     output.parent.mkdir(parents=True, exist_ok=True)
     pending = output.with_suffix('.partial')
     with zipfile.ZipFile(pending, 'w', compression=zipfile.ZIP_STORED) as archive:
+        for notice in ['LICENSE', 'THIRD_PARTY_NOTICES.md']:
+            archive.write(ROOT / notice, notice)
         archive.write(ROOT / 'tools/devtools-lock.json', 'devtools-lock.json')
         archive.writestr('SOURCES.json', json.dumps([{'name': name, **record, 'archive': 'archives/' + record['sha256']}
                                                    for name, record in records], indent=2) + '\n')

@@ -1,5 +1,6 @@
 package dev.mobilecodex.app;
 
+import static dev.mobilecodex.app.core.Texts.t;
 import android.Manifest;
 import android.annotation.SuppressLint;
 import android.app.*;
@@ -37,6 +38,8 @@ public final class MainActivity extends Activity implements Engine.Ui {
     private boolean keyboardVisible;
     private String theme = "system";
     private Engine engine;
+    private InlineDictation dictation;
+    private static final int MICROPHONE_PERMISSION = 82;
     private boolean loaded, foreground;
     private AppUpdates updates;
     private AlertDialog approvalDialog;
@@ -62,6 +65,7 @@ public final class MainActivity extends Activity implements Engine.Ui {
             attachmentDraftKey = savedInstanceState.getString("attachmentDraftKey");
             exportAttachmentId = savedInstanceState.getString("exportAttachmentId");
         }
+        dictation = new InlineDictation(this, value -> event("voice.state", value));
         web = new WebView(this);
         web.setBackgroundColor(Color.WHITE);
         WebSettings s = web.getSettings();
@@ -91,7 +95,7 @@ public final class MainActivity extends Activity implements Engine.Ui {
                         Map.of("Cache-Control", "private, max-age=86400", "X-Content-Type-Options", "nosniff"), getAssets().open("web" + path)); }
                     catch (Exception e) { return denied(); }
                 }
-                if (path == null || !(path.equals("/index.html") || path.equals("/app.css") || path.equals("/app.js") || path.equals("/ui-core.js"))) return denied();
+                if (path == null || !(path.equals("/index.html") || path.equals("/app.css") || path.equals("/app.js") || path.equals("/ui-core.js") || path.equals("/translations.js") || path.equals("/locale.js"))) return denied();
                 String mime = path.endsWith(".css") ? "text/css" : path.endsWith(".js") ? "application/javascript" : "text/html";
                 try {
                     return new WebResourceResponse(mime, "UTF-8", 200, "OK",
@@ -111,8 +115,8 @@ public final class MainActivity extends Activity implements Engine.Ui {
         web.setWebChromeClient(new WebChromeClient() {
             @Override public boolean onJsConfirm(WebView view, String url, String message, JsResult result) {
                 new AlertDialog.Builder(MainActivity.this).setTitle("Mobile Codex").setMessage(message)
-                    .setPositiveButton("확인", (dialog, which) -> result.confirm())
-                    .setNegativeButton("취소", (dialog, which) -> result.cancel())
+                    .setPositiveButton(t("확인"), (dialog, which) -> result.confirm())
+                    .setNegativeButton(t("취소"), (dialog, which) -> result.cancel())
                     .setOnCancelListener(dialog -> result.cancel()).show();
                 return true;
             }
@@ -135,8 +139,8 @@ public final class MainActivity extends Activity implements Engine.Ui {
     }
     @Override protected void onStart() { super.onStart(); if (loaded) engine.attach(this); }
     @Override protected void onResume() { super.onResume(); foreground = true; event("updates.changed", updates.snapshot()); if (loaded) engine.attach(this); event("voice.changed", obj()); }
-    @Override protected void onPause() { foreground = false; super.onPause(); }
-    @Override protected void onStop() { engine.detach(this); super.onStop(); }
+    @Override protected void onPause() { foreground = false; if (dictation != null && !dictation.waitingPermission()) dictation.cancel(); super.onPause(); }
+    @Override protected void onStop() { if (dictation != null) dictation.cancel(); engine.detach(this); super.onStop(); }
     @Override protected void onSaveInstanceState(Bundle out) {
         out.putString("reconnectProjectKey", reconnectProjectKey);
         out.putString("attachmentDraftKey", attachmentDraftKey);
@@ -145,12 +149,14 @@ public final class MainActivity extends Activity implements Engine.Ui {
         out.putString("skillId", pendingSkillId); out.putString("exportId", exportId); out.putString("pickerId", pendingPickerId); super.onSaveInstanceState(out);
     }
     @Override protected void onDestroy() {
+        if (dictation != null) dictation.cancel();
         engine.detach(this);
         if (approvalDialog != null) approvalDialog.dismiss();
         web.removeJavascriptInterface("Native"); web.destroy(); super.onDestroy();
     }
     @Override public void onBackPressed() { handleBack(); }
     private void handleBack() {
+        if (dictation != null && !dictation.snapshot().optString("phase").equals("idle")) { dictation.cancel(); return; }
         if (keyboardVisible) {
             WindowCompat.getInsetsController(getWindow(), web).hide(WindowInsetsCompat.Type.ime());
             return;
@@ -159,6 +165,12 @@ public final class MainActivity extends Activity implements Engine.Ui {
         web.evaluateJavascript("window.mobileCodexBack ? window.mobileCodexBack() : false", handled -> {
             if (!"true".equals(handled) && !isDestroyed()) moveTaskToBack(true);
         });
+    }
+    @Override public void onRequestPermissionsResult(int code, String[] permissions, int[] grants) {
+        super.onRequestPermissionsResult(code, permissions, grants);
+        if (code == MICROPHONE_PERMISSION) {
+            if (grants.length > 0 && grants[0] == PackageManager.PERMISSION_GRANTED) dictation.start(); else dictation.denied();
+        }
     }
     private void applyTheme(String choice) {
         theme = choice;
@@ -193,8 +205,8 @@ public final class MainActivity extends Activity implements Engine.Ui {
             text.setText(approval.message); text.setTextIsSelectable(true); text.setTextSize(14); text.setPadding(40, 24, 40, 24);
             ScrollView scroll = new ScrollView(this); scroll.addView(text);
             approvalDialog = new AlertDialog.Builder(this).setTitle(approval.title).setView(scroll)
-                .setPositiveButton("적용", (dialog, which) -> approval.decision.complete(true))
-                .setNegativeButton("취소", (dialog, which) -> approval.decision.complete(false))
+                .setPositiveButton(t("적용"), (dialog, which) -> approval.decision.complete(true))
+                .setNegativeButton(t("취소"), (dialog, which) -> approval.decision.complete(false))
                 .setOnCancelListener(dialog -> approval.decision.complete(false)).create();
             approvalDialog.setOnDismissListener(dialog -> approvalId = "");
             approvalDialog.show();
@@ -204,8 +216,8 @@ public final class MainActivity extends Activity implements Engine.Ui {
         });
     }
     private void chooseFolder(String id, String projectKey) {
-        if (engine.isBusy()) { respond(id, null, new IllegalStateException("진행 중인 작업을 먼저 중지해 주세요.")); return; }
-        if (pendingPickerId != null) { respond(id, null, new IllegalStateException("폴더 선택이 진행 중입니다.")); return; }
+        if (engine.isBusy()) { respond(id, null, new IllegalStateException(t("진행 중인 작업을 먼저 중지해 주세요."))); return; }
+        if (pendingPickerId != null) { respond(id, null, new IllegalStateException(t("폴더 선택이 진행 중입니다."))); return; }
         pendingPickerId = id;
         reconnectProjectKey = projectKey;
         Intent pick = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
@@ -230,7 +242,7 @@ public final class MainActivity extends Activity implements Engine.Ui {
                 org.json.JSONArray attachments = new org.json.JSONArray(), errors = new org.json.JSONArray();
                 for (Uri uri : uris) {
                     try { attachments.put(engine.attachments.importUri(uri)); }
-                    catch (Exception e) { errors.put(e.getMessage() == null ? "파일을 읽지 못했습니다." : e.getMessage()); }
+                    catch (Exception e) { errors.put(e.getMessage() == null ? t("파일을 읽지 못했습니다.") : e.getMessage()); }
                 }
                 JSONObject receipt = obj("receiptId", java.util.UUID.randomUUID().toString(), "draftKey", scope,
                     "attachments", attachments, "errors", errors, "cancelled", uris.isEmpty());
@@ -245,10 +257,10 @@ public final class MainActivity extends Activity implements Engine.Ui {
             Uri destination = data.getData();
             engine.io.execute(() -> {
                 try (var in = engine.attachments.open(attachmentId); var out = getContentResolver().openOutputStream(destination)) {
-                    if (out == null) throw new java.io.IOException("저장 위치를 열 수 없습니다.");
+                    if (out == null) throw new java.io.IOException(t("저장 위치를 열 수 없습니다."));
                     byte[] buffer = new byte[32768]; int count;
                     while ((count = in.read(buffer)) != -1) out.write(buffer, 0, count);
-                    event("notice", obj("message", "첨부 파일을 저장했습니다."));
+                    event("notice", obj("message", t("첨부 파일을 저장했습니다.")));
                 } catch (Exception e) { event("error", obj("message", e.getMessage())); }
             });
         } else if (request == EXPORT_IMAGE) {
@@ -258,11 +270,11 @@ public final class MainActivity extends Activity implements Engine.Ui {
             engine.io.execute(() -> {
                 try {
                     try (var in = engine.images.open(id); var out = getContentResolver().openOutputStream(destination)) {
-                        if (out == null) throw new java.io.IOException("저장 위치를 열 수 없습니다.");
+                        if (out == null) throw new java.io.IOException(t("저장 위치를 열 수 없습니다."));
                         byte[] buffer = new byte[32768]; int count;
                         while ((count = in.read(buffer)) != -1) out.write(buffer, 0, count);
                     }
-                    event("notice", obj("message", "이미지를 저장했습니다."));
+                    event("notice", obj("message", t("이미지를 저장했습니다.")));
                 } catch (Exception e) { event("error", obj("message", e.getMessage())); }
             });
         } else if (request == IMPORT_SKILL) {
@@ -283,7 +295,7 @@ public final class MainActivity extends Activity implements Engine.Ui {
                 getContentResolver().takePersistableUriPermission(uri, flags);
                 engine.io.execute(() -> {
                     try {
-                        if (engine.isBusy()) throw new IllegalStateException("진행 중인 작업을 먼저 중지해 주세요.");
+                        if (engine.isBusy()) throw new IllegalStateException(t("진행 중인 작업을 먼저 중지해 주세요."));
                         JSONObject workspace = engine.documents.select(uri, projectKey); engine.workspaceChanged(); respond(id, workspace, null);
                     }
                     catch (Exception e) { respond(id, null, e); }
@@ -292,21 +304,21 @@ public final class MainActivity extends Activity implements Engine.Ui {
         } else if (request == EXPORT_RECOVERY && result == RESULT_OK && data != null && data.getData() != null) {
             String id = exportId; exportId = ""; Uri destination = data.getData();
             engine.io.execute(() -> {
-                try { engine.documents.exportRecovery(id, destination); event("notice", obj("message", "복구 사본을 저장했습니다.")); }
+                try { engine.documents.exportRecovery(id, destination); event("notice", obj("message", t("복구 사본을 저장했습니다."))); }
                 catch (Exception e) { event("error", obj("message", e.getMessage())); }
             });
         }
     }
     private void installUpdate(String requestId, String sha256) {
         try {
-            if (!engine.canInstallUpdate()) throw new java.io.IOException("진행 중인 작업과 터미널 명령을 마친 뒤 설치해 주세요.");
-            if (!getPackageManager().canRequestPackageInstalls()) throw new java.io.IOException("먼저 이 앱의 업데이트 설치를 허용해 주세요.");
+            if (!engine.canInstallUpdate()) throw new java.io.IOException(t("진행 중인 작업과 터미널 명령을 마친 뒤 설치해 주세요."));
+            if (!getPackageManager().canRequestPackageInstalls()) throw new java.io.IOException(t("먼저 이 앱의 업데이트 설치를 허용해 주세요."));
             updates.prepareInstall(sha256, (file, failure) -> runOnUiThread(() -> {
                 if (failure != null) { respond(requestId, null, failure); return; }
                 try {
-                    if (isDestroyed() || isFinishing() || !foreground) throw new java.io.IOException("앱으로 돌아와 설치를 다시 눌러 주세요.");
-                    if (!engine.canInstallUpdate()) throw new java.io.IOException("진행 중인 작업과 터미널 명령을 마친 뒤 설치해 주세요.");
-                    if (!getPackageManager().canRequestPackageInstalls()) throw new java.io.IOException("앱 설치 허용 설정을 확인해 주세요.");
+                    if (isDestroyed() || isFinishing() || !foreground) throw new java.io.IOException(t("앱으로 돌아와 설치를 다시 눌러 주세요."));
+                    if (!engine.canInstallUpdate()) throw new java.io.IOException(t("진행 중인 작업과 터미널 명령을 마친 뒤 설치해 주세요."));
+                    if (!getPackageManager().canRequestPackageInstalls()) throw new java.io.IOException(t("앱 설치 허용 설정을 확인해 주세요."));
                     PhoneUseService.stopControl(); PhoneUseService.closeFloatingForUpdate();
                     Uri uri = androidx.core.content.FileProvider.getUriForFile(this, getPackageName() + ".updates", file);
                     Intent install = new Intent(Intent.ACTION_INSTALL_PACKAGE).setData(uri).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION).putExtra(Intent.EXTRA_RETURN_RESULT, true);
@@ -317,6 +329,7 @@ public final class MainActivity extends Activity implements Engine.Ui {
         } catch (Exception error) { respond(requestId, null, error); }
     }
     private final class Bridge {
+        @JavascriptInterface public String locale() { return AppLanguage.snapshot(MainActivity.this).toString(); }
         @JavascriptInterface public void postMessage(String raw) {
             if (raw == null || raw.length() > 2 * 1024 * 1024) return;
             String requestId = null;
@@ -339,7 +352,7 @@ public final class MainActivity extends Activity implements Engine.Ui {
                 if (action.equals("attachments.pick")) {
                     String scope = args.getString("draftKey");
                     runOnUiThread(() -> {
-                        if (attachmentDraftKey != null) { respond(id, null, new IllegalStateException("파일 선택이 진행 중입니다.")); return; }
+                        if (attachmentDraftKey != null) { respond(id, null, new IllegalStateException(t("파일 선택이 진행 중입니다."))); return; }
                         pendingAttachmentRequest = id; attachmentDraftKey = scope;
                         try {
                             startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("*/*")
@@ -351,7 +364,7 @@ public final class MainActivity extends Activity implements Engine.Ui {
                 if (action.equals("attachments.export")) {
                     JSONObject attachment = engine.attachments.get(args.getString("id"));
                     runOnUiThread(() -> {
-                        if (exportAttachmentId != null) { respond(id, null, new IllegalStateException("첨부 파일 저장 위치를 선택 중입니다.")); return; }
+                        if (exportAttachmentId != null) { respond(id, null, new IllegalStateException(t("첨부 파일 저장 위치를 선택 중입니다."))); return; }
                         exportAttachmentId = attachment.optString("id");
                         try {
                             startActivityForResult(new Intent(Intent.ACTION_CREATE_DOCUMENT).setType(attachment.optString("mime", "application/octet-stream"))
@@ -364,7 +377,7 @@ public final class MainActivity extends Activity implements Engine.Ui {
                     String imageId = args.getString("id"), name = args.optString("name", "codex-image.png");
                     String mime = engine.images.mime(imageId);
                     runOnUiThread(() -> {
-                        if (pendingImageId != null) { respond(id, null, new IllegalStateException("이미지 저장 위치를 선택 중입니다.")); return; }
+                        if (pendingImageId != null) { respond(id, null, new IllegalStateException(t("이미지 저장 위치를 선택 중입니다."))); return; }
                         pendingImageId = imageId;
                         try {
                             startActivityForResult(new Intent(Intent.ACTION_CREATE_DOCUMENT).setType(mime)
@@ -383,10 +396,16 @@ public final class MainActivity extends Activity implements Engine.Ui {
                 if (action.equals("updates.permission")) {
                     runOnUiThread(() -> { try { PhoneUseService.stopControl(); PhoneUseService.closeFloatingForUpdate(); startActivity(new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + getPackageName()))); respond(id, obj("ok", true), null); } catch (Exception e) { respond(id, null, e); } }); return;
                 }
-                if (action.equals("voice.recover")) { respond(id, obj("receipts", VoiceInput.pending(MainActivity.this, "main"), "active", VoiceInput.active()), null); return; }
+                if (action.equals("voice.recover")) { runOnUiThread(() -> respond(id, obj("receipts", VoiceInput.pending(MainActivity.this, "main"), "active", VoiceInput.active(), "dictation", dictation.snapshot()), null)); return; }
                 if (action.equals("voice.ack")) { VoiceInput.acknowledge(MainActivity.this, "main", args.getString("receiptId")); respond(id, obj("ok", true), null); return; }
+                if (action.equals("voice.stop") || action.equals("voice.cancel")) {
+                    runOnUiThread(() -> { if (action.equals("voice.stop")) dictation.stop(); else dictation.cancel(); respond(id, dictation.snapshot(), null); }); return;
+                }
                 if (action.equals("voice.start")) {
-                    runOnUiThread(() -> { try { respond(id, VoiceInput.start(MainActivity.this, "main", parameters), null); } catch (Exception e) { respond(id, null, e); } }); return;
+                    runOnUiThread(() -> { try { JSONObject result = dictation.prepare(parameters);
+                        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) dictation.start();
+                        else requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, MICROPHONE_PERMISSION);
+                        respond(id, result, null); } catch (Exception e) { respond(id, null, e); } }); return;
                 }
                 if (action.equals("ui.floatingChat")) {
                     runOnUiThread(() -> { try { PhoneUseService.showFloatingChat(); respond(id, obj("ok", true), null); } catch (Exception e) { respond(id, null, e); } }); return;
@@ -400,16 +419,19 @@ public final class MainActivity extends Activity implements Engine.Ui {
                 if (action.equals("ui.phoneEnable")) {
                     runOnUiThread(() -> {
                         if (!PhoneUseService.status(MainActivity.this).optBoolean("connected")) {
-                            respond(id, null, new IllegalStateException("접근성 설정에서 Mobile Codex 휴대폰 제어를 먼저 켜 주세요.")); return;
+                            respond(id, null, new IllegalStateException(t("접근성 설정에서 Mobile Codex 휴대폰 제어를 먼저 켜 주세요."))); return;
                         }
-                        new AlertDialog.Builder(MainActivity.this).setTitle("휴대폰 제어 켜기")
-                            .setMessage("Codex가 요청을 수행하면서 다른 앱의 화면 내용과 스크린샷을 AI 서비스로 전송하고 탭·입력·스크롤할 수 있습니다. 화면 정보는 Codex 대화 기록에 남을 수 있습니다. 화면 위의 중지 버튼이나 앱 설정에서 언제든 끌 수 있습니다.")
-                            .setPositiveButton("동의하고 켜기", (dialog, which) -> {
+                        new AlertDialog.Builder(MainActivity.this).setTitle(t("휴대폰 제어 켜기"))
+                            .setMessage(t("Codex가 요청을 수행하면서 다른 앱의 화면 내용과 스크린샷을 AI 서비스로 전송하고 탭·입력·스크롤할 수 있습니다. 화면 정보는 Codex 대화 기록에 남을 수 있습니다. 화면 위의 중지 버튼이나 앱 설정에서 언제든 끌 수 있습니다."))
+                            .setPositiveButton(t("동의하고 켜기"), (dialog, which) -> {
                                 try { PhoneUseService.enableFromUi(); respond(id, PhoneUseService.status(MainActivity.this), null); }
                                 catch (Exception e) { respond(id, null, e); }
-                            }).setNegativeButton("취소", (dialog, which) -> respond(id, obj("cancelled", true), null))
+                            }).setNegativeButton(t("취소"), (dialog, which) -> respond(id, obj("cancelled", true), null))
                             .setOnCancelListener(dialog -> respond(id, obj("cancelled", true), null)).show();
                     }); return;
+                }
+                if (action.equals("ui.locale")) {
+                    AppLanguage.set(MainActivity.this, args.optString("language", "system")); engine.attach(MainActivity.this); event("updates.changed", updates.snapshot()); respond(id, AppLanguage.snapshot(MainActivity.this), null); return;
                 }
                 if (action.equals("ui.theme")) {
                     String choice = args.optString("theme", "system");
@@ -417,7 +439,7 @@ public final class MainActivity extends Activity implements Engine.Ui {
                 }
                 if (action.equals("skills.import")) {
                     runOnUiThread(() -> {
-                        if (pendingSkillId != null) { respond(id, null, new IllegalStateException("스킬 선택이 진행 중입니다.")); return; }
+                        if (pendingSkillId != null) { respond(id, null, new IllegalStateException(t("스킬 선택이 진행 중입니다."))); return; }
                         pendingSkillId = id;
                         startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION), IMPORT_SKILL);
                     }); return;
@@ -426,7 +448,7 @@ public final class MainActivity extends Activity implements Engine.Ui {
                     Uri uri = Uri.parse(args.getString("url"));
                     boolean messageLink = action.equals("ui.openLink");
                     if (!isBrowserUri(uri, messageLink))
-                        throw new IllegalArgumentException(messageLink ? "올바른 HTTP 또는 HTTPS 주소만 열 수 있습니다." : "HTTPS 주소만 열 수 있습니다.");
+                        throw new IllegalArgumentException(messageLink ? t("올바른 HTTP 또는 HTTPS 주소만 열 수 있습니다.") : t("HTTPS 주소만 열 수 있습니다."));
                     runOnUiThread(() -> {
                         try { startActivity(new Intent(Intent.ACTION_VIEW, uri)); respond(id, obj("ok", true), null); }
                         catch (Exception e) { respond(id, null, e); }
@@ -447,14 +469,14 @@ public final class MainActivity extends Activity implements Engine.Ui {
                 if (action.equals("ui.loginBrowser")) {
                     Uri uri = Uri.parse(args.getString("url"));
                     if (!"https".equals(uri.getScheme()) || !("auth.openai.com".equals(uri.getHost()) || "chatgpt.com".equals(uri.getHost())))
-                        throw new IllegalArgumentException("잘못된 로그인 주소입니다.");
+                        throw new IllegalArgumentException(t("잘못된 로그인 주소입니다."));
                     runOnUiThread(() -> { startActivity(new Intent(Intent.ACTION_VIEW, uri)); respond(id, obj("ok", true), null); }); return;
                 }
                 if (action.equals("ui.copyCode")) {
                     String code = args.getString("code");
                     runOnUiThread(() -> {
                         ClipboardManager clipboard = getSystemService(ClipboardManager.class);
-                        clipboard.setPrimaryClip(ClipData.newPlainText("ChatGPT 로그인 코드", code)); respond(id, obj("ok", true), null);
+                        clipboard.setPrimaryClip(ClipData.newPlainText(t("ChatGPT 로그인 코드"), code)); respond(id, obj("ok", true), null);
                     }); return;
                 }
                 if (action.equals("recovery.export")) {

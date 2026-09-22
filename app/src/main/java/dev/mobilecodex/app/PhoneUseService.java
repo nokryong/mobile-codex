@@ -1,5 +1,6 @@
 package dev.mobilecodex.app;
 
+import static dev.mobilecodex.app.core.Texts.t;
 import android.accessibilityservice.AccessibilityService;
 import android.accessibilityservice.GestureDescription;
 import android.app.KeyguardManager;
@@ -38,7 +39,7 @@ public final class PhoneUseService extends AccessibilityService {
         PhoneUseService service = instance;
         boolean connected = service != null, enabled = connected && service.gate.enabled();
         return obj("connected", connected, "enabled", enabled, "floating", connected && service.floatingChat != null && service.floatingChat.visible(), "floatingChatOpen", connected && service.floatingChat != null && service.floatingChat.editing(), "voiceInputActive", VoiceInput.active(), "screenshotsSupported", Build.VERSION.SDK_INT >= 30,
-            "status", enabled ? "휴대폰 제어 켜짐" : connected ? "접근성 연결됨 · 제어 꺼짐" : "접근성 권한 필요");
+            "status", enabled ? t("휴대폰 제어 켜짐") : connected ? t("접근성 연결됨 · 제어 꺼짐") : t("접근성 권한 필요"));
     }
     static void closeFloatingForUpdate() { PhoneUseService service = instance; if (service != null && service.floatingChat != null) service.floatingChat.close(); }
     static void voiceInputChanged() {
@@ -47,7 +48,7 @@ public final class PhoneUseService extends AccessibilityService {
     }
     static void showFloatingChat() throws Exception {
         PhoneUseService service = instance;
-        if (service == null) throw new IOException("접근성 설정에서 Mobile Codex 휴대폰 제어를 먼저 연결해 주세요.");
+        if (service == null) throw new IOException(t("접근성 설정에서 Mobile Codex 휴대폰 제어를 먼저 연결해 주세요."));
         service.requireUnlocked();
         if (service.floatingChat == null) service.floatingChat = new FloatingChat(service, ((MobileCodexApp) service.getApplication()).engine());
         service.floatingChat.show(); service.changed();
@@ -59,7 +60,7 @@ public final class PhoneUseService extends AccessibilityService {
     /** Only called from the trusted, local settings UI; never exposed as a model tool. */
     static void enableFromUi() throws Exception {
         PhoneUseService service = instance;
-        if (service == null) throw new IOException("Android 접근성 설정에서 Mobile Codex 휴대폰 제어를 먼저 켜 주세요.");
+        if (service == null) throw new IOException(t("Android 접근성 설정에서 Mobile Codex 휴대폰 제어를 먼저 켜 주세요."));
         if (Looper.myLooper() != Looper.getMainLooper()) throw new IllegalStateException("Main thread required");
         service.requireUnlocked();
         service.showStopButton();
@@ -71,7 +72,7 @@ public final class PhoneUseService extends AccessibilityService {
         if (service == null) return;
         service.gate.stop();
         for (CompletableFuture<JSONObject> future : service.pending)
-            future.completeExceptionally(new IOException("휴대폰 제어가 중지되었습니다."));
+            future.completeExceptionally(new IOException(t("휴대폰 제어가 중지되었습니다.")));
         Runnable cleanup = () -> {
             // A delayed cleanup from an earlier stop must not remove a newly enabled stop button.
             if (service.gate.enabled()) return;
@@ -92,7 +93,7 @@ public final class PhoneUseService extends AccessibilityService {
     @Override public boolean onUnbind(Intent intent) { disconnect(); return super.onUnbind(intent); }
     @Override public void onDestroy() { disconnect(); super.onDestroy(); }
     private void disconnect() {
-        gate.stop(); for (CompletableFuture<JSONObject> future : pending) future.completeExceptionally(new IOException("접근성 연결이 끊어졌습니다."));
+        gate.stop(); for (CompletableFuture<JSONObject> future : pending) future.completeExceptionally(new IOException(t("접근성 연결이 끊어졌습니다.")));
         invalidate(); removeStopButton(); if (floatingChat != null) { floatingChat.close(); floatingChat = null; } if (instance == this) instance = null; changed();
     }
     private void changed() {
@@ -103,13 +104,13 @@ public final class PhoneUseService extends AccessibilityService {
         KeyguardManager lock = getSystemService(KeyguardManager.class);
         PowerManager power = getSystemService(PowerManager.class);
         if ((lock != null && lock.isDeviceLocked()) || (power != null && !power.isInteractive()))
-            throw new IOException("기기의 잠금을 직접 해제하고 화면을 켜 주세요.");
+            throw new IOException(t("기기의 잠금을 직접 해제하고 화면을 켜 주세요."));
     }
     private void showStopButton() {
         if (stopButton != null) return;
-        Button button = new Button(this); button.setText("휴대폰 제어 중지"); button.setTextSize(13);
+        Button button = new Button(this); button.setText(t("휴대폰 제어 중지")); button.setTextSize(13);
         button.setTextColor(Color.WHITE); button.setBackgroundTintList(android.content.res.ColorStateList.valueOf(Color.rgb(125, 37, 37)));
-        button.setContentDescription("Codex의 휴대폰 제어 즉시 중지");
+        button.setContentDescription(t("Codex의 휴대폰 제어 즉시 중지"));
         button.setOnClickListener(v -> stopControl());
         WindowManager.LayoutParams params = new WindowManager.LayoutParams(WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
@@ -153,7 +154,7 @@ public final class PhoneUseService extends AccessibilityService {
         if (Build.VERSION.SDK_INT >= 30) {
             AccessibilityWindowInfo window = node.getWindow();
             if (window != null) {
-                try { if (window.getDisplayId() != Display.DEFAULT_DISPLAY) throw new IOException("기기의 기본 화면에서 앱을 열어 주세요. 외부 화면은 제어하지 않습니다."); }
+                try { if (window.getDisplayId() != Display.DEFAULT_DISPLAY) throw new IOException(t("기기의 기본 화면에서 앱을 열어 주세요. 외부 화면은 제어하지 않습니다.")); }
                 finally { window.recycle(); }
             }
         }
@@ -161,7 +162,7 @@ public final class PhoneUseService extends AccessibilityService {
     static JSONObject execute(Context context, String tool, JSONObject args) throws Exception {
         if (tool.equals("mobile_phone_status")) return ToolCatalog.result(true, status(context).toString());
         PhoneUseService service = instance;
-        if (service == null) throw new IOException("접근성 서비스가 연결되어 있지 않습니다. 설정 → 도구 → 접근성 설정을 열어 주세요.");
+        if (service == null) throw new IOException(t("접근성 서비스가 연결되어 있지 않습니다. 설정 → 도구 → 접근성 설정을 열어 주세요."));
         long ticket = service.gate.ticket(); CompletableFuture<JSONObject> future = new CompletableFuture<>();
         service.pending.add(future);
         service.main.post(() -> {
@@ -172,12 +173,12 @@ public final class PhoneUseService extends AccessibilityService {
                     case "mobile_phone_apps" -> service.success(future, ticket, service.apps());
                     case "mobile_phone_screen" -> service.observe(args, ticket, future);
                     case "mobile_phone_action" -> service.act(args, ticket, future);
-                    default -> throw new IOException("알 수 없는 휴대폰 도구입니다.");
+                    default -> throw new IOException(t("알 수 없는 휴대폰 도구입니다."));
                 }
             } catch (Exception e) { future.completeExceptionally(e); }
         });
         try { return future.get(12, TimeUnit.SECONDS); }
-        catch (TimeoutException e) { throw new IOException("휴대폰 응답 시간이 초과되었습니다. 실행 여부를 화면에서 확인해 주세요.", e); }
+        catch (TimeoutException e) { throw new IOException(t("휴대폰 응답 시간이 초과되었습니다. 실행 여부를 화면에서 확인해 주세요."), e); }
         finally { future.cancel(false); service.pending.remove(future); }
     }
     private void success(CompletableFuture<JSONObject> future, long ticket, JSONObject value) {
@@ -195,7 +196,7 @@ public final class PhoneUseService extends AccessibilityService {
     private void observe(JSONObject args, long ticket, CompletableFuture<JSONObject> future) throws Exception {
         requireAutomationView();
         invalidate(); AccessibilityNodeInfo root = getRootInActiveWindow();
-        if (root == null) throw new IOException("활성 화면을 읽을 수 없습니다. 앱을 열고 다시 시도해 주세요.");
+        if (root == null) throw new IOException(t("활성 화면을 읽을 수 없습니다. 앱을 열고 다시 시도해 주세요."));
         DisplayMetrics metrics = metrics();
         try { requireDefaultDisplay(root); screen = new PhoneScreen(root, revision, metrics.widthPixels, metrics.heightPixels); }
         finally { root.recycle(); }
@@ -205,7 +206,7 @@ public final class PhoneUseService extends AccessibilityService {
         captured.data.put("stopButtonBounds", array(overlay.left, overlay.top, overlay.right, overlay.bottom));
         if (!args.optBoolean("screenshot", true)) { success(future, ticket, captured.data); return; }
         if (Build.VERSION.SDK_INT < 30 || captured.passwordVisible) {
-            captured.data.put("screenshotUnavailable", captured.passwordVisible ? "비밀번호 필드가 보이는 화면은 이미지로 전송하지 않습니다." : "Android 10은 화면 요소로 조작합니다. 스크린샷 API는 Android 11 이상에서 제공됩니다.");
+            captured.data.put("screenshotUnavailable", captured.passwordVisible ? t("비밀번호 필드가 보이는 화면은 이미지로 전송하지 않습니다.") : t("Android 10은 화면 요소로 조작합니다. 스크린샷 API는 Android 11 이상에서 제공됩니다."));
             success(future, ticket, captured.data); return;
         }
         capture(captured, ticket, future);
@@ -218,14 +219,14 @@ public final class PhoneUseService extends AccessibilityService {
                 try {
                     if (future.isDone()) return;
                     gate.check(ticket); requireUnlocked(); requireAutomationView();
-                    if (screen != captured || revision != captured.revision) throw new IOException("캡처 중 화면이 변경되었습니다. 화면을 다시 읽어 주세요.");
+                    if (screen != captured || revision != captured.revision) throw new IOException(t("캡처 중 화면이 변경되었습니다. 화면을 다시 읽어 주세요."));
                     hardware = Bitmap.wrapHardwareBuffer(buffer, result.getColorSpace());
-                    if (hardware == null) throw new IOException("화면 이미지 변환에 실패했습니다.");
+                    if (hardware == null) throw new IOException(t("화면 이미지 변환에 실패했습니다."));
                     bitmap = hardware.copy(Bitmap.Config.ARGB_8888, false);
                     if (bitmap == null || bitmap.getWidth() != captured.width || bitmap.getHeight() != captured.height)
-                        throw new IOException("화면 크기가 변경되었습니다. 화면을 다시 읽어 주세요.");
+                        throw new IOException(t("화면 크기가 변경되었습니다. 화면을 다시 읽어 주세요."));
                     ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-                    if (!bitmap.compress(Bitmap.CompressFormat.JPEG, 80, bytes)) throw new IOException("화면 이미지 인코딩에 실패했습니다.");
+                    if (!bitmap.compress(Bitmap.CompressFormat.JPEG, 80, bytes)) throw new IOException(t("화면 이미지 인코딩에 실패했습니다."));
                     gate.check(ticket);
                     JSONObject output = ToolCatalog.result(true, captured.data.toString());
                     output.getJSONArray("contentItems").put(obj("type", "inputImage", "imageUrl", "data:image/jpeg;base64," + Base64.encodeToString(bytes.toByteArray(), Base64.NO_WRAP)));
@@ -234,7 +235,7 @@ public final class PhoneUseService extends AccessibilityService {
                 finally { if (bitmap != null) bitmap.recycle(); if (hardware != null) hardware.recycle(); buffer.close(); }
             }
             @Override public void onFailure(int errorCode) {
-                try { captured.data.put("screenshotUnavailable", "Android가 화면 캡처를 허용하지 않았습니다 (" + errorCode + "). 화면 요소만 반환합니다."); success(future, ticket, captured.data); }
+                try { captured.data.put("screenshotUnavailable", t("Android가 화면 캡처를 허용하지 않았습니다 (") + errorCode + t("). 화면 요소만 반환합니다.")); success(future, ticket, captured.data); }
                 catch (Exception e) { future.completeExceptionally(e); }
             }
         });
@@ -249,12 +250,12 @@ public final class PhoneUseService extends AccessibilityService {
         if (global != null) { boolean accepted = performGlobalAction(global); invalidate(); success(future, ticket, obj("accepted", accepted, "action", action)); return; }
         if (action.equals("open_app")) {
             String name = args.getString("package"); Intent launch = getPackageManager().getLaunchIntentForPackage(name);
-            if (launch == null) throw new IOException("실행 가능한 앱이 없습니다. mobile_phone_apps로 패키지 이름을 확인해 주세요.");
+            if (launch == null) throw new IOException(t("실행 가능한 앱이 없습니다. mobile_phone_apps로 패키지 이름을 확인해 주세요."));
             startActivity(launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); invalidate(); success(future, ticket, obj("accepted", true, "package", name)); return;
         }
-        if (screen == null) throw new IOException("mobile_phone_screen으로 화면을 먼저 읽어 주세요.");
+        if (screen == null) throw new IOException(t("mobile_phone_screen으로 화면을 먼저 읽어 주세요."));
         AccessibilityNodeInfo root = getRootInActiveWindow();
-        if (root == null) throw new IOException("활성 화면이 없습니다.");
+        if (root == null) throw new IOException(t("활성 화면이 없습니다."));
         DisplayMetrics metrics = metrics();
         try { requireDefaultDisplay(root); screen.requireFresh(args.optString("snapshotId"), revision, root.getWindowId(), PhoneScreen.value(root.getPackageName()), metrics.widthPixels, metrics.heightPixels); }
         finally { root.recycle(); }
@@ -262,36 +263,36 @@ public final class PhoneUseService extends AccessibilityService {
             AccessibilityNodeInfo node = screen.node(args.getString("nodeId"));
             AccessibilityWindowInfo window = node.getWindow();
             if (window != null) {
-                try { if (window.getType() == AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY) throw new IOException("접근성 제어창은 사용자가 직접 조작합니다."); }
+                try { if (window.getType() == AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY) throw new IOException(t("접근성 제어창은 사용자가 직접 조작합니다.")); }
                 finally { window.recycle(); }
             }
             int nativeAction = switch (action) {
                 case "tap" -> AccessibilityNodeInfo.ACTION_CLICK; case "long_press" -> AccessibilityNodeInfo.ACTION_LONG_CLICK;
                 case "set_text" -> AccessibilityNodeInfo.ACTION_SET_TEXT; case "scroll_forward" -> AccessibilityNodeInfo.ACTION_SCROLL_FORWARD;
-                case "scroll_backward" -> AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD; default -> throw new IOException("이 작업은 화면 요소를 사용하지 않습니다.");
+                case "scroll_backward" -> AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD; default -> throw new IOException(t("이 작업은 화면 요소를 사용하지 않습니다."));
             };
             Bundle arguments = new Bundle();
             if (action.equals("set_text")) {
-                if (!node.isEditable()) throw new IOException("입력 가능한 요소가 아닙니다.");
-                String text = args.getString("text"); if (text.length() > 50000) throw new IOException("입력할 텍스트가 너무 깁니다.");
+                if (!node.isEditable()) throw new IOException(t("입력 가능한 요소가 아닙니다."));
+                String text = args.getString("text"); if (text.length() > 50000) throw new IOException(t("입력할 텍스트가 너무 깁니다."));
                 arguments.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text);
             }
             boolean accepted = node.performAction(nativeAction, arguments); invalidate();
             success(future, ticket, obj("accepted", accepted, "action", action, "verify", "mobile_phone_screen")); return;
         }
-        if (!Set.of("tap", "long_press", "swipe").contains(action)) throw new IOException("이 작업에는 화면 요소 nodeId가 필요합니다.");
+        if (!Set.of("tap", "long_press", "swipe").contains(action)) throw new IOException(t("이 작업에는 화면 요소 nodeId가 필요합니다."));
         float x = PhoneScreen.coordinate(args, "x", screen.width), y = PhoneScreen.coordinate(args, "y", screen.height);
         float endX = action.equals("swipe") ? PhoneScreen.coordinate(args, "endX", screen.width) : x;
         float endY = action.equals("swipe") ? PhoneScreen.coordinate(args, "endY", screen.height) : y;
         Rect overlay = stopBounds();
         Rect chat = floatingChat == null ? new Rect() : floatingChat.bounds();
         Rect gestureBounds = new Rect((int)Math.min(x, endX), (int)Math.min(y, endY), (int)Math.max(x, endX) + 1, (int)Math.max(y, endY) + 1);
-        if (Rect.intersects(chat, gestureBounds)) throw new IOException("플로팅 대화창은 사용자가 직접 조작합니다. 다른 영역을 선택해 주세요.");
+        if (Rect.intersects(chat, gestureBounds)) throw new IOException(t("플로팅 대화창은 사용자가 직접 조작합니다. 다른 영역을 선택해 주세요."));
         // Never let an agent hide or activate its own emergency stop control.
         if (Rect.intersects(overlay, new Rect((int)Math.min(x, endX), (int)Math.min(y, endY), (int)Math.max(x, endX) + 1, (int)Math.max(y, endY) + 1)))
-            throw new IOException("중지 버튼 영역은 직접 조작할 수 없습니다.");
+            throw new IOException(t("중지 버튼 영역은 직접 조작할 수 없습니다."));
         long duration = action.equals("swipe") ? args.optLong("durationMs", 400) : action.equals("long_press") ? 650 : 70;
-        if (duration < 1 || duration > 2000) throw new IOException("제스처 시간은 2초 이하여야 합니다.");
+        if (duration < 1 || duration > 2000) throw new IOException(t("제스처 시간은 2초 이하여야 합니다."));
         Path path = new Path(); path.moveTo(x, y); if (action.equals("swipe")) path.lineTo(endX, endY);
         GestureDescription gesture = new GestureDescription.Builder().addStroke(new GestureDescription.StrokeDescription(path, 0, duration)).build();
         boolean dispatched = dispatchGesture(gesture, new GestureResultCallback() {
@@ -301,7 +302,7 @@ public final class PhoneUseService extends AccessibilityService {
         invalidate(); if (!dispatched) success(future, ticket, obj("accepted", false, "action", action));
     }
     private void requireAutomationView() throws IOException {
-        if (VoiceInput.active()) throw new IOException("사용자가 음성 입력 중입니다. 인식이 끝날 때까지 화면 읽기·조작을 기다려 주세요.");
-        if (floatingChat != null && floatingChat.editing()) throw new IOException("플로팅 대화창에서 사용자가 입력 중입니다. 창을 접거나 지시를 보낼 때까지 화면 읽기·조작을 기다려 주세요.");
+        if (VoiceInput.active()) throw new IOException(t("사용자가 음성 입력 중입니다. 인식이 끝날 때까지 화면 읽기·조작을 기다려 주세요."));
+        if (floatingChat != null && floatingChat.editing()) throw new IOException(t("플로팅 대화창에서 사용자가 입력 중입니다. 창을 접거나 지시를 보낼 때까지 화면 읽기·조작을 기다려 주세요."));
     }
 }

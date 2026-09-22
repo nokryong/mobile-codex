@@ -1,6 +1,7 @@
 /* Packaged UI only. Native.postMessage is the sole transport; no remote scripts. */
 (() => {
   'use strict';
+  const L = window.MobileCodexLocale, t = L.t;
   const $ = id => document.getElementById(id), C = window.UiCore;
   const pending = new Map(), requestQueue = new Map();
   const dialogs = [], frame = fn => (window.requestAnimationFrame || (cb => setTimeout(cb, 0)))(fn);
@@ -10,6 +11,7 @@
   let seq = 0, state = {messages: [], sessions: [], projects: [], models: [], account: {}, workspace: {}}, folder = '', openedFile = null, login = null, inputResolve = null, toastTimer, fileSeq = 0, modelKey = '', displayedRequest = null;
   let draftContext = {attachments: [], mentions: [], skills: []}, draftOptions = {model:'', effort:''}, autocomplete = {items: [], index: -1, token: '', type: '', version: 0};
   const handledReceipts = new Set(), handledVoiceReceipts = new Set();
+  let dictationState = {phase:'idle'}, dictationTimer = null;
   let voiceStarting = false, voiceActive = false, voiceRecoveryGeneration = 0;
   let chatIconsEnabled = localStorage.getItem('chat-icons') !== 'off', activityIcon = 'thinking';
   let instructionsOriginal = '', instructionsLoaded = false, instructionsSaving = false, devtoolsCheckResult = null, devtoolsCheckSummary = '', devtoolsChecking = false, usageLoading = false;
@@ -17,9 +19,9 @@
   let updateState = {}, updateSourceDirty = false, updateRequestPending = false;
   function call(action, args = {}) {
     return new Promise((resolve, reject) => {
-      if (!window.Native) return reject(new Error('Android 앱에서 실행해 주세요.'));
+      if (!window.Native) return reject(new Error(t('Android 앱에서 실행해 주세요.')));
       const id = String(++seq);
-      const timer = setTimeout(() => { pending.delete(id); reject(new Error('요청 시간이 초과되었습니다. 상태를 확인하고 다시 시도해 주세요.')); }, ['files.mutate','recovery.restore','updates.install'].includes(action) ? 610000 : 150000);
+      const timer = setTimeout(() => { pending.delete(id); reject(new Error(t('요청 시간이 초과되었습니다. 상태를 확인하고 다시 시도해 주세요.'))); }, ['files.mutate','recovery.restore','updates.install'].includes(action) ? 610000 : 150000);
       pending.set(id, {resolve, reject, timer});
       window.Native.postMessage(JSON.stringify({id, action, args}));
     });
@@ -29,7 +31,7 @@
   function node(tag, text, cls) { const n = document.createElement(tag); if (text != null) n.textContent = text; if (cls) n.className = cls; return n; }
   function button(text, fn, cls = 'secondary-button') { const b = node('button', text, cls); b.type = 'button'; b.addEventListener('click', () => { b.disabled = true; Promise.resolve().then(fn).catch(e => toast(e.message)).finally(() => b.disabled = false); }); return b; }
   function icon(name) { const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); const use = document.createElementNS(svg.namespaceURI, 'use'); use.setAttribute('href', '#i-' + name); svg.append(use); return svg; }
-  function toast(message) { $('toast').textContent = message || '오류가 발생했습니다.'; $('toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => $('toast').hidden = true, 5500); }
+  function toast(message) { $('toast').textContent = message || t('오류가 발생했습니다.'); $('toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => $('toast').hidden = true, 5500); }
   function show(id) {
     sidebar(false);
     if (!$(id).open) { dialogs.push(id); $(id).showModal(); }
@@ -39,7 +41,7 @@
     const dirty = (id === 'editor-dialog' && openedFile && $('editor').value !== openedFile.content)
       || (id === 'config-dialog' && $('config-editor').value !== configOriginal)
       || (id === 'settings-dialog' && instructionsLoaded && $('instructions-editor').value !== instructionsOriginal);
-    if (dirty && !confirm('저장하지 않은 변경 사항을 닫을까요?')) return;
+    if (dirty && !confirm(t('저장하지 않은 변경 사항을 닫을까요?'))) return;
     close(id);
   }
   function sidebar(open) {
@@ -81,14 +83,14 @@
   function renderDraftContext() {
     const target = $('draft-context'); target.replaceChildren();
     const items = [
-      ...(draftContext.attachments || []).map(item => ({type:'attachments', value:item, label:item.name || '첨부 파일'})),
+      ...(draftContext.attachments || []).map(item => ({type:'attachments', value:item, label:item.name || t('첨부 파일')})),
       ...(draftContext.mentions || []).map(item => ({type:'mentions', value:item, label:'@' + (item.name || item.path)})),
       ...(draftContext.skills || []).map(item => ({type:'skills', value:item, label:'$' + item.name}))
     ];
     for (const item of items) {
       const chip = node('span', null, 'context-chip'), image = item.value.image || item.value;
-      if (item.type === 'attachments' && C.safeImageUrl(image.url)) { const preview = button('', () => previewImage(image), 'context-image'); preview.setAttribute('aria-label', item.label + ' 미리 보기'); const img = node('img'); img.src = image.url; img.alt = item.label; preview.append(img); chip.append(preview); }
-      chip.append(node('span', item.label)); const remove = button('×', () => removeContext(item.type, item.value.id || item.value.path || item.value.name), 'chip-remove'); remove.setAttribute('aria-label', item.label + ' 제거'); chip.append(remove); target.append(chip);
+      if (item.type === 'attachments' && C.safeImageUrl(image.url)) { const preview = button('', () => previewImage(image), 'context-image'); preview.setAttribute('aria-label', item.label + t(' 미리 보기')); const img = node('img'); img.src = image.url; img.alt = item.label; preview.append(img); chip.append(preview); }
+      chip.append(node('span', item.label)); const remove = button('×', () => removeContext(item.type, item.value.id || item.value.path || item.value.name), 'chip-remove'); remove.setAttribute('aria-label', item.label + t(' 제거')); chip.append(remove); target.append(chip);
     }
     target.hidden = !items.length;
   }
@@ -106,7 +108,7 @@
     efforts(); if ([...$('effort').options].some(o => o.value === draftOptions.effort)) $('effort').value = draftOptions.effort;
     sizeComposer();
   }
-  function updateSend() { $('voice-input').disabled = !draftScope || voiceStarting || voiceActive || !!sending; $('voice-input').setAttribute('aria-busy', String(voiceStarting || voiceActive)); $('send').disabled = (! $('prompt').value.trim() && !(draftContext.attachments || []).length) || !!sending; $('send').setAttribute('aria-label', state.busy ? '진행 중인 작업에 추가 지시' : '메시지 보내기'); $('send').title = state.busy ? '추가 지시' : '보내기'; }
+  function updateSend() { $('voice-input').disabled = !draftScope || voiceStarting || voiceActive || !!sending; $('voice-input').setAttribute('aria-busy', String(voiceStarting || voiceActive)); $('send').disabled = (! $('prompt').value.trim() && !(draftContext.attachments || []).length) || !!sending || voiceStarting || voiceActive; $('send').setAttribute('aria-label', state.busy ? t('진행 중인 작업에 추가 지시') : t('메시지 보내기')); $('send').title = state.busy ? t('추가 지시') : t('보내기'); }
   function scrollLatest() { following = true; $('chat-scroll').scrollTop = $('chat-scroll').scrollHeight; $('jump-latest').hidden = true; }
   function sizeComposer() {
     const field = $('prompt'), cap = Math.max(60, Math.min(160, window.innerHeight * .24));
@@ -128,14 +130,14 @@
     } else $('sidebar').inert = !document.body.classList.contains('sidebar-open');
   }
   function optionsSummary() {
-    const model = $('model').selectedOptions[0]?.textContent || '기본 모델';
-    const effort = $('effort').selectedOptions[0]?.textContent || '기본';
+    const model = $('model').selectedOptions[0]?.textContent || t('기본 모델');
+    const effort = $('effort').selectedOptions[0]?.textContent || t('기본');
     $('model-summary').textContent = model;
-    $('composer-options').setAttribute('aria-label', '작업 설정: ' + model + ', 추론 ' + effort);
+    $('composer-options').setAttribute('aria-label', t('작업 설정: ') + model + t(', 추론 ') + effort);
     $('composer-options').title = model + ' · ' + effort;
-    $('permission-help').textContent = state.busy ? '작업이 끝나면 권한을 변경할 수 있습니다.' : ({'read-only':'파일을 읽고 검토합니다.', 'workspace-write':'선택한 프로젝트의 파일을 수정할 수 있습니다.', 'danger-full-access':'앱에 허용된 기기 파일과 명령에 접근할 수 있습니다.'}[$('permissions').value] || '');
+    $('permission-help').textContent = state.busy ? t('작업이 끝나면 권한을 변경할 수 있습니다.') : ({'read-only':t('파일을 읽고 검토합니다.'), 'workspace-write':t('선택한 프로젝트의 파일을 수정할 수 있습니다.'), 'danger-full-access':t('앱에 허용된 기기 파일과 명령에 접근할 수 있습니다.')}[$('permissions').value] || '');
     const current = state.models.find(m => (m.model || m.id) === $('model').value) || state.models.find(m => m.isDefault);
-    $('model-help').textContent = current?.description || (current ? '연결된 계정에서 사용할 수 있는 모델입니다.' : '기본 모델을 사용합니다.');
+    $('model-help').textContent = current?.description || (current ? t('연결된 계정에서 사용할 수 있는 모델입니다.') : t('기본 모델을 사용합니다.'));
   }
   async function insertToken(token, item) {
     const scope = draftScope, field = $('prompt'), start = field.selectionStart, end = field.selectionEnd, original = field.value, selectedToken = (item.kind === 'skill' ? '$' : '@') + item.name, before = original.slice(0, start).replace(/(?:^|\s)[@$][^\s@#$]*$/, m => m.slice(0, m.lastIndexOf(token)) + selectedToken);
@@ -159,7 +161,7 @@
   }
   function drawAutocomplete(items, messages = []) {
     const target = $('autocomplete'); target.replaceChildren(); autocomplete.items = items; autocomplete.index = items.length ? 0 : -1;
-    target.append(node('div', autocomplete.type === '$' ? '스킬' : '파일 및 앱', 'autocomplete-heading'));
+    target.append(node('div', autocomplete.type === '$' ? t('스킬') : t('파일 및 앱'), 'autocomplete-heading'));
     for (const [index, item] of items.entries()) {
       const row = button('', () => chooseAutocomplete(item), 'autocomplete-item'); row.setAttribute('role', 'option');
       row.id = 'context-option-' + index; row.dataset.index = String(index);
@@ -180,29 +182,29 @@
     const type = match[1], query = directory ? '' : match[2], version = ++autocomplete.version, scope = draftScope;
     autocomplete.type = type; autocomplete.token = type + query;
     const current = () => version === autocomplete.version && scope === draftScope;
-    const retry = {label:'다시 불러오기', detail:'사용 가능한 목록을 새로 확인합니다.', run:() => queryAutocomplete(directory)};
-    drawAutocomplete([], ['사용 가능한 ' + (type === '$' ? '스킬' : '파일 및 앱') + '을 불러오는 중…']);
+    const retry = {label:t('다시 불러오기'), detail:t('사용 가능한 목록을 새로 확인합니다.'), run:() => queryAutocomplete(directory)};
+    drawAutocomplete([], [t('사용 가능한 ') + (type === '$' ? t('스킬') : t('파일 및 앱')) + t('을 불러오는 중…')]);
     if (type === '$') {
       try {
         const result = await rpc('skills/list', {cwds:state.cwd ? [state.cwd] : [], forceReload:true});
         if (!current()) return;
         const items = [], seen = new Set(), messages = [];
         for (const group of result.data || []) {
-          for (const error of group.errors || []) messages.push(error.message || '일부 스킬을 읽지 못했습니다.');
+          for (const error of group.errors || []) messages.push(error.message || t('일부 스킬을 읽지 못했습니다.'));
           for (const skill of group.skills || []) {
             if (skill.enabled === false || !skill.name || !skill.path || seen.has(skill.path)) continue;
             if (query && !(skill.name + ' ' + (skill.description || '')).toLowerCase().includes(query.toLowerCase())) continue;
             seen.add(skill.path); items.push({kind:'skill', name:skill.name, path:skill.path, label:'$' + skill.name, detail:skill.description || skill.path});
           }
         }
-        if (!items.length) messages.push(query ? '일치하는 스킬이 없습니다.' : '사용 가능한 스킬이 없습니다. 스킬 폴더를 가져와 추가하세요.');
-        drawAutocomplete([...items, {label:'스킬 가져오기', detail:'SKILL.md가 들어 있는 폴더 선택', run:() => { hideAutocomplete(); $('skill-import').click(); }}], messages);
+        if (!items.length) messages.push(query ? t('일치하는 스킬이 없습니다.') : t('사용 가능한 스킬이 없습니다. 스킬 폴더를 가져와 추가하세요.'));
+        drawAutocomplete([...items, {label:t('스킬 가져오기'), detail:t('SKILL.md가 들어 있는 폴더 선택'), run:() => { hideAutocomplete(); $('skill-import').click(); }}], messages);
       } catch (error) {
-        if (current()) drawAutocomplete([retry], ['스킬 목록을 불러오지 못했습니다. ' + error.message]);
+        if (current()) drawAutocomplete([retry], [t('스킬 목록을 불러오지 못했습니다. ') + error.message]);
       }
       return;
     }
-    const sections = {files:[], apps:[]}, messages = {files:'파일을 불러오는 중…', apps:'앱을 불러오는 중…'};
+    const sections = {files:[], apps:[]}, messages = {files:t('파일을 불러오는 중…'), apps:t('앱을 불러오는 중…')};
     const render = () => { if (current()) drawAutocomplete([...sections.files, ...sections.apps], Object.values(messages).filter(Boolean)); };
     // Render each source when ready: a slow app connection must not hide local files.
     const filesRequest = state.workspace?.selected
@@ -211,18 +213,18 @@
     filesRequest.then(result => {
       if (!current()) return;
       sections.files = (result.entries || []).filter(x => x.path).map(x => x.directory
-        ? {label:x.name + '/', detail:'폴더 열기', run:() => queryAutocomplete(x.path)}
-        : {kind:'mention', name:x.name || C.basename(x.path), path:x.path, label:'@' + (x.name || C.basename(x.path)), detail:'파일 · ' + x.path});
-      if (directory && !query) sections.files.unshift({label:'상위 폴더', detail:directory, run:() => queryAutocomplete(directory.split('/').slice(0,-1).join('/'))});
-      messages.files = !state.workspace?.selected ? '프로젝트를 선택하면 파일 목록도 표시됩니다.' : sections.files.length ? '' : '일치하는 파일이 없습니다.';
+        ? {label:x.name + '/', detail:t('폴더 열기'), run:() => queryAutocomplete(x.path)}
+        : {kind:'mention', name:x.name || C.basename(x.path), path:x.path, label:'@' + (x.name || C.basename(x.path)), detail:t('파일 · ') + x.path});
+      if (directory && !query) sections.files.unshift({label:t('상위 폴더'), detail:directory, run:() => queryAutocomplete(directory.split('/').slice(0,-1).join('/'))});
+      messages.files = !state.workspace?.selected ? t('프로젝트를 선택하면 파일 목록도 표시됩니다.') : sections.files.length ? '' : t('일치하는 파일이 없습니다.');
       render();
-    }).catch(error => { if (current()) { messages.files = '파일 목록을 불러오지 못했습니다. ' + error.message; sections.files = [retry]; render(); } });
+    }).catch(error => { if (current()) { messages.files = t('파일 목록을 불러오지 못했습니다. ') + error.message; sections.files = [retry]; render(); } });
     rpc('app/list', {}).then(result => {
       if (!current()) return;
       sections.apps = (result.data || result.apps || []).filter(x => x.isAccessible && x.isEnabled && (!query || (x.name || x.id || '').toLowerCase().includes(query.toLowerCase())))
-        .map(x => ({kind:'mention', name:x.name || x.id, path:'app://' + x.id, label:'@' + (x.name || x.id), detail:'연결된 앱'}));
-      messages.apps = sections.apps.length ? '' : '사용 가능한 연결 앱이 없습니다.'; render();
-    }).catch(error => { if (current()) { messages.apps = '앱 목록을 불러오지 못했습니다. ' + error.message; if (!sections.files.includes(retry)) sections.apps = [retry]; render(); } });
+        .map(x => ({kind:'mention', name:x.name || x.id, path:'app://' + x.id, label:'@' + (x.name || x.id), detail:t('연결된 앱')}));
+      messages.apps = sections.apps.length ? '' : t('사용 가능한 연결 앱이 없습니다.'); render();
+    }).catch(error => { if (current()) { messages.apps = t('앱 목록을 불러오지 못했습니다. ') + error.message; if (!sections.files.includes(retry)) sections.apps = [retry]; render(); } });
   }
   async function chooseAttachment() {
     const key = draftKeyFor(), result = await call('attachments.pick', {draftKey:key});
@@ -235,7 +237,7 @@
     const scope = 'draft:' + key, context = scope === draftScope ? draftContext : restoreContext(scope), ids = new Set(context.attachments.map(x => x.id));
     context.attachments.push(...(result.attachments || []).filter(x => x?.id && !ids.has(x.id)));
     try { if (context.attachments.length || context.mentions.length || context.skills.length) localStorage.setItem(contextScope(scope), JSON.stringify(context)); }
-    catch { toast('첨부 초안을 저장할 공간이 부족합니다. 첨부를 줄인 뒤 다시 시도해 주세요.'); return; }
+    catch { toast(t('첨부 초안을 저장할 공간이 부족합니다. 첨부를 줄인 뒤 다시 시도해 주세요.')); return; }
     if (scope === draftScope) { draftContext = context; renderDraftContext(); updateSend(); }
     if (result.errors?.length && !result.cancelled) toast(result.errors.join('\n'));
     if (receipt) { handledReceipts.add(receipt); call('attachments.ack', {receiptId:receipt}).catch(() => {}); }
@@ -244,9 +246,24 @@
     if (voiceStarting || voiceActive || !draftScope || sending) return;
     const field = $('prompt'); saveDraft(); hideAutocomplete();
     const draft = {scope:draftKeyFor(), original:field.value, start:field.selectionStart, end:field.selectionEnd};
-    voiceStarting = true; updateSend();
+    field.blur(); voiceStarting = true; updateSend();
     try { await call('voice.start', draft); }
     finally { voiceStarting = false; updateSend(); await recoverVoiceInput(); }
+  }
+  function drawDictation(value) {
+    dictationState = value || {phase:'idle'};
+    const phase = dictationState.phase || 'idle', active = phase !== 'idle';
+    $('dictation').hidden = !active;
+    $('prompt').readOnly = active;
+    $('dictation-status').textContent = ({permission:t('마이크 권한 확인 중'), starting:t('마이크 준비 중…'), listening:t('듣고 있어요…'), transcribing:t('음성을 텍스트로 바꾸는 중…')})[phase] || '';
+    $('dictation-preview').textContent = dictationState.partial || '';
+    $('dictation-level').value = Number(dictationState.level) || 0;
+    $('dictation-done').disabled = phase !== 'listening';
+    clearInterval(dictationTimer); dictationTimer = null;
+    const base = Date.now(), elapsed = Number(dictationState.elapsedMs) || 0;
+    const tick = () => { const seconds = Math.floor((elapsed + (phase === 'listening' ? Date.now() - base : 0)) / 1000); $('dictation-time').textContent = Math.floor(seconds / 60) + ':' + String(seconds % 60).padStart(2,'0'); };
+    tick(); if (phase === 'listening') dictationTimer = setInterval(tick, 1000);
+    voiceActive = active; updateSend(); viewportChanged();
   }
   function mergeVoiceText(current, result) {
     if (!result.text) return current;
@@ -274,17 +291,18 @@
         localStorage.setItem(marker, JSON.stringify({done:true}));
         if (scope === draftScope) { $('prompt').value = merged; sizeComposer(); }
         if (result.error) toast(result.error);
-        else if (result.text) toast(scope === draftScope ? '음성 초안을 확인한 뒤 보내세요.' : '원래 대화의 음성 초안을 저장했습니다.');
+        else if (result.text) toast(scope === draftScope ? t('음성 초안을 확인한 뒤 보내세요.') : t('원래 대화의 음성 초안을 저장했습니다.'));
       }
       handledVoiceReceipts.add(result.receiptId);
       call('voice.ack', {receiptId:result.receiptId}).then(() => localStorage.removeItem(marker)).catch(() => {});
-    } catch { toast('음성 초안을 저장하지 못했습니다. 저장 공간을 확인한 뒤 앱을 다시 열어 주세요.'); }
+    } catch { toast(t('음성 초안을 저장하지 못했습니다. 저장 공간을 확인한 뒤 앱을 다시 열어 주세요.')); }
   }
   async function recoverVoiceInput() {
     const generation = ++voiceRecoveryGeneration;
     try {
       const result = await call('voice.recover');
       if (generation !== voiceRecoveryGeneration) return;
+      if (result.dictation) drawDictation(result.dictation);
       voiceActive = !!result.active; updateSend();
       for (const receipt of result.receipts || []) acceptVoiceReceipt(receipt);
     } catch { /* Receipts remain native until the next resume or startup. */ }
@@ -293,16 +311,16 @@
     if (!value || (Number.isFinite(value.revision) && value.revision < (updateState.revision || 0))) return;
     updateState = value;
     const busy = !!value.busy || updateRequestPending, release = value.candidate;
-    if (value.versionName) { $('update-current').textContent = '현재 ' + value.versionName + ' · 빌드 ' + value.versionCode; $('app-version').textContent = value.versionName; }
+    if (value.versionName) { $('update-current').textContent = t('현재 ') + value.versionName + t(' · 빌드 ') + value.versionCode; $('app-version').textContent = value.versionName; }
     if (!updateSourceDirty) { if (value.repository) $('update-repository').value = value.repository; if (typeof value.prereleases === 'boolean') $('update-prereleases').checked = value.prereleases; }
     $('update-repository').disabled = busy; $('update-prereleases').disabled = busy; $('update-check').disabled = busy;
-    $('update-status').textContent = value.message || '업데이트 확인을 누르면 공개 릴리스를 조회합니다.';
+    $('update-status').textContent = value.message || t('업데이트 확인을 누르면 공개 릴리스를 조회합니다.');
     $('update-cancel').hidden = !value.canCancel; $('update-cancel').disabled = updateRequestPending;
     $('update-progress').hidden = !['downloading','verifying'].includes(value.status);
     const percent = release?.size ? Math.max(0, Math.min(100, 100 * (value.received || 0) / release.size)) : 0;
     $('update-progress').value = percent;
     $('update-release').hidden = !release;
-    $('update-version').textContent = release ? '공개 릴리스 ' + release.versionName : '';
+    $('update-version').textContent = release ? t('공개 릴리스 ') + release.versionName : '';
     $('update-size').textContent = release ? (release.size / 1048576).toFixed(1) + ' MiB' + (value.status === 'downloading' ? ' · ' + Math.floor(percent) + '%' : '') : '';
     $('update-notes').textContent = release?.notes || '';
     $('update-download').hidden = !value.available || !!value.ready; $('update-download').disabled = busy || updateSourceDirty;
@@ -342,17 +360,17 @@
   }
   function imageCard(attachment, label = '', gallery = [attachment], group = null) {
     const figure = node('figure', null, 'image-card');
-    if (!C.safeImageUrl(attachment.url)) { figure.append(node('p', '이미지 주소를 읽을 수 없습니다.', 'muted')); return figure; }
+    if (!C.safeImageUrl(attachment.url)) { figure.append(node('p', t('이미지 주소를 읽을 수 없습니다.'), 'muted')); return figure; }
     const open = button('', () => previewImage(attachment, gallery, group), 'image-open');
-    open.setAttribute('aria-label', (label || attachment.name || '생성 이미지') + ' 크게 보기');
-    const img = node('img'); img.src = attachment.url; img.alt = label || attachment.name || '생성 이미지'; img.loading = 'lazy'; img.decoding = 'async';
+    open.setAttribute('aria-label', (label || attachment.name || t('생성 이미지')) + t(' 크게 보기'));
+    const img = node('img'); img.src = attachment.url; img.alt = label || attachment.name || t('생성 이미지'); img.loading = 'lazy'; img.decoding = 'async';
     if (attachment.width && attachment.height) { img.width = attachment.width; img.height = attachment.height; }
-    const error = node('p', '이미지를 불러오지 못했습니다.', 'muted'); error.hidden = true;
+    const error = node('p', t('이미지를 불러오지 못했습니다.'), 'muted'); error.hidden = true;
     img.addEventListener('load', () => { if (following) scrollLatest(); });
     img.addEventListener('error', () => { error.hidden = false; });
     open.append(img); figure.append(open, error);
-    const caption = node('figcaption'); caption.append(node('span', attachment.name || label || '이미지'));
-    if (attachment.id) caption.append(button('저장', () => call('images.export', {id:attachment.id, name:attachment.name})));
+    const caption = node('figcaption'); caption.append(node('span', attachment.name || label || t('이미지')));
+    if (attachment.id) caption.append(button(t('저장'), () => call('images.export', {id:attachment.id, name:attachment.name})));
     figure.append(caption); return figure;
   }
   function previewImage(attachment, gallery = [attachment], group = null) {
@@ -362,15 +380,15 @@
   }
   function updateViewer(reset = true) {
     const attachment = viewerImages[viewerIndex]; if (!attachment) return; openedImage = attachment;
-    $('image-title').textContent = attachment.name || '이미지'; $('image-preview').src = attachment.url;
-    $('image-preview').alt = attachment.name || '이미지'; $('image-save').hidden = !attachment.id;
+    $('image-title').textContent = attachment.name || t('이미지'); $('image-preview').src = attachment.url;
+    $('image-preview').alt = attachment.name || t('이미지'); $('image-save').hidden = !attachment.id;
     $('image-counter').textContent = (viewerIndex + 1) + ' / ' + viewerImages.length;
     $('image-navigation').hidden = viewerImages.length < 2;
     $('image-prev').disabled = viewerIndex === 0; $('image-next').disabled = viewerIndex === viewerImages.length - 1;
     $('image-thumbnails').replaceChildren(); $('image-thumbnails').hidden = viewerImages.length < 2;
     viewerImages.forEach((item, i) => {
       const b = button('', () => { viewerIndex = i; updateViewer(); }, 'image-thumbnail');
-      b.setAttribute('aria-label', (i+1) + '번째 이미지'); b.setAttribute('aria-current', String(i === viewerIndex));
+      b.setAttribute('aria-label', (i+1) + t('번째 이미지')); b.setAttribute('aria-current', String(i === viewerIndex));
       const img = node('img'); img.src = item.url; img.alt = ''; img.loading = 'lazy'; b.append(img); $('image-thumbnails').append(b);
     });
     if (reset) { $('image-stage').classList.remove('zoomed'); $('image-stage').scrollTop = 0; $('image-stage').scrollLeft = 0; $('image-zoom').setAttribute('aria-pressed', 'false'); }
@@ -382,7 +400,7 @@
   }
   function imageGallery(attachments, group) {
     const gallery = node('div', null, 'image-gallery'); gallery.classList.toggle('multiple', attachments.length > 1);
-    gallery.setAttribute('aria-label', '이미지 ' + attachments.length + '장');
+    gallery.setAttribute('aria-label', t('이미지 ') + attachments.length + t('장'));
     for (const attachment of attachments) gallery.append(imageCard(attachment, '', attachments, group));
     if (viewerGroup === group && $('image-dialog').open) {
       viewerImages = attachments.filter(a => C.safeImageUrl(a.url));
@@ -395,7 +413,7 @@
     for (const attachment of attachments || []) {
       if (attachment.image?.url || attachment.url) wrap.append(imageCard(attachment.image || attachment, attachment.name));
       else {
-        const b = button(attachment.name || '첨부 파일', () => call('attachments.export', {id:attachment.id, name:attachment.name}), 'attachment-download');
+        const b = button(attachment.name || t('첨부 파일'), () => call('attachments.export', {id:attachment.id, name:attachment.name}), 'attachment-download');
         b.prepend(icon('file')); wrap.append(b);
       }
     }
@@ -406,7 +424,7 @@
     let gallery = target.lastElementChild;
     if (!gallery?.classList.contains('markdown-gallery')) { gallery = node('div', null, 'image-gallery markdown-gallery'); gallery.attachments = []; target.append(gallery); }
     const index = gallery.attachments.length; gallery.attachments.push(null); gallery.classList.toggle('multiple', gallery.attachments.length > 1);
-    const placeholder = node('div', '이미지 불러오는 중…', 'image-placeholder'); gallery.append(placeholder);
+    const placeholder = node('div', t('이미지 불러오는 중…'), 'image-placeholder'); gallery.append(placeholder);
     const key = (state.workspace.key || state.cwd || '') + '\n' + path;
     if (!imageReads.has(key)) {
       const request = call('images.read', {path}); imageReads.set(key, request);
@@ -414,9 +432,9 @@
     }
     imageReads.get(key).then(attachment => {
       if (placeholder.isConnected) { gallery.attachments[index] = attachment; placeholder.replaceWith(imageCard(attachment, label, gallery.attachments)); }
-    }).catch(e => { if (placeholder.isConnected) placeholder.textContent = '이미지를 불러오지 못했습니다: ' + e.message; });
+    }).catch(e => { if (placeholder.isConnected) placeholder.textContent = t('이미지를 불러오지 못했습니다: ') + e.message; });
   }
-  async function copyText(text, btn, normalText = '복사', copiedText = '복사됨!') {
+  async function copyText(text, btn, normalText = t('복사'), copiedText = t('복사됨!')) {
     const finish = () => {
       btn.textContent = copiedText;
       setTimeout(() => {
@@ -448,15 +466,15 @@
       if (!copied) throw new Error('Clipboard unavailable');
       finish();
     } catch {
-      toast('클립보드에 복사하지 못했습니다.');
+      toast(t('클립보드에 복사하지 못했습니다.'));
     }
   }
   function codeCard(lang, codeText) {
     const card = node('div', null, 'code-card');
     const head = node('div', null, 'code-head');
     const langSpan = node('span', (lang || 'code').trim().toLowerCase(), 'code-lang');
-    const copy = button('복사', () => copyText(codeText, copy), 'code-copy-btn');
-    copy.setAttribute('aria-label', '코드 복사');
+    const copy = button(t('복사'), () => copyText(codeText, copy), 'code-copy-btn');
+    copy.setAttribute('aria-label', t('코드 복사'));
     copy.prepend(icon('copy'));
     head.append(langSpan, copy);
     const pre = node('pre');
@@ -569,7 +587,7 @@
   }
   function setChatIcons() {
     chatIconsEnabled = $('chat-icons-toggle').checked;
-    try { localStorage.setItem('chat-icons', chatIconsEnabled ? 'on' : 'off'); } catch { toast('아이콘 설정을 저장하지 못했습니다.'); }
+    try { localStorage.setItem('chat-icons', chatIconsEnabled ? 'on' : 'off'); } catch { toast(t('아이콘 설정을 저장하지 못했습니다.')); }
     drawStatusIcons(); drawMessages();
   }
   function drawMessages() {
@@ -579,7 +597,7 @@
       keep.add(m.id); let el = elements.get(m.id);
       if (!el) { el = node('article', null, 'message ' + (m.role === 'user' ? 'user' : 'assistant')); el.dataset.id = m.id; $('messages').append(el); }
       const iconName = m.imageStatus === 'generating' ? 'working' : state.busy && m.id === state.messages[state.messages.length - 1]?.id ? 'thinking' : C.messageIcon(m);
-      const signature = JSON.stringify([m.text, m.images, m.attachments, m.imageStatus, m.imageError, chatIconsEnabled, iconName]);
+      const signature = JSON.stringify([m.text, m.images, m.attachments, m.imageStatus, m.imageError, L.language(), chatIconsEnabled, iconName]);
       if (el.dataset.signature !== signature) {
         el.dataset.signature = signature;
         if (m.role === 'user') { el.textContent = m.text; if (m.attachments?.length) el.append(sentAttachments(m.attachments)); }
@@ -588,12 +606,12 @@
           prose(el, m.text || '');
           if (chatIconsEnabled) el.prepend(previousIcon?.getAttribute('src') === C.chatIconUrl(iconName) ? previousIcon : characterIcon(iconName));
           if (m.images?.length) el.append(imageGallery(m.images, m.id));
-          if (m.imageStatus === 'generating') el.append(node('p', '이미지 생성 중…', 'image-placeholder'));
+          if (m.imageStatus === 'generating') el.append(node('p', t('이미지 생성 중…'), 'image-placeholder'));
           if (m.imageError) el.append(node('p', m.imageError, 'image-error'));
           if (m.text?.trim() && m.imageStatus !== 'generating') {
             const actions = node('div', null, 'message-actions');
-            const copy = button('복사', () => copyText(m.text, copy), 'msg-copy-btn');
-            copy.setAttribute('aria-label', '메시지 복사');
+            const copy = button(t('복사'), () => copyText(m.text, copy), 'msg-copy-btn');
+            copy.setAttribute('aria-label', t('메시지 복사'));
             copy.prepend(icon('copy'));
             actions.append(copy);
             el.append(actions);
@@ -607,14 +625,14 @@
   }
   function efforts() {
     const selected = state.models.find(m => (m.model || m.id) === $('model').value) || state.models.find(m => m.isDefault);
-    const previous = $('effort').value; $('effort').replaceChildren(new Option('기본', ''));
+    const previous = $('effort').value; $('effort').replaceChildren(new Option(t('기본'), ''));
     for (const e of selected?.supportedReasoningEfforts || []) $('effort').add(new Option(e.reasoningEffort, e.reasoningEffort));
     if ([...$('effort').options].some(o => o.value === previous)) $('effort').value = previous;
     optionsSummary();
   }
   function renderModelList() {
     const target = $('model-list'); target.replaceChildren();
-    const choices = [{id:'', label:'기본 모델', description:'기본 모델을 사용합니다.'}, ...state.models.map(m => ({id:m.model || m.id, label:m.displayName || m.model || m.id, description:m.description || m.model || m.id}))];
+    const choices = [{id:'', label:t('기본 모델'), description:t('기본 모델을 사용합니다.')}, ...state.models.map(m => ({id:m.model || m.id, label:m.displayName || m.model || m.id, description:m.description || m.model || m.id}))];
     for (const choice of choices) {
       const label = node('label', null, 'model-choice'); const input = node('input'); input.type = 'radio'; input.name = 'model-choice'; input.value = choice.id; input.checked = $('model').value === choice.id;
       input.addEventListener('change', () => { $('model').value = choice.id; $('model').dispatchEvent(new Event('change')); renderModelList(); });
@@ -625,28 +643,28 @@
     const info = state.devtools;
     const versions = $('devtools-versions'); versions.replaceChildren();
     if (!info || typeof info !== 'object') {
-      $('devtools-status').textContent = '개발 도구 정보를 제공하지 않는 앱 버전입니다. 실행 확인으로 현재 상태를 점검할 수 있습니다.';
-      $('terminal-tools-note').textContent = '현재 프로젝트 폴더에서 셸 명령을 실행합니다. 개발 도구 상태는 설정 > 도구에서 확인하세요.';
+      $('devtools-status').textContent = t('개발 도구 정보를 제공하지 않는 앱 버전입니다. 실행 확인으로 현재 상태를 점검할 수 있습니다.');
+      $('terminal-tools-note').textContent = t('현재 프로젝트 폴더에서 셸 명령을 실행합니다. 개발 도구 상태는 설정 > 도구에서 확인하세요.');
     } else {
-      if (info.error) $('devtools-status').textContent = '준비 오류: ' + info.error;
-      else if (!info.bundled) $('devtools-status').textContent = '번들 개발 도구가 없습니다.';
-      else if (info.prepared) $('devtools-status').textContent = '번들 준비 완료. 아래 실행 확인으로 현재 상태를 검증하세요.';
-      else $('devtools-status').textContent = '번들 개발 도구가 준비 중이거나 아직 확인되지 않았습니다.';
+      if (info.error) $('devtools-status').textContent = t('준비 오류: ') + info.error;
+      else if (!info.bundled) $('devtools-status').textContent = t('번들 개발 도구가 없습니다.');
+      else if (info.prepared) $('devtools-status').textContent = t('번들 준비 완료. 아래 실행 확인으로 현재 상태를 검증하세요.');
+      else $('devtools-status').textContent = t('번들 개발 도구가 준비 중이거나 아직 확인되지 않았습니다.');
       for (const tool of Array.isArray(info.tools) ? info.tools : []) {
-        const row = node('span', (tool?.name || '도구') + (tool?.version ? ' ' + tool.version : ' 버전 확인 전'), 'devtools-version');
+        const row = node('span', (tool?.name || t('도구')) + (tool?.version ? ' ' + tool.version : t(' 버전 확인 전')), 'devtools-version');
         versions.append(row);
       }
       const names = (Array.isArray(info.tools) ? info.tools.map(tool => tool?.name).filter(Boolean) : []).join(' · ');
       $('terminal-tools-note').textContent = info.bundled
-        ? `현재 프로젝트 폴더에서 ${names || 'Python · Node.js · Git · npm · pip'} 명령을 실행합니다.`
-        : '현재 프로젝트 폴더에서 셸 명령을 실행합니다. 번들 개발 도구는 사용할 수 없습니다.';
+        ? t('현재 프로젝트 폴더에서 {tools} 명령을 실행합니다.', {tools:names || 'Python · Node.js · Git · npm · pip'})
+        : t('현재 프로젝트 폴더에서 셸 명령을 실행합니다. 번들 개발 도구는 사용할 수 없습니다.');
     }
     if (devtoolsCheckSummary) $('devtools-status').textContent = devtoolsCheckSummary;
     const output = $('devtools-output');
     output.hidden = !devtoolsCheckResult;
     output.textContent = devtoolsCheckResult || '';
     $('devtools-check').disabled = devtoolsChecking;
-    $('devtools-check').textContent = devtoolsChecking ? '실행 확인 중…' : '도구 실행 확인';
+    $('devtools-check').textContent = devtoolsChecking ? t('실행 확인 중…') : t('도구 실행 확인');
   }
   async function checkDevtools() {
     devtoolsChecking = true; renderDevtools();
@@ -654,12 +672,12 @@
       const result = await call('devtools.check');
       const checks = Array.isArray(result?.checks) ? result.checks : [];
       devtoolsCheckResult = checks.length
-        ? checks.map(check => `${check?.ok ? '✓' : '✕'} ${check?.name || '도구'}\n${check?.output || ''}`).join('\n\n')
-        : (result?.ok ? '도구 실행 확인이 완료되었습니다.' : '실행 결과를 받지 못했습니다. 다시 시도해 주세요.');
-      devtoolsCheckSummary = result?.ok ? '도구 실행 확인을 완료했습니다.' : '일부 도구를 실행하지 못했습니다. 출력에서 원인을 확인한 뒤 다시 시도해 주세요.';
+        ? checks.map(check => `${check?.ok ? '✓' : '✕'} ${check?.name || t('도구')}\n${check?.output || ''}`).join('\n\n')
+        : (result?.ok ? t('도구 실행 확인이 완료되었습니다.') : t('실행 결과를 받지 못했습니다. 다시 시도해 주세요.'));
+      devtoolsCheckSummary = result?.ok ? t('도구 실행 확인을 완료했습니다.') : t('일부 도구를 실행하지 못했습니다. 출력에서 원인을 확인한 뒤 다시 시도해 주세요.');
     } catch (error) {
-      devtoolsCheckResult = '실행 확인 실패\n' + (error?.message || '알 수 없는 오류');
-      devtoolsCheckSummary = '실행 확인에 실패했습니다. 다시 시도할 수 있습니다.';
+      devtoolsCheckResult = t('실행 확인 실패\n') + (error?.message || t('알 수 없는 오류'));
+      devtoolsCheckSummary = t('실행 확인에 실패했습니다. 다시 시도할 수 있습니다.');
     } finally {
       devtoolsChecking = false; renderDevtools();
     }
@@ -671,25 +689,25 @@
     await call('chat.new', {workspaceKey:workspaceKey || ''}); sidebar(false);
   }
   async function removeProject(project) {
-    if (!confirm('“' + (project.name || '프로젝트') + '”을 프로젝트 목록에서 제거할까요?\n\n폴더와 파일은 삭제되지 않습니다. 이 프로젝트의 기존 대화는 “연결 해제된 프로젝트”에 남아 폴더를 다시 연결할 수 있습니다.')) return;
+    if (!confirm('“' + (project.name || t('프로젝트')) + t('”을 프로젝트 목록에서 제거할까요?\n\n폴더와 파일은 삭제되지 않습니다. 이 프로젝트의 기존 대화는 “연결 해제된 프로젝트”에 남아 폴더를 다시 연결할 수 있습니다.'))) return;
     await call('projects.remove', {key:project.key});
-    toast('프로젝트 목록에서 제거했습니다. 폴더와 파일은 그대로 있습니다.');
+    toast(t('프로젝트 목록에서 제거했습니다. 폴더와 파일은 그대로 있습니다.'));
   }
   function sessionAction(session) {
-    $('session-actions-title').textContent = session.title || '대화 관리';
+    $('session-actions-title').textContent = session.title || t('대화 관리');
     const action = (label, fn, cls) => button(label, async () => { close('session-actions-dialog'); await fn(); }, cls);
     $('session-actions').replaceChildren(
-      action('이름 변경', async () => {
-        const title = await input('대화 이름 변경', '새 제목을 입력하세요.', session.title || '');
+      action(t('이름 변경'), async () => {
+        const title = await input(t('대화 이름 변경'), t('새 제목을 입력하세요.'), session.title || '');
         if (title && title.trim()) {
           await call('chat.rename', {id: session.id, title: title.trim()});
-          toast('대화 이름을 변경했습니다.');
+          toast(t('대화 이름을 변경했습니다.'));
         }
       }),
-      action('삭제', async () => {
-        if (confirm('"' + (session.title || '대화') + '" 대화를 삭제할까요?')) {
+      action(t('삭제'), async () => {
+        if (confirm('"' + (session.title || t('대화')) + t('" 대화를 삭제할까요?'))) {
           const result = await call('chat.delete', {id: session.id});
-          toast(result.deletionPending ? '삭제 요청을 저장했습니다. Codex에 연결되면 원본 기록도 삭제합니다.' : '대화를 삭제했습니다.');
+          toast(result.deletionPending ? t('삭제 요청을 저장했습니다. Codex에 연결되면 원본 기록도 삭제합니다.') : t('대화를 삭제했습니다.'));
         }
       }, 'secondary-button danger')
     );
@@ -698,10 +716,10 @@
   function sessionRow(session) {
     const active = session.id === state.threadId;
     const row = node('div', null, 'session-row' + (active ? ' active' : ''));
-    const b = button(session.title || '제목 없는 대화', async () => { await call('chat.resume', {id:session.id}); sidebar(false); }, 'session' + (active ? ' active' : ''));
-    b.title = session.workspace || '일반 대화';
+    const b = button(session.title || t('제목 없는 대화'), async () => { await call('chat.resume', {id:session.id}); sidebar(false); }, 'session' + (active ? ' active' : ''));
+    b.title = session.workspace || t('일반 대화');
     const menu = button('', () => sessionAction(session), 'icon-button session-more');
-    menu.setAttribute('aria-label', (session.title || '대화') + ' 관리');
+    menu.setAttribute('aria-label', (session.title || t('대화')) + t(' 관리'));
     menu.append(icon('more'));
     row.append(b, menu);
     return row;
@@ -710,45 +728,45 @@
     const target = $('projects'); target.replaceChildren();
     const projects = state.projects || [];
     const general = node('div', null, 'general-project' + (!state.workspace.selected ? ' selected' : ''));
-    const generalButton = button('', () => selectProject(''), 'project-button'); generalButton.append(icon('code'), node('span', '일반 대화')); generalButton.setAttribute('aria-current', String(!state.workspace.selected));
-    const generalNew = button('', () => newChat(''), 'icon-button project-new'); generalNew.setAttribute('aria-label', '일반 새 대화'); generalNew.append(icon('plus')); general.append(generalButton, generalNew); target.append(general);
+    const generalButton = button('', () => selectProject(''), 'project-button'); generalButton.append(icon('code'), node('span', t('일반 대화'))); generalButton.setAttribute('aria-current', String(!state.workspace.selected));
+    const generalNew = button('', () => newChat(''), 'icon-button project-new'); generalNew.setAttribute('aria-label', t('일반 새 대화')); generalNew.append(icon('plus')); general.append(generalButton, generalNew); target.append(general);
     for (const project of projects) {
       const expandedKey = 'project-expanded:' + project.key, expanded = localStorage.getItem(expandedKey) !== 'false';
       const section = node('section', null, 'project-tree' + (project.selected ? ' selected' : ''));
       const row = node('div', null, 'project-row');
-      const toggle = button('', () => { const expandedNow = section.classList.toggle('collapsed') === false; localStorage.setItem(expandedKey, String(expandedNow)); toggle.setAttribute('aria-expanded', String(expandedNow)); }, 'tree-toggle'); toggle.setAttribute('aria-label', project.name + ' 대화 펼치기'); toggle.setAttribute('aria-expanded', String(expanded)); toggle.append(icon('down'));
-      const select = button('', () => selectProject(project.key), 'project-button'); select.append(icon('folder'), node('span', project.name || '이름 없는 프로젝트')); select.setAttribute('aria-current', String(!!project.selected));
-      const more = button('', () => newChat(project.key), 'icon-button project-new'); more.setAttribute('aria-label', project.name + '에서 새 대화'); more.append(icon('plus'));
-      const menu = button('', () => removeProject(project), 'icon-button project-more'); menu.setAttribute('aria-label', project.name + ' 메뉴'); menu.append(icon('more'));
+      const toggle = button('', () => { const expandedNow = section.classList.toggle('collapsed') === false; localStorage.setItem(expandedKey, String(expandedNow)); toggle.setAttribute('aria-expanded', String(expandedNow)); }, 'tree-toggle'); toggle.setAttribute('aria-label', project.name + t(' 대화 펼치기')); toggle.setAttribute('aria-expanded', String(expanded)); toggle.append(icon('down'));
+      const select = button('', () => selectProject(project.key), 'project-button'); select.append(icon('folder'), node('span', project.name || t('이름 없는 프로젝트'))); select.setAttribute('aria-current', String(!!project.selected));
+      const more = button('', () => newChat(project.key), 'icon-button project-new'); more.setAttribute('aria-label', project.name + t('에서 새 대화')); more.append(icon('plus'));
+      const menu = button('', () => removeProject(project), 'icon-button project-more'); menu.setAttribute('aria-label', project.name + t(' 메뉴')); menu.append(icon('more'));
       row.append(toggle, select, more, menu); section.append(row);
       const children = node('div', null, 'project-sessions');
-      if (project.available === false) { children.append(node('p', '폴더 접근을 다시 연결해야 합니다.', 'sidebar-empty'), button('폴더 다시 연결', () => pickFolder(project.key), 'new-thread')); }
-      else children.append(button('새 대화', () => newChat(project.key), 'new-thread'));
+      if (project.available === false) { children.append(node('p', t('폴더 접근을 다시 연결해야 합니다.'), 'sidebar-empty'), button(t('폴더 다시 연결'), () => pickFolder(project.key), 'new-thread')); }
+      else children.append(button(t('새 대화'), () => newChat(project.key), 'new-thread'));
       for (const session of (state.sessions || []).filter(s => s.workspaceKey === project.key)) children.append(sessionRow(session));
       section.append(children); if (!expanded) section.classList.add('collapsed'); target.append(section);
     }
     const detached = (state.sessions || []).filter(s => s.workspaceKey && !projects.some(p => p.key === s.workspaceKey));
     if (detached.length) {
-      const section = node('section', null, 'project-tree detached-projects'); section.append(node('div', '연결 해제된 프로젝트', 'section-title'));
+      const section = node('section', null, 'project-tree detached-projects'); section.append(node('div', t('연결 해제된 프로젝트'), 'section-title'));
       const children = node('div', null, 'project-sessions');
-      children.append(node('p', '폴더와 파일은 남아 있습니다. 대화를 열면 읽기 전용으로 보존되며, 새 작업은 폴더를 다시 연결한 뒤 시작할 수 있습니다.', 'sidebar-empty'));
+      children.append(node('p', t('폴더와 파일은 남아 있습니다. 대화를 열면 읽기 전용으로 보존되며, 새 작업은 폴더를 다시 연결한 뒤 시작할 수 있습니다.'), 'sidebar-empty'));
       for (const session of detached) {
-        const row = node('div', null, 'detached-session'); const reconnect = button('폴더 다시 연결', () => pickFolder(session.workspaceKey), 'new-thread');
+        const row = node('div', null, 'detached-session'); const reconnect = button(t('폴더 다시 연결'), () => pickFolder(session.workspaceKey), 'new-thread');
         row.append(sessionRow(session), reconnect); children.append(row);
       }
       section.append(children); target.append(section);
     }
-    if (!projects.length) target.append(button('작업 폴더 선택', pickFolder, 'project-button'));
+    if (!projects.length) target.append(button(t('작업 폴더 선택'), pickFolder, 'project-button'));
   }
   function renderPhone() {
     const phone = state.phone || {};
-    $('phone-status').textContent = phone.status || '접근성 설정에서 Mobile Codex 휴대폰 제어를 켜 주세요.';
+    $('phone-status').textContent = phone.status || t('접근성 설정에서 Mobile Codex 휴대폰 제어를 켜 주세요.');
     $('phone-enable').disabled = !phone.connected || !!phone.enabled; $('floating-chat').disabled = !phone.connected;
     $('phone-enable').hidden = !!phone.enabled;
     $('phone-disable').hidden = !phone.enabled;
     $('phone-stop-banner').hidden = !phone.enabled;
     $('phone-thread-note').hidden = state.phoneToolsAvailable !== false;
-    $('phone-screenshot-note').textContent = phone.screenshotsSupported === false ? 'Android 10에서는 화면 요소를 읽어 조작합니다. 스크린샷은 Android 11 이상에서 지원합니다.' : '화면 위의 중지 버튼으로 즉시 끌 수 있습니다. 앱 프로세스가 다시 시작되면 제어는 꺼집니다.';
+    $('phone-screenshot-note').textContent = phone.screenshotsSupported === false ? t('Android 10에서는 화면 요소를 읽어 조작합니다. 스크린샷은 Android 11 이상에서 지원합니다.') : t('화면 위의 중지 버튼으로 즉시 끌 수 있습니다. 앱 프로세스가 다시 시작되면 제어는 꺼집니다.');
   }
   async function enablePhone() {
     const result = await call('ui.phoneEnable');
@@ -756,48 +774,48 @@
   }
   async function stopPhone() {
     await call('phone.stop');
-    state.phone = {...state.phone, enabled:false, status:'휴대폰 제어 꺼짐'}; renderPhone();
+    state.phone = {...state.phone, enabled:false, status:t('휴대폰 제어 꺼짐')}; renderPhone();
   }
   function render(next) {
     const changedThread = state.threadId !== next.threadId;
     setDraftScope(next); state = next;
     state.models ||= []; state.messages ||= []; state.projects ||= []; state.workspace ||= {}; state.account ||= {};
     const logged = C.isLoggedIn(state.account), selected = state.workspace.selected;
-    const name = selected ? state.workspace.name : '일반 대화';
+    const name = selected ? state.workspace.name : t('일반 대화');
     $('project-label').textContent = name; $('context-folder').textContent = name; $('header-project').textContent = name;
-    $('header-title').textContent = (state.sessions || []).find(s => s.id === state.threadId)?.title || '새 대화';
+    $('header-title').textContent = (state.sessions || []).find(s => s.id === state.threadId)?.title || t('새 대화');
     $('welcome').hidden = state.messages.length > 0; $('onboarding').hidden = logged; $('suggestions').hidden = !logged;
-    const generalPrompts = ['작업을 계획하고 필요한 정보를 정리해줘.','아이디어를 구조화하고 다음 단계를 제안해줘.','무엇을 도와줄 수 있는지 알려줘.'];
-    document.querySelectorAll('[data-prompt]').forEach((button, i) => { button.dataset.projectPrompt ||= button.dataset.prompt; button.dataset.prompt = selected ? button.dataset.projectPrompt : generalPrompts[i]; if (button.lastChild?.nodeType === Node.TEXT_NODE) button.lastChild.textContent = selected ? ['폴더 살펴보기','프로젝트 이해하기','변경 사항 검토'][i] : ['작업 계획하기','아이디어 정리하기','도움말 보기'][i]; });
+    const generalPrompts = [t('작업을 계획하고 필요한 정보를 정리해줘.'),t('아이디어를 구조화하고 다음 단계를 제안해줘.'),t('무엇을 도와줄 수 있는지 알려줘.')];
+    document.querySelectorAll('[data-prompt]').forEach((button, i) => { button.dataset.prompt = selected ? [t('이 폴더에 어떤 파일이 있는지 살펴보고 정리해줘.'),t('이 프로젝트를 살펴보고 실행 방법과 개선할 부분을 알려줘.'),t('이 프로젝트의 변경 사항을 검토하고 버그가 있는지 찾아줘.')][i] : generalPrompts[i]; if (button.lastChild?.nodeType === Node.TEXT_NODE) button.lastChild.textContent = selected ? [t('폴더 살펴보기'),t('프로젝트 이해하기'),t('변경 사항 검토')][i] : [t('작업 계획하기'),t('아이디어 정리하기'),t('도움말 보기')][i]; });
     $('login-step').textContent = logged ? '✓' : '1'; $('login-step').classList.toggle('done', logged);
     $('folder-step').textContent = selected ? '✓' : '2'; $('folder-step').classList.toggle('done', !!selected);
-    $('account-name').textContent = state.account.email || (logged ? 'ChatGPT' : '계정 연결');
-    $('account-plan').textContent = state.account.planType || (logged ? '연결된 계정' : 'ChatGPT로 로그인');
+    $('account-name').textContent = state.account.email || (logged ? 'ChatGPT' : t('계정 연결'));
+    $('account-plan').textContent = state.account.planType || (logged ? t('연결된 계정') : t('ChatGPT로 로그인'));
     $('avatar').textContent = (state.account.email || 'M').charAt(0).toUpperCase();
     $('connection-dot').classList.toggle('online', !!state.ready);
-    $('runtime-status').textContent = state.status; $('settings-status').textContent = state.status; $('settings-indicator').textContent = state.ready ? '연결됨' : '연결 안 됨'; $('settings-indicator').classList.toggle('online', !!state.ready);
+    $('runtime-status').textContent = state.status; $('settings-status').textContent = state.status; $('settings-indicator').textContent = state.ready ? t('연결됨') : t('연결 안 됨'); $('settings-indicator').classList.toggle('online', !!state.ready);
     const pendingDeletes = Number(state.pendingDeletionCount) || 0;
     $('pending-deletions').hidden = pendingDeletes === 0;
-    $('pending-deletions').textContent = pendingDeletes ? `원본 삭제 대기 ${pendingDeletes}건. 아래 ‘Codex 시작 / 다시 연결’을 누르면 다시 시도합니다.` : '';
+    $('pending-deletions').textContent = pendingDeletes ? t('원본 삭제 대기 {count}건. 아래 ‘Codex 시작 / 다시 연결’을 누르면 다시 시도합니다.', {count:pendingDeletes}) : '';
     $('send').hidden = false; $('stop').hidden = !state.busy; $('activity').hidden = !state.busy;
     if (!state.busy) activityIcon = 'thinking';
     drawStatusIcons();
     $('permissions').value = state.permissions || 'workspace-write'; $('permissions').disabled = !!state.busy;
     document.querySelectorAll('input[name="permission"]').forEach(r => { r.checked = r.value === $('permissions').value; r.disabled = !!state.busy; });
     $('terminal-cwd').textContent = state.cwd || '';
-    $('storage-status').textContent = state.directWorkspace ? '선택한 폴더에서 셸 명령을 실행합니다.' : '폴더의 셸 접근은 기기 파일 권한이 필요합니다. 문서 제공자 폴더는 파일 도구로 접근합니다.';
-    $('storage-access').textContent = state.allFilesAccess ? '기기 파일 접근 설정' : '기기 파일 접근 허용';
+    $('storage-status').textContent = state.directWorkspace ? t('선택한 폴더에서 셸 명령을 실행합니다.') : t('폴더의 셸 접근은 기기 파일 권한이 필요합니다. 문서 제공자 폴더는 파일 도구로 접근합니다.');
+    $('storage-access').textContent = state.allFilesAccess ? t('기기 파일 접근 설정') : t('기기 파일 접근 허용');
     renderDevtools();
     renderPhone();
-    if (changesScope !== reviewScope()) { changesGeneration++; changesScope = reviewScope(); selectedChange = null; $('change-preview').hidden = true; $('change-restore').disabled = true; $('changes-list').replaceChildren(); if ($('changes-dialog').open) $('changes-status').textContent = '대화 또는 프로젝트가 바뀌었습니다. 새로고침해 주세요.'; }
-    $('changes-turn-diff').textContent = state.turnDiff || '이 대화에 기록된 작업 diff가 없습니다.';
+    if (changesScope !== reviewScope()) { changesGeneration++; changesScope = reviewScope(); selectedChange = null; $('change-preview').hidden = true; $('change-restore').disabled = true; $('changes-list').replaceChildren(); if ($('changes-dialog').open) $('changes-status').textContent = t('대화 또는 프로젝트가 바뀌었습니다. 새로고침해 주세요.'); }
+    $('changes-turn-diff').textContent = state.turnDiff || t('이 대화에 기록된 작업 diff가 없습니다.');
     if (selectedChange) $('change-restore').disabled = restoringChange || !selectedChange.data.canRestore || !!state.busy || state.permissions === 'read-only';
     renderProjects();
     $('sessions').replaceChildren();
     for (const session of (state.sessions || []).filter(s => !(s.workspaceKey || s.workspace))) $('sessions').append(sessionRow(session));
-    if (!state.sessions?.length) $('sessions').append(node('p', '대화를 시작하면 여기에 표시됩니다.', 'sidebar-empty'));
+    if (!state.sessions?.length) $('sessions').append(node('p', t('대화를 시작하면 여기에 표시됩니다.'), 'sidebar-empty'));
     const key = JSON.stringify(state.models);
-    if (key !== modelKey) { modelKey = key; const value = draftOptions.model || $('model').value; $('model').replaceChildren(new Option('기본 모델', '')); for (const m of state.models) $('model').add(new Option(m.displayName || m.model || m.id, m.model || m.id)); if ([...$('model').options].some(o => o.value === value)) $('model').value = value; efforts(); if ([...$('effort').options].some(o => o.value === draftOptions.effort)) $('effort').value = draftOptions.effort; }
+    if (key !== modelKey) { modelKey = key; const value = draftOptions.model || $('model').value; $('model').replaceChildren(new Option(t('기본 모델'), '')); for (const m of state.models) $('model').add(new Option(m.displayName || m.model || m.id, m.model || m.id)); if ([...$('model').options].some(o => o.value === value)) $('model').value = value; efforts(); if ([...$('effort').options].some(o => o.value === draftOptions.effort)) $('effort').value = draftOptions.effort; }
     renderModelList();
     if (changedThread) { following = true; $('event-log').replaceChildren(); $('messages').replaceChildren(); }
     updateSend(); optionsSummary(); drawUpdates(updateState);
@@ -811,27 +829,27 @@
   }
   async function startLogin() {
     if (C.isLoggedIn(state.account)) return show('settings-dialog');
-    show('login-dialog'); $('device-code').textContent = '연결 준비 중'; $('open-login').disabled = true;
+    show('login-dialog'); $('device-code').textContent = t('연결 준비 중'); $('open-login').disabled = true;
     login = await call('auth.login');
-    if (!C.safeLoginUrl(login.verificationUrl)) throw new Error('잘못된 로그인 응답입니다.');
+    if (!C.safeLoginUrl(login.verificationUrl)) throw new Error(t('잘못된 로그인 응답입니다.'));
     $('device-code').textContent = login.userCode; $('open-login').disabled = false;
   }
   async function pickFolder(projectKey = '') { const result = await call('files.pick', projectKey ? {projectKey} : {}); if (!result.cancelled) { folder = ''; if (!$('file-panel').hidden) await listFiles(); } }
   async function listFiles(query = '') {
-    if (!state.workspace.selected) { $('file-list').replaceChildren(button('작업 폴더 선택', pickFolder)); return; }
-    const version = ++fileSeq; $('file-list').replaceChildren(node('p', '불러오는 중…', 'empty-note'));
+    if (!state.workspace.selected) { $('file-list').replaceChildren(button(t('작업 폴더 선택'), pickFolder)); return; }
+    const version = ++fileSeq; $('file-list').replaceChildren(node('p', t('불러오는 중…'), 'empty-note'));
     const result = await call(query ? 'files.search' : 'files.list', query ? {query} : {path: folder});
     if (version !== fileSeq) return;
-    $('breadcrumbs').textContent = query ? '검색: ' + query : state.workspace.name + (folder ? ' / ' + folder : '');
+    $('breadcrumbs').textContent = query ? t('검색: ') + query : state.workspace.name + (folder ? ' / ' + folder : '');
     $('file-up').disabled = !folder || !!query; $('file-list').replaceChildren();
     for (const entry of result.entries || []) {
       const row = node('div', null, 'file-entry');
       const b = button('', async () => { if (entry.directory) { folder = entry.path; $('file-query').value = ''; await listFiles(); } else await openFile(entry.path); }, 'file-row');
       b.append(icon(entry.directory ? 'folder' : 'file'), node('span', entry.name), node('small', entry.directory ? '' : C.size(entry.size))); row.append(b);
-      const menu = button('⋯', () => fileAction(entry), 'icon-button'); menu.setAttribute('aria-label', entry.name + ' 관리'); row.append(menu); $('file-list').append(row);
+      const menu = button('⋯', () => fileAction(entry), 'icon-button'); menu.setAttribute('aria-label', entry.name + t(' 관리')); row.append(menu); $('file-list').append(row);
     }
-    if (!result.entries?.length) $('file-list').append(node('p', '항목이 없습니다.', 'empty-note'));
-    if (result.truncated) $('file-list').append(node('p', '일부 검색 결과입니다. 더 구체적인 이름으로 검색하세요.', 'empty-note'));
+    if (!result.entries?.length) $('file-list').append(node('p', t('항목이 없습니다.'), 'empty-note'));
+    if (result.truncated) $('file-list').append(node('p', t('일부 검색 결과입니다. 더 구체적인 이름으로 검색하세요.'), 'empty-note'));
   }
   async function openFile(path) {
     if (/\.(png|jpe?g|webp|gif|bmp|heic|heif|avif)$/i.test(path)) { previewImage(await call('images.read', {path})); return; }
@@ -842,41 +860,41 @@
     $('input-title').textContent = title; $('input-description').textContent = description; $('input-value').value = value; show('input-dialog'); $('input-value').focus();
     return new Promise(resolve => inputResolve = resolve);
   }
-  async function mutate(operation, args) { const result = await call('files.mutate', {operation, arguments: args}); toast('적용했습니다.'); if (!$('file-panel').hidden) await listFiles(); return result; }
+  async function mutate(operation, args) { const result = await call('files.mutate', {operation, arguments: args}); toast(t('적용했습니다.')); if (!$('file-panel').hidden) await listFiles(); return result; }
   function fileAction(entry) {
     $('file-actions-title').textContent = entry.name;
     const action = (label, fn, cls) => button(label, async () => { close('file-actions-dialog'); await fn(); }, cls);
     $('file-actions').replaceChildren(
-      action('이름 변경', async () => { const name = await input('이름 변경', '새 이름', entry.name); if (name) await mutate('mobile_rename', {path:entry.path, name}); }),
-      action('이동', async () => { const destination = await input('이동', '작업 폴더 기준 대상 폴더 경로 (루트는 빈칸)'); if (destination !== null) await mutate('mobile_move', {path:entry.path, destination}); }),
-      action('삭제', () => mutate('mobile_delete', {path:entry.path}), 'secondary-button danger')
+      action(t('이름 변경'), async () => { const name = await input(t('이름 변경'), t('새 이름'), entry.name); if (name) await mutate('mobile_rename', {path:entry.path, name}); }),
+      action(t('이동'), async () => { const destination = await input(t('이동'), t('작업 폴더 기준 대상 폴더 경로 (루트는 빈칸)')); if (destination !== null) await mutate('mobile_move', {path:entry.path, destination}); }),
+      action(t('삭제'), () => mutate('mobile_delete', {path:entry.path}), 'secondary-button danger')
     );
     show('file-actions-dialog');
   }
   async function loadInstructions() {
     if (instructionsSaving) return;
-    if (instructionsLoaded && $('instructions-editor').value !== instructionsOriginal && !confirm('저장하지 않은 지침을 다시 불러올까요?')) return;
-    $('instructions-status').textContent = '지침을 불러오는 중…';
+    if (instructionsLoaded && $('instructions-editor').value !== instructionsOriginal && !confirm(t('저장하지 않은 지침을 다시 불러올까요?'))) return;
+    $('instructions-status').textContent = t('지침을 불러오는 중…');
     $('instructions-editor').disabled = true; $('instructions-save').disabled = true;
     try {
       const result = await call('instructions.read');
       instructionsOriginal = result.content || ''; $('instructions-editor').value = instructionsOriginal;
-      instructionsLoaded = true; $('instructions-path').textContent = '저장 위치: ' + (result.activePath || result.path || '.codex/AGENTS.md');
-      $('instructions-status').textContent = result.notice || '저장된 지침을 편집할 수 있습니다.';
-    } catch (error) { $('instructions-status').textContent = '지침을 불러오지 못했습니다. ' + error.message; }
+      instructionsLoaded = true; $('instructions-path').textContent = t('저장 위치: ') + (result.activePath || result.path || '.codex/AGENTS.md');
+      $('instructions-status').textContent = result.notice || t('저장된 지침을 편집할 수 있습니다.');
+    } catch (error) { $('instructions-status').textContent = t('지침을 불러오지 못했습니다. ') + error.message; }
     finally { $('instructions-editor').disabled = !instructionsLoaded; $('instructions-save').disabled = !instructionsLoaded; }
   }
   async function saveInstructions() {
     if (!instructionsLoaded || instructionsSaving) return;
     const content = $('instructions-editor').value; instructionsSaving = true;
-    $('instructions-save').disabled = true; $('instructions-status').textContent = '저장 중…';
+    $('instructions-save').disabled = true; $('instructions-status').textContent = t('저장 중…');
     try {
       const result = await call('instructions.save', {content});
       instructionsOriginal = typeof result.content === 'string' ? result.content : content;
       if ($('instructions-editor').value === content) $('instructions-editor').value = instructionsOriginal;
-      if (result.activePath || result.path) $('instructions-path').textContent = '저장 위치: ' + (result.activePath || result.path);
-      $('instructions-status').textContent = '저장했습니다. 다음 요청부터 적용됩니다.' + (result.notice ? ' ' + result.notice : '');
-    } catch (error) { $('instructions-status').textContent = '저장하지 못했습니다. 작성 내용은 그대로 남아 있습니다. ' + error.message; }
+      if (result.activePath || result.path) $('instructions-path').textContent = t('저장 위치: ') + (result.activePath || result.path);
+      $('instructions-status').textContent = t('저장했습니다. 다음 요청부터 적용됩니다.') + (result.notice ? ' ' + result.notice : '');
+    } catch (error) { $('instructions-status').textContent = t('저장하지 못했습니다. 작성 내용은 그대로 남아 있습니다. ') + error.message; }
     finally { instructionsSaving = false; $('instructions-save').disabled = false; }
   }
   async function config() { const result = await call('config.read'); configOriginal = result.content; $('config-editor').value = result.content; show('config-dialog'); }
@@ -895,138 +913,138 @@
     for(let i=0;i<Math.min(last,3);i++) lines.push([' ',a[a.length-last+i]]);
     const box=$('change-diff'); box.replaceChildren();
     for(const [sign,text] of lines.slice(0,2000)) box.append(node('span',sign+' '+text+'\n',sign==='-'?'diff-removed':sign==='+'?'diff-added':'diff-context'));
-    if(lines.length>2000) box.append(node('span','\n… 미리보기 2,000줄 이후 생략. 파일 탐색기에서 전체 내용을 확인하세요.'));
-    if(first===a.length && first===b.length) box.textContent='내용 차이가 없습니다.';
+    if(lines.length>2000) box.append(node('span',t('\n… 미리보기 2,000줄 이후 생략. 파일 탐색기에서 전체 내용을 확인하세요.')));
+    if(first===a.length && first===b.length) box.textContent=t('내용 차이가 없습니다.');
   }
   async function previewChange(kind, value) {
     const generation=++changesGeneration, scope=reviewScope(), args=reviewArgs(kind==='git'?{path:value}:{id:value});
-    selectedChange=null; $('change-restore').disabled=true; $('changes-status').textContent='파일 내용을 확인하는 중…';
+    selectedChange=null; $('change-restore').disabled=true; $('changes-status').textContent=t('파일 내용을 확인하는 중…');
     const action=kind==='git'?'changes.preview':kind==='backup'?'changes.backupPreview':'recovery.preview';
     try {
       const data=await call(action,args); if(generation!==changesGeneration || scope!==reviewScope())return;
       selectedChange={kind,data,workspaceKey:args.workspaceKey};
       $('change-path').textContent=data.path; $('change-note').textContent=data.note || '';
-      if (data.previewLimited) $('change-diff').textContent = '텍스트 전체를 표시할 수 없는 파일입니다.\n이전: ' + data.before + '\nSHA-256: ' + data.beforeSha256 + '\n현재: ' + data.after + '\nSHA-256: ' + data.afterSha256;
+      if (data.previewLimited) $('change-diff').textContent = t('텍스트 전체를 표시할 수 없는 파일입니다.\n이전: ') + data.before + '\nSHA-256: ' + data.beforeSha256 + t('\n현재: ') + data.after + '\nSHA-256: ' + data.afterSha256;
       else showFileDiff(data.before,data.after);
       $('change-preview').hidden=false;
-      $('change-restore').textContent=data.actionLabel || '복원'; $('change-restore').disabled=!data.canRestore || state.busy || state.permissions==='read-only';
-      $('changes-status').textContent=(data.beforeExists===false?'이전 파일 없음 · ':'')+(data.afterExists===false?'현재 파일 없음':'');
+      $('change-restore').textContent=data.actionLabel || t('복원'); $('change-restore').disabled=!data.canRestore || state.busy || state.permissions==='read-only';
+      $('changes-status').textContent=(data.beforeExists===false?t('이전 파일 없음 · '):'')+(data.afterExists===false?t('현재 파일 없음'):'');
     } catch(error) { if(generation===changesGeneration) $('changes-status').textContent=error.message; }
   }
   async function loadChanges(history=false) {
     const generation=++changesGeneration, scope=reviewScope(), args=reviewArgs({}); changesScope=scope;
     selectedChange=null; $('change-preview').hidden=true; $('change-restore').disabled=true;
-    show('changes-dialog'); sidebar(false); $('changes-list').replaceChildren(); $('changes-status').textContent='불러오는 중…';
+    show('changes-dialog'); sidebar(false); $('changes-list').replaceChildren(); $('changes-status').textContent=t('불러오는 중…');
     try {
       const result=await call(history?'changes.history':'changes.list',args);
       if(generation!==changesGeneration || scope!==reviewScope())return;
-      $('changes-status').textContent=result.note || (history?'파일 복원 직전의 사본입니다. 이후 수정된 파일은 자동으로 덮어쓰지 않습니다.':'');
+      $('changes-status').textContent=result.note || (history?t('파일 복원 직전의 사본입니다. 이후 수정된 파일은 자동으로 덮어쓰지 않습니다.'):'');
       for(const entry of result.entries || []) {
-        const row=node('div',null,'recovery-item'), desc=node('div'); desc.append(node('strong',entry.path),node('small',history?new Date(entry.timestamp).toLocaleString():entry.status));
-        row.append(desc,button('비교',()=>previewChange(history?'backup':'git',history?entry.id:entry.path))); $('changes-list').append(row);
+        const row=node('div',null,'recovery-item'), desc=node('div'); desc.append(node('strong',entry.path),node('small',history?new Date(entry.timestamp).toLocaleString(L.language()):entry.status));
+        row.append(desc,button(t('비교'),()=>previewChange(history?'backup':'git',history?entry.id:entry.path))); $('changes-list').append(row);
       }
-      if(!result.entries?.length) $('changes-list').append(node('p',history?'복원 사본이 없습니다.':'현재 Git 변경 사항이 없습니다.','empty-note'));
-    } catch(error) { if(generation===changesGeneration) $('changes-status').textContent=error.message+' 문서 제공자 파일은 복구 사본에서 확인할 수 있습니다.'; }
+      if(!result.entries?.length) $('changes-list').append(node('p',history?t('복원 사본이 없습니다.'):t('현재 Git 변경 사항이 없습니다.'),'empty-note'));
+    } catch(error) { if(generation===changesGeneration) $('changes-status').textContent=error.message+t(' 문서 제공자 파일은 복구 사본에서 확인할 수 있습니다.'); }
   }
   async function restoreChange() {
     const selected=selectedChange; if(!selected || !selected.data.canRestore || restoringChange)return;
-    if(selected.workspaceKey!==(state.workspace?.key || ''))throw new Error('프로젝트가 바뀌었습니다.');
-    if(!confirm(selected.data.path+'\n'+(selected.data.actionLabel || '복원')+'할까요?'))return;
+    if(selected.workspaceKey!==(state.workspace?.key || ''))throw new Error(t('프로젝트가 바뀌었습니다.'));
+    if(!confirm(selected.data.path+'\n'+(selected.data.actionLabel || t('복원'))+t('할까요?')))return;
     restoringChange=true; $('change-restore').disabled=true;
     try {
       const args={workspaceKey:selected.workspaceKey};
       if(selected.kind==='saf')args.id=selected.data.id;else args.token=selected.data.token;
       await call(selected.kind==='saf'?'recovery.restore':'changes.restore',args);
-      toast('파일 내용을 복원했습니다.');
+      toast(t('파일 내용을 복원했습니다.'));
       if(selected.workspaceKey===(state.workspace?.key || '')) { if(selected.kind==='saf'){close('changes-dialog');await recovery();}else await loadChanges(); if(!$('file-panel').hidden)await listFiles(); }
     } finally { restoringChange=false; if(selectedChange===selected)$('change-restore').disabled=false; }
   }
   async function recovery() {
     show('recovery-dialog'); const {entries} = await call('recovery.list'); $('recovery-list').replaceChildren();
-    for (const entry of entries || []) { const row = node('div', null, 'recovery-item'), desc = node('div'); desc.append(node('strong', entry.path), node('small', new Date(entry.timestamp).toLocaleString())); row.append(desc, button('비교 / 복원', async () => { close('recovery-dialog'); show('changes-dialog'); await previewChange('saf',entry.id); }), button('다른 위치에 저장', () => call('recovery.export', {id: entry.id, name: C.basename(entry.path)}))); $('recovery-list').append(row); }
-    if (!entries?.length) $('recovery-list').append(node('p', '저장된 복구 사본이 없습니다.', 'empty-note'));
+    for (const entry of entries || []) { const row = node('div', null, 'recovery-item'), desc = node('div'); desc.append(node('strong', entry.path), node('small', new Date(entry.timestamp).toLocaleString(L.language()))); row.append(desc, button(t('비교 / 복원'), async () => { close('recovery-dialog'); show('changes-dialog'); await previewChange('saf',entry.id); }), button(t('다른 위치에 저장'), () => call('recovery.export', {id: entry.id, name: C.basename(entry.path)}))); $('recovery-list').append(row); }
+    if (!entries?.length) $('recovery-list').append(node('p', t('저장된 복구 사본이 없습니다.'), 'empty-note'));
   }
   let toolsScope = "", toolsGeneration = 0;
   const currentToolsScope = () => JSON.stringify([state.cwd, state.threadId, state.account]);
-  function usageTime(value) { return Number.isFinite(value) ? new Date(value * 1000).toLocaleString() : '알 수 없음'; }
-  function usageDuration(value) { return Number.isFinite(value) ? (value >= 60 ? Math.round(value / 60) + '시간' : value + '분') : '기간 정보 없음'; }
+  function usageTime(value) { return Number.isFinite(value) ? new Date(value * 1000).toLocaleString(L.language()) : t('알 수 없음'); }
+  function usageDuration(value) { return Number.isFinite(value) ? (value >= 60 ? Math.round(value / 60) + t('시간') : value + t('분')) : t('기간 정보 없음'); }
   function usageRows(result) {
     const buckets = result?.rateLimitsByLimitId && Object.keys(result.rateLimitsByLimitId).length ? Object.entries(result.rateLimitsByLimitId) : [['codex', result?.rateLimits]];
-    return buckets.filter(([, value]) => value && (value.primary || value.secondary)).flatMap(([key, value]) => [['기본', value.primary], ['보조', value.secondary]].filter(([, window]) => window && Number.isFinite(window.usedPercent)).map(([label, window]) => {
+    return buckets.filter(([, value]) => value && (value.primary || value.secondary)).flatMap(([key, value]) => [[t('기본'), value.primary], [t('보조'), value.secondary]].filter(([, window]) => window && Number.isFinite(window.usedPercent)).map(([label, window]) => {
       const remaining = Math.max(0, Math.min(100, 100 - window.usedPercent));
-      return {label:(value.limitName || value.normalModelSlug || key) + ' · ' + label, text:'사용 ' + window.usedPercent + '% · 남은 ' + remaining + '% · ' + usageDuration(window.windowDurationMins) + ' · 재설정 ' + usageTime(window.resetsAt)};
+      return {label:(value.limitName || value.normalModelSlug || key) + ' · ' + label, text:t('사용 ') + window.usedPercent + t('% · 남은 ') + remaining + '% · ' + usageDuration(window.windowDurationMins) + t(' · 재설정 ') + usageTime(window.resetsAt)};
     }));
   }
   async function loadUsage() {
     if (usageLoading) return;
     const status = $('usage-status'), target = $('usage-limits');
-    if (!C.isLoggedIn(state.account)) { status.textContent = '로그인 후 사용 한도를 조회할 수 있습니다.'; target.replaceChildren(); return; }
+    if (!C.isLoggedIn(state.account)) { status.textContent = t('로그인 후 사용 한도를 조회할 수 있습니다.'); target.replaceChildren(); return; }
     const accountScope = JSON.stringify(state.account);
-    usageLoading = true; $('usage-refresh').disabled = true; status.textContent = '사용 한도를 조회하는 중…';
+    usageLoading = true; $('usage-refresh').disabled = true; status.textContent = t('사용 한도를 조회하는 중…');
     try {
       const result = await rpc('account/rateLimits/read', {}), rows = usageRows(result);
-      if (JSON.stringify(state.account) !== accountScope) { target.replaceChildren(); status.textContent = '계정이 바뀌었습니다. 다시 조회해 주세요.'; return; }
+      if (JSON.stringify(state.account) !== accountScope) { target.replaceChildren(); status.textContent = t('계정이 바뀌었습니다. 다시 조회해 주세요.'); return; }
       target.replaceChildren(...rows.map(row => { const item = node('p', null, 'muted'); item.append(node('strong', row.label), document.createTextNode(' ' + row.text)); return item; }));
-      status.textContent = rows.length ? '현재 계정의 Codex 사용 한도입니다.' : '사용 한도 정보가 제공되지 않았습니다.';
-    } catch (error) { target.replaceChildren(); status.textContent = '사용 한도를 조회할 수 없습니다. ' + error.message; }
+      status.textContent = rows.length ? t('현재 계정의 Codex 사용 한도입니다.') : t('사용 한도 정보가 제공되지 않았습니다.');
+    } catch (error) { target.replaceChildren(); status.textContent = t('사용 한도를 조회할 수 없습니다. ') + error.message; }
     finally { usageLoading = false; $('usage-refresh').disabled = false; }
   }
   async function loadTools(force = false) {
     show('tools-dialog'); const target = $('tools-list');
     const scope = currentToolsScope(), generation = ++toolsGeneration;
     if (toolsScope !== scope) { toolCache.fill(null); toolsScope = scope; }
-    if (!toolCache.some(Boolean)) target.replaceChildren(node('p', '불러오는 중…', 'muted'));
+    if (!toolCache.some(Boolean)) target.replaceChildren(node('p', t('불러오는 중…'), 'muted'));
     const cwds = state.cwd ? [state.cwd] : [];
     const results = await Promise.allSettled([rpc('plugin/list', {cwds, ...(force ? {forceRefetch:true} : {})}), rpc('skills/list', {cwds, ...(force ? {forceReload:true} : {})}), rpc('mcpServerStatus/list', {limit: 100, ...(state.threadId ? {threadId: state.threadId} : {})})]);
     if (generation !== toolsGeneration || scope !== currentToolsScope()) return;
     target.replaceChildren();
     const card = (name, description, parent = target) => { const c = node('div', null, 'tool-card'); c.append(node('strong', name), node('p', description || '', 'muted')); parent.append(c); return c; };
-    ['플러그인', '스킬', 'MCP 서버'].forEach((title, i) => {
+    [t('플러그인'), t('스킬'), t('MCP 서버')].forEach((title, i) => {
       target.append(node('h3', title));
       const result = results[i];
       if (result.status === 'fulfilled') toolCache[i] = result.value;
       const data = result.status === 'fulfilled' ? result.value : toolCache[i];
-      if (result.status === 'rejected') { card('불러오지 못했습니다', result.reason.message + (data ? ' 이전 목록을 표시합니다.' : '')); if (!data) return; }
+      if (result.status === 'rejected') { card(t('불러오지 못했습니다'), result.reason.message + (data ? t(' 이전 목록을 표시합니다.') : '')); if (!data) return; }
       if (i === 0) {
         for (const market of data.marketplaces || []) {
           const heading = node('p', market.interface?.displayName || market.name, 'muted'); target.append(heading);
           for (const plugin of market.plugins || []) {
             const c = card(plugin.interface?.displayName || plugin.name, plugin.interface?.shortDescription || plugin.id);
             const params = {pluginName: plugin.name, ...(market.path ? {marketplacePath: market.path} : {remoteMarketplaceName: market.name})};
-            c.append(button('상세', async () => { const detail = await rpc('plugin/read', params); logEvent('플러그인: ' + plugin.name, detail.plugin); show('activity-dialog'); }));
+            c.append(button(t('상세'), async () => { const detail = await rpc('plugin/read', params); logEvent(t('플러그인: ') + plugin.name, detail.plugin); show('activity-dialog'); }));
             if (plugin.installed) {
-              c.append(button(plugin.enabled ? '비활성화' : '활성화', async () => { await rpc('config/value/write', {keyPath: 'plugins.' + JSON.stringify(plugin.id) + '.enabled', value: !plugin.enabled, mergeStrategy: 'replace'}); await loadTools(); }));
-              c.append(button('제거', async () => { if (!confirm(plugin.name + ' 플러그인을 제거할까요?')) return; await rpc('plugin/uninstall', {pluginId: plugin.id}); await loadTools(); }));
-            } else c.append(button('설치', async () => {
+              c.append(button(plugin.enabled ? t('비활성화') : t('활성화'), async () => { await rpc('config/value/write', {keyPath: 'plugins.' + JSON.stringify(plugin.id) + '.enabled', value: !plugin.enabled, mergeStrategy: 'replace'}); await loadTools(); }));
+              c.append(button(t('제거'), async () => { if (!confirm(plugin.name + t(' 플러그인을 제거할까요?'))) return; await rpc('plugin/uninstall', {pluginId: plugin.id}); await loadTools(); }));
+            } else c.append(button(t('설치'), async () => {
               const detail = await rpc('plugin/read', params);
               const summary = detail.plugin;
-              if (!confirm(plugin.name + ' 설치\n\n' + (summary.description || '') + '\n\n스킬 ' + (summary.skills?.length || 0) + '개 · MCP ' + (summary.mcpServers?.length || 0) + '개 · 훅 ' + (summary.hooks?.length || 0) + '개')) return;
+              if (!confirm(plugin.name + t(' 설치\n\n') + (summary.description || '') + t('\n\n스킬 ') + (summary.skills?.length || 0) + t('개 · MCP ') + (summary.mcpServers?.length || 0) + t('개 · 훅 ') + (summary.hooks?.length || 0) + t('개'))) return;
               const result = await rpc('plugin/install', params);
-              for (const app of result.appsNeedingAuth || []) if (app.installUrl) { const c = card(app.name + ' 계정 연결', '플러그인을 사용하려면 계정 연결이 필요합니다.'); c.append(button('연결', () => call('ui.externalBrowser', {url: app.installUrl}))); }
-              toast('플러그인을 설치했습니다.'); if (!result.appsNeedingAuth?.length) await loadTools();
+              for (const app of result.appsNeedingAuth || []) if (app.installUrl) { const c = card(app.name + t(' 계정 연결'), t('플러그인을 사용하려면 계정 연결이 필요합니다.')); c.append(button(t('연결'), () => call('ui.externalBrowser', {url: app.installUrl}))); }
+              toast(t('플러그인을 설치했습니다.')); if (!result.appsNeedingAuth?.length) await loadTools();
             }));
           }
         }
-        for (const e of data.marketplaceLoadErrors || []) card('마켓플레이스 오류', e.message);
-        if (!data.marketplaces?.length) card('등록된 플러그인이 없습니다', '마켓플레이스를 추가하거나 계정 연결 상태를 확인하세요.');
+        for (const e of data.marketplaceLoadErrors || []) card(t('마켓플레이스 오류'), e.message);
+        if (!data.marketplaces?.length) card(t('등록된 플러그인이 없습니다'), t('마켓플레이스를 추가하거나 계정 연결 상태를 확인하세요.'));
       } else if (i === 1) {
         let count = 0;
         for (const entry of data.data || []) {
           for (const skill of entry.skills || []) {
             count++; const c = card(skill.interface?.displayName || skill.name, skill.description);
-            c.append(node('p', skill.path, 'muted'), button(skill.enabled ? '비활성화' : '활성화', async () => { await rpc('skills/config/write', {path: skill.path, enabled: !skill.enabled}); await loadTools(); }), button('대화에 사용', () => { $('prompt').value += '$' + skill.name + ' '; close('tools-dialog'); $('prompt').focus(); }));
+            c.append(node('p', skill.path, 'muted'), button(skill.enabled ? t('비활성화') : t('활성화'), async () => { await rpc('skills/config/write', {path: skill.path, enabled: !skill.enabled}); await loadTools(); }), button(t('대화에 사용'), () => { $('prompt').value += '$' + skill.name + ' '; close('tools-dialog'); $('prompt').focus(); }));
           }
-          for (const e of entry.errors || []) card('스킬 로드 오류', e.message);
+          for (const e of entry.errors || []) card(t('스킬 로드 오류'), e.message);
         }
-        if (!count) card('설치된 스킬이 없습니다', 'SKILL.md가 들어 있는 스킬 폴더를 가져오거나 Codex에게 스킬 생성을 요청하세요.');
+        if (!count) card(t('설치된 스킬이 없습니다'), t('SKILL.md가 들어 있는 스킬 폴더를 가져오거나 Codex에게 스킬 생성을 요청하세요.'));
       } else {
         for (const server of data.data || []) {
-          const c = card(server.name, (server.runtimeStatus?.status || server.authStatus) + ' · 도구 ' + Object.keys(server.tools || {}).length + '개');
+          const c = card(server.name, (server.runtimeStatus?.status || server.authStatus) + t(' · 도구 ') + Object.keys(server.tools || {}).length + t('개'));
           if (server.toolsError) c.append(node('p', server.toolsError, 'muted'));
-          c.append(button('도구 보기', () => { logEvent('MCP: ' + server.name, server); show('activity-dialog'); }), button('로그인', async () => { const r = await rpc('mcpServer/oauth/login', {name: server.name}); await call('ui.externalBrowser', {url: r.authorizationUrl}); }));
+          c.append(button(t('도구 보기'), () => { logEvent('MCP: ' + server.name, server); show('activity-dialog'); }), button(t('로그인'), async () => { const r = await rpc('mcpServer/oauth/login', {name: server.name}); await call('ui.externalBrowser', {url: r.authorizationUrl}); }));
         }
-        if (!data.data?.length) card('설정된 MCP 서버가 없습니다', '서버 설정에서 HTTP 또는 stdio 서버를 추가할 수 있습니다.');
-        if (data.nextCursor) target.append(node('p', '표시된 서버: 처음 100개', 'muted'));
+        if (!data.data?.length) card(t('설정된 MCP 서버가 없습니다'), t('서버 설정에서 HTTP 또는 stdio 서버를 추가할 수 있습니다.'));
+        if (data.nextCursor) target.append(node('p', t('표시된 서버: 처음 100개'), 'muted'));
       }
     });
   }
@@ -1041,7 +1059,7 @@
         box.append(label); read = elicitationForm(spec, box);
       } else {
         if (choices) {
-          field = node('select'); field.add(new Option('선택하세요', ''));
+          field = node('select'); field.add(new Option(t('선택하세요'), ''));
           choices.forEach((value, i) => field.add(new Option(spec.enumNames?.[i] || spec.oneOf?.[i]?.title || String(value), String(i))));
           if (spec.default !== undefined) field.value = String(choices.indexOf(spec.default));
           read = () => field.value === '' ? undefined : choices[Number(field.value)];
@@ -1054,7 +1072,7 @@
             for (const option of field.options) option.selected = (spec.default || []).includes(values[Number(option.value)]);
             read = () => [...field.selectedOptions].map(o => values[Number(o.value)]);
           } else {
-            field = node('textarea'); field.placeholder = '항목마다 한 줄씩 입력하세요'; field.value = (spec.default || []).join('\n');
+            field = node('textarea'); field.placeholder = t('항목마다 한 줄씩 입력하세요'); field.value = (spec.default || []).join('\n');
             read = () => field.value.split('\n').filter(value => value.length > 0);
           }
         } else {
@@ -1075,7 +1093,7 @@
     return () => {
       const entries = [];
       for (const entry of fields) {
-        if (entry.field && !entry.field.reportValidity()) throw new Error('입력 내용을 확인해 주세요.');
+        if (entry.field && !entry.field.reportValidity()) throw new Error(t('입력 내용을 확인해 주세요.'));
         const value = entry.read(); if (value !== undefined) entries.push([entry.key, value]);
       }
       return Object.fromEntries(entries);
@@ -1084,35 +1102,35 @@
   function nextRequest() {
     if (displayedRequest || !requestQueue.size) return;
     const [key, req] = requestQueue.entries().next().value; displayedRequest = key;
-    $('request-title').textContent = req.method.includes('requestUserInput') ? 'Codex 질문' : req.method.includes('requestApproval') ? '작업 승인' : 'Codex 요청';
+    $('request-title').textContent = req.method.includes('requestUserInput') ? t('Codex 질문') : req.method.includes('requestApproval') ? t('작업 승인') : t('Codex 요청');
     $('request-reason').textContent = req.params.reason || req.params.message || req.method;
     $('request-detail').textContent = JSON.stringify(req.params, null, 2); $('request-fields').replaceChildren(); $('request-actions').replaceChildren();
     const complete = async result => { result = await result; await call('rpc.respond', {key, result}); requestQueue.delete(key); displayedRequest = null; close('request-dialog'); nextRequest(); };
     const add = (text, result, cls) => $('request-actions').append(button(text, () => complete(typeof result === 'function' ? result() : result), cls));
     if (req.method === 'item/commandExecution/requestApproval' || req.method === 'item/fileChange/requestApproval') {
-      add('거절', {decision: 'decline'}); add('이번 대화에 허용', {decision: 'acceptForSession'}); add('허용', {decision: 'accept'}, 'primary-button');
+      add(t('거절'), {decision: 'decline'}); add(t('이번 대화에 허용'), {decision: 'acceptForSession'}); add(t('허용'), {decision: 'accept'}, 'primary-button');
     } else if (req.method === 'item/permissions/requestApproval') {
-      add('거절', {permissions: {}, scope: 'turn'}); add('허용', {permissions: req.params.permissions, scope: 'turn'}, 'primary-button');
+      add(t('거절'), {permissions: {}, scope: 'turn'}); add(t('허용'), {permissions: req.params.permissions, scope: 'turn'}, 'primary-button');
     } else if (req.method === 'item/tool/requestUserInput') {
       const answers = [];
       for (const question of req.params.questions || []) {
         const wrap = node('div', null, 'question'), label = node('label', question.question), field = node('input'); field.type = question.isSecret ? 'password' : 'text'; field.setAttribute('aria-label', question.question); label.append(field); wrap.append(label);
-        if (question.options?.length) { const select = node('select'); select.setAttribute('aria-label', question.header || question.question); select.add(new Option('선택 또는 직접 입력', '')); for (const o of question.options) select.add(new Option(o.label + (o.description ? ' — ' + o.description : ''), o.label)); select.addEventListener('change', () => field.value = select.value); wrap.append(select); }
+        if (question.options?.length) { const select = node('select'); select.setAttribute('aria-label', question.header || question.question); select.add(new Option(t('선택 또는 직접 입력'), '')); for (const o of question.options) select.add(new Option(o.label + (o.description ? ' — ' + o.description : ''), o.label)); select.addEventListener('change', () => field.value = select.value); wrap.append(select); }
         answers.push([question.id, field]); $('request-fields').append(wrap);
       }
-      add('답변 보내기', () => ({answers: Object.fromEntries(answers.map(([id, field]) => [id, {answers: [field.value]}]))}), 'primary-button');
+      add(t('답변 보내기'), () => ({answers: Object.fromEntries(answers.map(([id, field]) => [id, {answers: [field.value]}]))}), 'primary-button');
     } else if (req.method === 'mcpServer/elicitation/request') {
-      add('취소', {action: 'decline'});
+      add(t('취소'), {action: 'decline'});
       if (req.params.mode === 'url') {
-        $('request-fields').append(button('연결 페이지 열기', () => call('ui.externalBrowser', {url: req.params.url})));
-        add('완료', {action: 'accept'}, 'primary-button');
+        $('request-fields').append(button(t('연결 페이지 열기'), () => call('ui.externalBrowser', {url: req.params.url})));
+        add(t('완료'), {action: 'accept'}, 'primary-button');
       } else {
         const read = elicitationForm(req.params.requestedSchema || {}, $('request-fields'));
-        add('전송', () => ({action: 'accept', content: read()}), 'primary-button');
+        add(t('전송'), () => ({action: 'accept', content: read()}), 'primary-button');
       }
     } else {
-      const field = node('textarea'); field.setAttribute('aria-label', '프로토콜 응답 JSON'); field.value = '{}'; $('request-fields').append(node('p', '확장 프로토콜 요청입니다. 응답 JSON을 입력할 수 있습니다.', 'muted'), field);
-      $('request-actions').append(button('작업 중지', async () => { await call('chat.stop'); requestQueue.delete(key); displayedRequest = null; close('request-dialog'); nextRequest(); })); add('응답 전송', () => JSON.parse(field.value), 'primary-button');
+      const field = node('textarea'); field.setAttribute('aria-label', t('프로토콜 응답 JSON')); field.value = '{}'; $('request-fields').append(node('p', t('확장 프로토콜 요청입니다. 응답 JSON을 입력할 수 있습니다.'), 'muted'), field);
+      $('request-actions').append(button(t('작업 중지'), async () => { await call('chat.stop'); requestQueue.delete(key); displayedRequest = null; close('request-dialog'); nextRequest(); })); add(t('응답 전송'), () => JSON.parse(field.value), 'primary-button');
     }
     show('request-dialog');
   }
@@ -1122,14 +1140,15 @@
     else if (name === 'error' || name === 'notice') toast(data.message);
     else if (name === 'message.delta') { C.appendDelta(state.messages, data.id, data.delta); drawMessages(); }
     else if (name === 'tool') { activityIcon = /read|list|search/.test(data.name) ? 'inspecting' : 'working'; drawStatusIcons(); $('activity-text').textContent = data.name.replace('mobile_', '') + ' · ' + data.path; logEvent(data.name, data); }
-    else if (name === 'agent.event') { if (!data.method.endsWith('/delta')) logEvent(data.method, data.params); if (data.method === 'turn/diff/updated') logEvent('변경 사항', data.params.diff); }
+    else if (name === 'agent.event') { if (!data.method.endsWith('/delta')) logEvent(data.method, data.params); if (data.method === 'turn/diff/updated') logEvent(t('변경 사항'), data.params.diff); }
     else if (name === 'files.changed' && !$('file-panel').hidden) listFiles().catch(e => toast(e.message));
     else if (name === 'updates.changed') drawUpdates(data);
+    else if (name === 'voice.state') drawDictation(data);
     else if (name === 'voice.changed') recoverVoiceInput();
     else if (name === 'attachments.picked') acceptPickedAttachments(data, data.draftKey || '');
-    else if (name === 'login.completed') { if (data.success) { login = null; close('login-dialog'); toast('ChatGPT 계정을 연결했습니다.'); } else $('login-help').textContent = data.error || '로그인이 취소되었습니다. 다시 연결해 주세요.'; }
+    else if (name === 'login.completed') { if (data.success) { login = null; close('login-dialog'); toast(t('ChatGPT 계정을 연결했습니다.')); } else $('login-help').textContent = data.error || t('로그인이 취소되었습니다. 다시 연결해 주세요.'); }
     else if (name === 'terminal.output') { $('terminal-output').textContent += data.text; if ($('terminal-output').textContent.length > 1000000) $('terminal-output').textContent = $('terminal-output').textContent.slice(-1000000); $('terminal-output').scrollTop = $('terminal-output').scrollHeight; }
-    else if (name === 'terminal.exit') $('terminal-output').textContent += '\n[종료 코드 ' + data.code + ']\n';
+    else if (name === 'terminal.exit') $('terminal-output').textContent += t('\n[종료 코드 ') + data.code + ']\n';
     else if (name === 'server.request') { requestQueue.set(data.key, data); nextRequest(); }
     else if (name === 'server.resolved') { requestQueue.delete(data.key); if (displayedRequest === data.key) { displayedRequest = null; close('request-dialog'); } nextRequest(); }
     else if (name === 'viewport') { document.body.classList.toggle('keyboard-open', !!data.keyboardVisible); viewportChanged(); }
@@ -1137,6 +1156,7 @@
     else if (name === 'back') window.mobileCodexBack();
   };
   window.mobileCodexBack = () => {
+    if (dictationState.phase !== 'idle') { call('voice.cancel').catch(error => toast(error.message)); return true; }
     const id = dialogs.at(-1);
     if (id) { if (id !== 'request-dialog') dismiss(id); return true; }
     if (document.body.classList.contains('sidebar-open')) { sidebar(false); return true; }
@@ -1155,18 +1175,18 @@
   ['show-files', 'files-toggle'].forEach(id => on(id, async () => { $('file-panel').hidden = !$('file-panel').hidden; sidebar(false); if (!$('file-panel').hidden) await listFiles(); }));
   on('file-close', () => $('file-panel').hidden = true); on('file-up', async () => { folder = C.parent(folder); await listFiles(); });
   let searchTimer; on('file-query', () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => listFiles($('file-query').value.trim()).catch(e => toast(e.message)), 300); }, 'input');
-  ['file-new', 'folder-new'].forEach(id => on(id, async () => { const name = await input(id === 'file-new' ? '새 파일' : '새 폴더', '이름을 입력하세요.'); if (name) await mutate(id === 'file-new' ? 'mobile_create' : 'mobile_mkdir', {path: C.join(folder, name), content: ''}); }));
+  ['file-new', 'folder-new'].forEach(id => on(id, async () => { const name = await input(id === 'file-new' ? t('새 파일') : t('새 폴더'), t('이름을 입력하세요.')); if (name) await mutate(id === 'file-new' ? 'mobile_create' : 'mobile_mkdir', {path: C.join(folder, name), content: ''}); }));
   on('show-changes', () => loadChanges()); on('changes-refresh', () => loadChanges()); on('changes-history', () => loadChanges(true)); on('change-restore', restoreChange);
   on('editor-save', async () => { const result = await mutate('mobile_write', {path: openedFile.path, expectedSha256: openedFile.sha256, content: $('editor').value}); openedFile = await call('files.read', {path: result.path || openedFile.path}); });
   on('editor-delete', async () => { await mutate('mobile_delete', {path: openedFile.path}); close('editor-dialog'); });
-  on('editor-rename', async () => { const name = await input('이름 변경', '새 파일 이름', C.basename(openedFile.path)); if (name) { await mutate('mobile_rename', {path: openedFile.path, name}); await openFile(C.join(C.parent(openedFile.path), name)); } });
-  on('editor-move', async () => { const destination = await input('이동', '대상 폴더 경로 (루트는 빈칸)'); if (destination !== null) { await mutate('mobile_move', {path: openedFile.path, destination}); await openFile(C.join(destination, C.basename(openedFile.path))); } });
+  on('editor-rename', async () => { const name = await input(t('이름 변경'), t('새 파일 이름'), C.basename(openedFile.path)); if (name) { await mutate('mobile_rename', {path: openedFile.path, name}); await openFile(C.join(C.parent(openedFile.path), name)); } });
+  on('editor-move', async () => { const destination = await input(t('이동'), t('대상 폴더 경로 (루트는 빈칸)')); if (destination !== null) { await mutate('mobile_move', {path: openedFile.path, destination}); await openFile(C.join(destination, C.basename(openedFile.path))); } });
   on('input-confirm', () => { const r = inputResolve; inputResolve = null; const value = $('input-value').value; close('input-dialog'); if (r) r(value); });
   $('input-dialog').addEventListener('close', () => { if (inputResolve) { const r = inputResolve; inputResolve = null; r(null); } });
   on('input-value', e => { if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) $('input-confirm').click(); }, 'keydown');
   on('composer', async () => {
     const value = $('prompt').value, text = value.trim();
-    if ((!text && !draftContext.attachments.length) || sending) return;
+    if ((!text && !draftContext.attachments.length) || sending || voiceStarting || voiceActive) return;
     const steer = !!state.busy, expectedTurnId = state.turnId || '', expectedThreadId = state.threadId || '', workspaceKey = state.workspace?.key || '';
     const submitted = {value, context:JSON.parse(JSON.stringify(draftContext)), scopes:new Set([draftScope])}; sending = submitted;
     saveDraft(); updateSend(); scrollLatest();
@@ -1206,6 +1226,8 @@
     $('jump-latest').hidden = following || !state.messages.length;
   }, {passive:true});
   on('voice-input', startVoiceInput);
+  on('dictation-done', () => call('voice.stop'));
+  on('dictation-cancel', () => call('voice.cancel'));
   on('jump-latest', scrollLatest); on('composer-options', () => { optionsSummary(); show('options-dialog'); });
   on('image-save', () => openedImage && call('images.export', {id:openedImage.id, name:openedImage.name}));
   on('image-zoom', () => { const zoomed = $('image-stage').classList.toggle('zoomed'); $('image-zoom').setAttribute('aria-pressed', String(zoomed)); });
@@ -1231,7 +1253,7 @@
     if (selected === 'account') loadUsage();
     if (selected === 'updates') loadUpdates();
   }));
-  on('device-code', async () => { if (login) { await call('ui.copyCode', {code: login.userCode}); toast('코드를 복사했습니다.'); } });
+  on('device-code', async () => { if (login) { await call('ui.copyCode', {code: login.userCode}); toast(t('코드를 복사했습니다.')); } });
   on('open-login', () => login && call('ui.loginBrowser', {url: login.verificationUrl}));
   $('login-dialog').addEventListener('close', () => { if (login?.loginId) call('auth.cancel', {loginId: login.loginId}).catch(() => {}); login = null; });
   on('restart', async () => { await call('runtime.stop'); await call('runtime.start'); }); on('engine-stop', () => call('runtime.stop')); on('logout', () => call('auth.logout'));
@@ -1239,6 +1261,14 @@
   ['check','download','cancel','clear','permission','install'].forEach(action => on('update-' + action, () => updateAction(action)));
   $('update-repository').addEventListener('input', () => { updateSourceDirty = true; drawUpdates(updateState); });
   $('update-prereleases').addEventListener('change', () => { updateSourceDirty = true; drawUpdates(updateState); });
+  $('language').value = L.choice();
+  on('language', async () => {
+    const choice = $('language').value;
+    try { await call('ui.locale', {language:choice}); } catch (error) { $('language').value = L.choice(); throw error; }
+    saveDraft(); saveOptions(); L.set(choice); modelKey = ''; render(await call('state')); renderDraftContext(); drawDictation(dictationState); await loadUpdates();
+    if (!$('file-panel').hidden) await listFiles();
+    if ($('tools-dialog').open) await loadTools(false);
+  }, 'change');
   on('chat-icons-toggle', setChatIcons, 'change');
   $('chat-icons-toggle').checked = chatIconsEnabled; drawStatusIcons();
   on('instructions-reload', loadInstructions); on('instructions-save', saveInstructions);
@@ -1247,12 +1277,12 @@
   on('devtools-check', checkDevtools);
   on('floating-chat', () => call('ui.floatingChat')); on('phone-settings', () => call('ui.phoneSettings')); on('phone-enable', enablePhone);
   on('phone-disable', stopPhone); on('phone-stop-banner', stopPhone);
-  ['edit-config', 'tools-config'].forEach(id => on(id, config)); on('config-save', async () => { await call('config.save', {content: $('config-editor').value}); configOriginal = $('config-editor').value; await call('runtime.start'); close('config-dialog'); toast('설정을 적용했습니다.'); });
+  ['edit-config', 'tools-config'].forEach(id => on(id, config)); on('config-save', async () => { await call('config.save', {content: $('config-editor').value}); configOriginal = $('config-editor').value; await call('runtime.start'); close('config-dialog'); toast(t('설정을 적용했습니다.')); });
   on('show-recovery', recovery); on('show-terminal', () => { show('terminal-dialog'); sidebar(false); }); on('terminal-stop', () => call('terminal.stop'));
   on('terminal-form', async e => { e.preventDefault(); const command = $('terminal-command').value; if (command.trim()) { await call('terminal.run', {command}); $('terminal-output').textContent += '$ ' + command + '\n'; $('terminal-command').value = ''; } }, 'submit');
   on('show-tools', () => loadTools(false)); on('refresh-tools', () => loadTools(true)); on('show-activity', () => show('activity-dialog'));
-  on('marketplace-add', async () => { const source = await input('마켓플레이스 추가', 'Git URL 또는 기기의 로컬 경로'); if (source) { const result = await rpc('marketplace/add', {source}); toast(result.marketplaceName + ' 추가 완료'); await loadTools(); } });
-  on('skill-import', async () => { const r = await call('skills.import'); if (!r.cancelled) { toast('스킬 폴더를 가져왔습니다.'); await loadTools(); } });
+  on('marketplace-add', async () => { const source = await input(t('마켓플레이스 추가'), t('Git URL 또는 기기의 로컬 경로')); if (source) { const result = await rpc('marketplace/add', {source}); toast(result.marketplaceName + t(' 추가 완료')); await loadTools(); } });
+  on('skill-import', async () => { const r = await call('skills.import'); if (!r.cancelled) { toast(t('스킬 폴더를 가져왔습니다.')); await loadTools(); } });
   $('request-dialog').addEventListener('cancel', e => e.preventDefault());
   $('theme').value = localStorage.getItem('theme') || 'system'; setTheme(); matchMedia('(prefers-color-scheme: dark)').addEventListener('change', setTheme);
   window.addEventListener('resize', viewportChanged);

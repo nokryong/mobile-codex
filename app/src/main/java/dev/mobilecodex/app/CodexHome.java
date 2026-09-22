@@ -1,5 +1,6 @@
 package dev.mobilecodex.app;
 
+import static dev.mobilecodex.app.core.Texts.t;
 import android.content.Context;
 import java.io.*;
 import java.nio.file.Files;
@@ -14,8 +15,8 @@ public final class CodexHome {
             this.copied = copied; this.conflicts = conflicts; this.skippedEntries = skippedEntries;
         }
         public String notice() {
-            if (conflicts > 0) return "기존 Codex 데이터 " + conflicts + "개는 새 파일과 충돌해 이전 위치에 보존했습니다.";
-            if (copied > 0) return "기존 Codex 설정과 기록 " + copied + "개를 새 홈으로 복사했습니다.";
+            if (conflicts > 0) return t("기존 Codex 데이터 ") + conflicts + t("개는 새 파일과 충돌해 이전 위치에 보존했습니다.");
+            if (copied > 0) return t("기존 Codex 설정과 기록 ") + copied + t("개를 새 홈으로 복사했습니다.");
             return "";
         }
     }
@@ -29,14 +30,14 @@ public final class CodexHome {
     public static CodexHome open(Context context) throws IOException {
         File files = context.getFilesDir();
         File root = new File(files, ".codex"), legacy = new File(files, "codex");
-        if (!root.isDirectory() && !root.mkdirs()) throw new IOException("Codex 홈 폴더를 만들 수 없습니다.");
+        if (!root.isDirectory() && !root.mkdirs()) throw new IOException(t("Codex 홈 폴더를 만들 수 없습니다."));
         int[] counts = new int[3];
         android.content.SharedPreferences migration = context.getSharedPreferences("codex-home-migration", 0);
         if (!migration.getBoolean("legacy-codex-copied", false)) {
             if (legacy.isDirectory()) copyMissing(legacy, root, counts);
             // Do not resurrect credentials or history from the legacy root after a user removes them from .codex.
             if (!migration.edit().putBoolean("legacy-codex-copied", true).commit()) {
-                throw new IOException("기존 Codex 데이터 이전 상태를 저장하지 못했습니다.");
+                throw new IOException(t("기존 Codex 데이터 이전 상태를 저장하지 못했습니다."));
             }
         }
         return new CodexHome(root.getCanonicalFile(), legacy.getCanonicalFile(), new Migration(counts[0], counts[1], counts[2]));
@@ -46,9 +47,9 @@ public final class CodexHome {
     public File legacy() { return legacy; }
     public Migration migration() { return migration; }
     public File child(String name) throws IOException {
-        if (name == null || name.isBlank() || name.indexOf('/') >= 0 || name.indexOf('\\') >= 0) throw new IOException("Codex 홈 파일 이름이 올바르지 않습니다.");
+        if (name == null || name.isBlank() || name.indexOf('/') >= 0 || name.indexOf('\\') >= 0) throw new IOException(t("Codex 홈 파일 이름이 올바르지 않습니다."));
         File file = new File(root, name).getCanonicalFile();
-        if (!file.getParentFile().equals(root)) throw new IOException("Codex 홈 밖의 파일은 사용할 수 없습니다.");
+        if (!file.getParentFile().equals(root)) throw new IOException(t("Codex 홈 밖의 파일은 사용할 수 없습니다."));
         return file;
     }
     private static void copyMissing(File source, File target, int[] counts) throws IOException {
@@ -58,8 +59,8 @@ public final class CodexHome {
         }
         if (source.isDirectory()) {
             if (target.exists() && !target.isDirectory()) { counts[1]++; return; }
-            if (!target.exists() && !target.mkdirs()) throw new IOException("기존 Codex 폴더를 옮길 수 없습니다.");
-            File[] entries = source.listFiles(); if (entries == null) throw new IOException("기존 Codex 폴더를 읽을 수 없습니다.");
+            if (!target.exists() && !target.mkdirs()) throw new IOException(t("기존 Codex 폴더를 옮길 수 없습니다."));
+            File[] entries = source.listFiles(); if (entries == null) throw new IOException(t("기존 Codex 폴더를 읽을 수 없습니다."));
             for (File entry : entries) copyMissing(entry, new File(target, entry.getName()), counts);
             return;
         }
@@ -68,7 +69,7 @@ public final class CodexHome {
             return;
         }
         if (target.exists()) { counts[1]++; return; }
-        File parent = target.getParentFile(); if (!parent.isDirectory() && !parent.mkdirs()) throw new IOException("Codex 홈 폴더를 만들 수 없습니다.");
+        File parent = target.getParentFile(); if (!parent.isDirectory() && !parent.mkdirs()) throw new IOException(t("Codex 홈 폴더를 만들 수 없습니다."));
         File pending = new File(parent, "." + target.getName() + ".migration-" + UUID.randomUUID());
         boolean copied = false;
         try {

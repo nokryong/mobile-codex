@@ -539,3 +539,13 @@ html[data-theme=dark] .message.user {
 @media(max-width:420px){.composer-actions{gap:2px}.options-button{max-width:100px}.options-button #model-summary{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.composer-bottom{gap:2px}}
 
 .update-actions{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}.update-prereleases{display:flex;gap:8px;align-items:center;min-height:44px}.update-notes{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;max-height:220px;overflow:auto}#update-repository{width:100%;min-height:44px}#update-progress{width:100%;height:12px}#update-status{overflow-wrap:anywhere}
+
+/* Inline dictation stays inside the safe, keyboard-aware composer. */
+.dictation {padding:4px 4px 12px;border-bottom:1px solid var(--border);margin-bottom:10px}
+.dictation-top,.dictation-actions {display:flex;align-items:center;justify-content:space-between;gap:12px}
+.dictation-top {font-weight:600;font-size:14px}.dictation-top>span:last-child {font-variant-numeric:tabular-nums}
+.dictation-level {display:block;width:100%;height:6px;margin:14px 0;accent-color:#527663}
+.dictation-preview {max-height:100px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;margin:10px 0}
+.dictation small {display:block;color:var(--muted);font-size:12px;line-height:1.5}
+.dictation-actions {justify-content:flex-end;margin-top:12px}.dictation-actions button {min-height:44px;min-width:72px}
+#language {max-width:48%}

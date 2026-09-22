@@ -24,6 +24,8 @@ class CorrespondingSourcesTests(unittest.TestCase):
             (root / 'tools/devtools-lock.json').write_text(json.dumps(lock))
             for name in ['prepare_devtools.py', 'prepare_devtools_sources.py', 'build_native.py', 'requirements-devtools.txt']:
                 (root / 'tools' / name).write_text('fixture')
+            for name in ['LICENSE', 'THIRD_PARTY_NOTICES.md']:
+                (root / name).write_text('license fixture')
             def fetch(item):
                 path = root / item['sha256']
                 path.write_text(item['url'])
@@ -31,6 +33,8 @@ class CorrespondingSourcesTests(unittest.TestCase):
             with patch.object(sources, 'ROOT', root), patch.object(sources, 'CACHE', root / 'cache'), patch.object(sources, 'fetch', side_effect=fetch):
                 output = sources.prepare()
             with zipfile.ZipFile(output) as archive:
+                self.assertEqual(archive.read('LICENSE').decode(), 'license fixture')
+                self.assertIn('THIRD_PARTY_NOTICES.md', archive.namelist())
                 records = json.loads(archive.read('SOURCES.json'))
                 self.assertEqual({r['name'] for r in records}, {
                     'termux-build-recipes', 'readline-build-recipes', 'readline-0', 'readline-1',

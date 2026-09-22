@@ -1,5 +1,6 @@
 package dev.mobilecodex.app;
 
+import static dev.mobilecodex.app.core.Texts.t;
 import android.content.Context;
 import android.system.Os;
 import dev.mobilecodex.app.core.RuntimePayload;
@@ -30,9 +31,9 @@ final class DevTools {
             while ((n = in.read(block)) != -1) contents.write(block, 0, n);
             byte[] bytes = contents.toByteArray();
             manifest = new JSONObject(new String(bytes, StandardCharsets.UTF_8));
-            if (manifest.getInt("schema") != 1) throw new IOException("지원하지 않는 개발 도구 형식입니다.");
+            if (manifest.getInt("schema") != 1) throw new IOException(t("지원하지 않는 개발 도구 형식입니다."));
             prefix = new File(context.getFilesDir(), "toolchains/" + RuntimePayload.sha256(bytes).substring(0, 24) + "/usr");
-        } catch (Exception e) { loadError = "개발 도구가 포함되지 않았습니다. 전체 APK를 설치해 주세요."; }
+        } catch (Exception e) { loadError = t("개발 도구가 포함되지 않았습니다. 전체 APK를 설치해 주세요."); }
     }
     synchronized JSONObject status() {
         JSONArray tools = new JSONArray();
@@ -57,7 +58,7 @@ final class DevTools {
             // A failed staging directory is never reused; user-installed packages live elsewhere.
             Path stage = home.resolve("staging-" + UUID.randomUUID());
             JSONObject payload = manifest.getJSONObject("payload");
-            if (!payload.getString("file").equals("payload.zip")) throw new IOException("잘못된 개발 도구 파일입니다.");
+            if (!payload.getString("file").equals("payload.zip")) throw new IOException(t("잘못된 개발 도구 파일입니다."));
             try (InputStream in = context.getAssets().open("devtools/payload.zip")) {
                 RuntimePayload.extract(in, stage, payload.getString("sha256"));
                 if (Files.exists(prefix.toPath())) removeStaging(prefix.toPath());
@@ -66,7 +67,7 @@ final class DevTools {
                 Files.write(complete, new byte[]{1}, StandardOpenOption.CREATE_NEW);
             } catch (Exception e) {
                 removeStaging(stage);
-                throw new IOException("개발 도구 준비에 실패했습니다. 저장 공간을 확인한 뒤 다시 시도해 주세요: " + e.getMessage(), e);
+                throw new IOException(t("개발 도구 준비에 실패했습니다. 저장 공간을 확인한 뒤 다시 시도해 주세요: ") + e.getMessage(), e);
             }
         } else {
             // APK updates can change nativeLibraryDir even when runtime data has not changed.
@@ -78,9 +79,9 @@ final class DevTools {
         return prefix;
     }
     private File requireNative(String name) throws IOException {
-        if (!name.matches("lib[A-Za-z0-9_.+-]+\\.so")) throw new IOException("잘못된 실행 파일 이름입니다.");
+        if (!name.matches("lib[A-Za-z0-9_.+-]+\\.so")) throw new IOException(t("잘못된 실행 파일 이름입니다."));
         File file = new File(nativeDir, name);
-        if (!file.isFile() || !file.canExecute()) throw new IOException("개발 도구 실행 파일을 찾지 못했습니다: " + name);
+        if (!file.isFile() || !file.canExecute()) throw new IOException(t("개발 도구 실행 파일을 찾지 못했습니다: ") + name);
         return file;
     }
     private void installLinks() throws Exception {
@@ -94,7 +95,7 @@ final class DevTools {
             else target = RuntimePayload.resolve(prefix.toPath(), link.getString("path")).toString();
             // Never follow a user-created directory symlink while repairing installed links.
             for (Path p = destination.getParent(); !p.equals(prefix.toPath()); p = p.getParent())
-                if (Files.isSymbolicLink(p)) throw new IOException("개발 도구 경로가 변경되었습니다: " + name);
+                if (Files.isSymbolicLink(p)) throw new IOException(t("개발 도구 경로가 변경되었습니다: ") + name);
             Files.createDirectories(destination.getParent());
             try { if (Os.readlink(destination.toString()).equals(target)) continue; } catch (android.system.ErrnoException ignored) {}
             Files.deleteIfExists(destination);
@@ -168,7 +169,7 @@ final class DevTools {
             if (!ended) process.destroyForcibly();
             reader.join(1000);
             String output; synchronized (bytes) { output = new String(bytes.toByteArray(), StandardCharsets.UTF_8); }
-            return obj("name", name, "ok", ended && process.exitValue() == 0, "output", ended ? output.strip() : "실행 확인 시간이 초과되었습니다.\n" + output);
+            return obj("name", name, "ok", ended && process.exitValue() == 0, "output", ended ? output.strip() : t("실행 확인 시간이 초과되었습니다.\n") + output);
         } catch (Exception e) {
             if (e instanceof InterruptedException) Thread.currentThread().interrupt();
             return obj("name", name, "ok", false, "output", e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());

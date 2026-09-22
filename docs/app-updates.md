@@ -65,3 +65,9 @@ Secret 누락·형식 오류·서명 오류·인증서 불일치는 빌드 실�
 실기기 미확인: 삼성 설치 허용 화면, 설치 취소·재시도, 같은 키로 서명한 두 버전 사이의 실제 업데이트와 로그인·대화 유지, 실제 서명키 회전, 다운로드 중 앱 종료·저장 공간 부족. 모의 패키지 검사 성공은 이 실기기 검증을 대체하지 않습니다.
 
 References: [GitHub release assets](https://docs.github.com/en/rest/releases/assets), [Android PackageManager](https://developer.android.com/reference/android/content/pm/PackageManager), [Android FileProvider](https://developer.android.com/reference/androidx/core/content/FileProvider).
+
+## Automatic releases (0.1.12+)
+
+`main` push/manual builds publish a new GitHub Release after UI/Python/Android checks, original-key signing, APK metadata verification, and source collection succeed. The workflow needs `contents: write`. Pull requests do not publish. `tools/publish_release.py` first creates a draft, uploads the APK, SHA-256, update JSON, GPL license, notices, and corresponding developer-tool sources, verifies asset names/sizes, then publishes. Alpha/beta/RC versions are marked as prereleases.
+
+Published assets are immutable in this workflow: an existing version is skipped, not overwritten. Increment **both** `versionName` and `versionCode` in `app/build.gradle` (and matching npm metadata) before the next release. A rerun can finish an incomplete draft only for the same commit. Failed signing/build/upload steps never expose a partially uploaded public release. Public releases support the in-app updater; private-repository releases still require GitHub authentication to download and are not a supported in-app update source.

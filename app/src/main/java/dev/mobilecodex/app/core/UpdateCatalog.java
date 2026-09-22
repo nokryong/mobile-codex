@@ -1,5 +1,6 @@
 package dev.mobilecodex.app.core;
 
+import static dev.mobilecodex.app.core.Texts.t;
 import org.json.*;
 import java.io.IOException;
 import java.net.URI;
@@ -13,12 +14,12 @@ public final class UpdateCatalog {
     private static final Pattern APK = Pattern.compile("^mobile-codex-(.+)-arm64\\.apk$");
     public static String repository(String value) throws IOException {
         String repo = value.trim();
-        if (!repo.matches("[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9_.-]{1,100}") || repo.endsWith("/.") || repo.endsWith("/..")) throw new IOException("GitHub 저장소를 소유자/저장소 형식으로 입력해 주세요.");
+        if (!repo.matches("[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9_.-]{1,100}") || repo.endsWith("/.") || repo.endsWith("/..")) throw new IOException(t("GitHub 저장소를 소유자/저장소 형식으로 입력해 주세요."));
         return repo;
     }
     private static long[] version(String value) throws IOException {
         Matcher m = VERSION.matcher(value);
-        if (!m.matches()) throw new IOException("지원하지 않는 버전 형식입니다: " + value);
+        if (!m.matches()) throw new IOException(t("지원하지 않는 버전 형식입니다: ") + value);
         int rank = m.group(4) == null ? 3 : List.of("alpha", "beta", "rc").indexOf(m.group(4));
         return new long[]{Long.parseLong(m.group(1)), Long.parseLong(m.group(2)), Long.parseLong(m.group(3)), rank, m.group(5) == null ? 0 : Long.parseLong(m.group(5))};
     }
@@ -56,10 +57,10 @@ public final class UpdateCatalog {
         return installed.size()==1 && candidate.size()==1 && candidateHistory.containsAll(installed);
     }
     public static void identity(String expectedPackage, long installedVersion, String actualPackage, long actualVersion, String expectedName, String actualName, int minSdk, int deviceSdk, boolean signersMatch) throws IOException {
-        if(!expectedPackage.equals(actualPackage))throw new IOException("다른 앱의 APK입니다. 기존 앱은 변경하지 않았습니다.");
-        if(actualVersion<=installedVersion)throw new IOException("현재 앱보다 새 버전의 APK가 아닙니다.");
-        if(!expectedName.equals(actualName))throw new IOException("릴리스에 표시된 버전과 APK의 버전이 다릅니다.");
-        if(minSdk>deviceSdk)throw new IOException("이 업데이트는 Android API "+minSdk+" 이상이 필요합니다.");
-        if(!signersMatch)throw new IOException("설치된 앱과 서명키가 다릅니다. 데이터를 유지하려면 기존 서명키로 빌드한 APK가 필요합니다. 기존 앱을 삭제하지 마세요.");
+        if(!expectedPackage.equals(actualPackage))throw new IOException(t("다른 앱의 APK입니다. 기존 앱은 변경하지 않았습니다."));
+        if(actualVersion<=installedVersion)throw new IOException(t("현재 앱보다 새 버전의 APK가 아닙니다."));
+        if(!expectedName.equals(actualName))throw new IOException(t("릴리스에 표시된 버전과 APK의 버전이 다릅니다."));
+        if(minSdk>deviceSdk)throw new IOException(t("이 업데이트는 Android API ")+minSdk+t(" 이상이 필요합니다."));
+        if(!signersMatch)throw new IOException(t("설치된 앱과 서명키가 다릅니다. 데이터를 유지하려면 기존 서명키로 빌드한 APK가 필요합니다. 기존 앱을 삭제하지 마세요."));
     }
 }

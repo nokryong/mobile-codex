@@ -1,5 +1,6 @@
 package dev.mobilecodex.app;
 
+import static dev.mobilecodex.app.core.Texts.t;
 import android.content.Context;
 import android.database.Cursor;
 import android.net.Uri;
@@ -25,20 +26,20 @@ final class AttachmentStore {
         directory.mkdirs();
     }
     JSONObject importUri(Uri uri) throws Exception {
-        if (!"content".equals(uri.getScheme())) throw new IOException("문서 제공자의 파일을 선택해 주세요.");
+        if (!"content".equals(uri.getScheme())) throw new IOException(t("문서 제공자의 파일을 선택해 주세요."));
         String name = "attachment", mime = context.getContentResolver().getType(uri);
         try (Cursor c = context.getContentResolver().query(uri, new String[]{OpenableColumns.DISPLAY_NAME}, null, null, null)) {
             if (c != null && c.moveToFirst() && !c.isNull(0)) name = c.getString(0);
         }
         try (InputStream in = context.getContentResolver().openInputStream(uri)) {
-            if (in == null) throw new IOException(name + ": 파일을 열 수 없습니다.");
+            if (in == null) throw new IOException(name + t(": 파일을 열 수 없습니다."));
             return store(in, name, mime);
         }
     }
     JSONObject store(InputStream in, String name, String mime) throws Exception {
         String id = UUID.randomUUID().toString();
         File folder = new File(directory, id);
-        if (!folder.mkdirs()) throw new IOException("첨부 파일 저장 공간을 만들 수 없습니다.");
+        if (!folder.mkdirs()) throw new IOException(t("첨부 파일 저장 공간을 만들 수 없습니다."));
         String filename = safeName(name);
         File original = new File(folder, filename), pending = new File(folder, "content.tmp");
         try {
@@ -79,12 +80,12 @@ final class AttachmentStore {
     }
     JSONObject get(String id) throws Exception {
         if (id == null || !id.matches("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"))
-            throw new IOException("잘못된 첨부 파일 ID입니다.");
+            throw new IOException(t("잘못된 첨부 파일 ID입니다."));
         File folder = new File(directory, id);
         JSONObject metadata = new JSONObject(dev.mobilecodex.app.core.Utf8Files.read(new File(folder, "metadata.json").toPath()));
         File original = new File(folder, metadata.getString("filename")).getCanonicalFile();
         if (!original.getParentFile().equals(folder.getCanonicalFile()) || !original.isFile())
-            throw new FileNotFoundException("첨부 파일을 찾을 수 없습니다.");
+            throw new FileNotFoundException(t("첨부 파일을 찾을 수 없습니다."));
         metadata.put("path", original.getAbsolutePath());
         return metadata;
     }

@@ -1,109 +1,114 @@
-# mobile-codex
+# Mobile Codex
 
-**Android 휴대폰과 태블릿에서, 대화부터 파일 작업과 코드 실행까지.**
+**English** · [한국어](README.ko.md)
 
-Codex 데스크톱의 작업 방식을 모바일로 옮기는 개인용 클라이언트입니다. Codex 실행 엔진과 Python·Node.js·Git을 APK에 포함해, Termux 설치나 별도 PC 서버 없이 기기에서 바로 작업할 수 있습니다.
+**Use Codex on your Android phone or tablet, with files and tools running on the device.**
 
-**0.1.11 alpha** · **ARM64 / Android 10 이상** · 제작 [nokryong](https://github.com/nokryong)
+Mobile Codex is an independent Android client built around the Codex app-server. It bundles an Android port of Codex, Python, Node.js, and Git, so you do not need to install Termux or keep a separate PC server running.
 
-[APK 다운로드](https://github.com/nokryong/mobile-codex/releases) · [개발 빌드](https://github.com/nokryong/mobile-codex/actions/workflows/android.yml) · [문제 제보](https://github.com/nokryong/mobile-codex/issues)
+**0.1.12 alpha** · **ARM64 / Android 10+** · Created by [nokryong](https://github.com/nokryong)
 
-> OpenAI 공식 앱이 아닌 개인 프로젝트입니다. 모델 추론에는 인터넷과 Codex를 사용할 수 있는 계정이 필요합니다. Codex 프로세스와 파일·명령 도구는 Android 기기에서 실행합니다.
+[Download APK](https://github.com/nokryong/mobile-codex/releases) · [Builds](https://github.com/nokryong/mobile-codex/actions/workflows/android.yml) · [Report an issue](https://github.com/nokryong/mobile-codex/issues)
 
-## 주요 기능
+> This is not an official OpenAI app. Model inference requires an internet connection and an account with Codex access. The Codex process and file/command tools run on your Android device.
 
-| 기능 | 할 수 있는 일 |
+## Features
+
+| Feature | What it does |
 | --- | --- |
-| 프로젝트와 대화 | 프로젝트별 대화 목록, 폴더 없는 일반 대화, 저장된 기록 열기, 응답 스트리밍·중지·재개, 작업 중 추가 지시 |
-| 파일 작업 | 폴더 탐색·검색, 파일 읽기·생성·수정·이동·이름 변경·삭제, 변경 전 확인과 복구 사본 |
-| 첨부와 이미지 | 여러 파일 첨부, 이미지 미리보기, 여러 장의 생성 결과 갤러리, 확대·스와이프·원본 저장 |
-| 기기 내 개발 도구 | Python·pip, Node.js·npm/npx, Git, 명령 입력과 출력 스트리밍 |
-| 변경 사항 검토 | Git 상태 확인, HEAD 기준 변경 비교, 작업 파일 복원과 복구 사본 |
-| 플러그인·스킬·MCP | 플러그인 설치·활성화와 계정 연결, 스킬 폴더 가져오기, MCP 서버 설정·상태·도구 확인 |
-| 휴대폰 제어 | 접근성을 통한 다른 앱 열기, 화면 읽기, 탭·텍스트 입력·스크롤·뒤로·홈 이동 |
-| 플로팅 대화와 음성 | 다른 앱 위에서 대화·작업 중지·추가 지시, 음성을 입력창 초안으로 받아쓰기 |
-| 맞춤 설정 | 모델·추론 강도·작업 권한, 맞춤 지침, Codex 설정 편집, 테마와 대화 아이콘 |
-| 앱 업데이트 | 공개 GitHub 릴리스 확인, APK 다운로드·무결성·서명 검증, Android 설치 화면 연결 |
+| Projects and chats | Separate chat lists per project, general chats without a folder, saved history, streaming, interruption, and additional instructions during a task |
+| Files | Browse, search, read, create, edit, move, rename, and delete files; confirm changes and keep recovery copies |
+| Attachments and images | Attach multiple files, preview images, browse generated image galleries, zoom, swipe, and save originals |
+| Developer tools | Bundled Python/pip, Node.js/npm/npx, and Git; enter commands and stream output |
+| Change review | Inspect Git status and differences against HEAD, restore working files, and use recovery copies |
+| Plugins, skills, and MCP | Install and enable plugins, connect accounts, import skill folders, and configure MCP servers |
+| Phone controls | Optionally use Android accessibility to open apps, read screens, tap, type, scroll, and navigate |
+| Floating chat and dictation | Chat over other apps; in the main composer, dictate with live status, partial text, and Done/Cancel controls, then review the draft |
+| Preferences | System/English/Korean interface, model and reasoning effort, task permissions, custom instructions, themes, and optional chat icons |
+| Updates | Check public GitHub releases, verify APK integrity and signing compatibility, and open Android’s installation prompt |
 
-휴대폰에서는 서랍과 시트로, 태블릿에서는 여러 패널로 구성합니다. UI가 아직 전용 화면을 제공하지 않는 기능도 Codex 도구와 설정을 통해 사용할 수 있는 구조이며, 실제 지원 범위는 실행 엔진·계정·Android 권한·설치된 명령에 따라 달라집니다.
+The interface uses drawers and sheets on phones and multiple panels on larger screens. Features depend on the runtime, account, Android permissions, and installed commands. A feature without a dedicated screen may still be accessible through Codex tools or configuration.
 
-## 설치
+## Install
 
-**준비물:** ARM64 Android 10 이상 기기, 최신 Android System WebView, 인터넷 연결, Codex를 사용할 수 있는 계정.
+You need an **ARM64 device running Android 10 or later**, an up-to-date Android System WebView, internet access, and an account that can use Codex.
 
-### APK 받기
+### Download the APK
 
-배포된 버전은 [Releases](https://github.com/nokryong/mobile-codex/releases)에서 `mobile-codex-<버전>-arm64.apk`를 받습니다. 최신 개발 버전은 [Actions → Android APK](https://github.com/nokryong/mobile-codex/actions/workflows/android.yml)에서 **성공한 실행**을 열고 아래의 **Artifacts**를 확인하세요. 릴리스와 개발 빌드의 버전은 다를 수 있습니다.
+Open [Releases](https://github.com/nokryong/mobile-codex/releases) and download **`mobile-codex-0.1.12-alpha-arm64.apk`** from the release assets. Open the APK and follow Android’s installation prompts. If requested, allow installation from the app you used to download/open it.
 
-| Actions 산출물 | 용도 |
+New app versions are published automatically after the `main` workflow passes its tests, builds, and original-key signature verification. Alpha versions are marked as prereleases. A published version is never silently replaced; maintainers must increment both `versionName` and `versionCode` for the next release.
+
+You can also open a successful [Actions run](https://github.com/nokryong/mobile-codex/actions/workflows/android.yml) and scroll to **Artifacts**:
+
+| Artifact | Contents |
 | --- | --- |
-| **`mobile-codex-update-assets`** | **설치할 때 받을 파일.** ZIP을 풀면 `mobile-codex-0.1.11-alpha-arm64.apk`와 검증 파일이 나옵니다. |
-| `mobile-codex-arm64-debug` | APK·런타임 정보·개발 도구의 대응 소스를 함께 담은 큰 묶음입니다. |
-| `check-reports` | 테스트·Lint 결과입니다. 설치 파일은 없습니다. |
+| **`mobile-codex-update-assets`** | **The small installation bundle.** Extract the ZIP to get the `.apk`, checksum, and update manifest. |
+| `mobile-codex-arm64-debug` | A larger bundle with the APK, runtime metadata, and corresponding developer-tool sources. |
+| `check-reports` | Test and lint reports; no APK. |
 
-Actions 산출물 다운로드에는 GitHub 로그인이 필요하며, 보관 기간은 14일입니다. 빌드에 실패했거나 산출물이 만료된 실행에서는 APK를 받을 수 없습니다.
+Actions artifact downloads require GitHub sign-in and expire after 14 days. Public release assets remain available without that artifact sign-in requirement. An unsuccessful build does not publish a new release.
 
-다운로드한 APK를 열고 Android 설치 화면을 따릅니다. 요청이 나타나면 다운로드에 사용한 앱의 **알 수 없는 앱 설치** 권한을 허용합니다.
+### First launch
 
-### 처음 시작하기
+1. Choose **Connect your ChatGPT account**. Copy the device code and complete sign-in in your browser.
+2. Start a **general chat**, or use **Add project** to choose a folder. Expand a project to see its chats.
+3. For shell access to a local project, enable **Settings → Tools → Allow device file access**.
+4. Choose a model, reasoning effort, and permissions, then send a request. Use **`+`** for attachments, **`@`** for files/apps, and **`$`** for skills.
+5. Choose **Settings → General → Language** to follow the device language or select English/Korean. Chats and file contents are not translated or reset.
 
-1. **ChatGPT 계정 연결**을 누르고 표시된 코드를 브라우저에서 입력해 로그인합니다.
-2. 사이드바에서 **일반 대화**를 시작하거나 **프로젝트 추가**로 작업할 폴더를 등록합니다. 프로젝트 옆 화살표를 누르면 해당 프로젝트의 대화 목록이 열립니다.
-3. 로컬 프로젝트에서 셸 명령을 실행하려면 **설정 → 도구 → 기기 파일 접근 허용**을 설정합니다.
-4. 입력창에서 모델·추론 강도·작업 권한을 선택하고 요청을 보냅니다. **`+`**는 파일 첨부, **`@`**는 파일·앱 선택, **`$`**는 스킬 선택입니다.
+Saved chats can be opened without signing in or starting the runtime. Removing a project from the sidebar leaves its folder and chat history intact. Reconnect a folder if Android revokes access.
 
-저장된 대화는 로그인이나 엔진 실행 없이 열 수 있습니다. 프로젝트를 목록에서 제거해도 실제 폴더와 대화 기록은 남으며, 폴더 권한이 끊기면 **폴더 다시 연결**로 재연결할 수 있습니다.
+### Update an existing installation
 
-### 기존 앱 업데이트
+Use **Settings → Updates** to check public releases. The app verifies the APK checksum, package, version, and certificate before opening Android’s installer. Installation requires your confirmation.
 
-**설정 → 업데이트**에서 공개 릴리스를 확인할 수 있습니다. 다운로드한 APK의 체크섬·패키지·버전·서명을 검증한 뒤 Android 설치 화면으로 연결하며, 설치는 사용자가 승인합니다. Actions 빌드가 성공해도 Releases에 자동 게시되지는 않습니다.
+`main` builds use the registered original signing key and verify its certificate fingerprint. Missing or incorrect signing configuration stops publication. Older CI builds created before this configuration may have incompatible temporary debug signatures. Uninstalling the app deletes its internal chats, sign-in data, and recovery copies, so do not uninstall just to troubleshoot an update without preserving needed data.
 
-기존 앱을 유지하며 업데이트하려면 호환되는 패키지명과 서명키가 필요합니다. **main의 Actions APK는 등록된 기존 키로 서명하고 인증서 지문을 검증합니다.** 서명 Secret이 없거나 인증서가 다르면 APK를 게시하지 않습니다. 이 설정 이전의 Actions APK는 임시 debug 키로 서명되어 호환되지 않을 수 있습니다. 앱을 삭제하면 내부 대화·로그인·복구 사본도 삭제됩니다.
+Since 0.1.7 the application ID is `dev.mobilecodex.app`. Older builds with a different ID install as a separate app. See [updates and releases](docs/app-updates.md).
 
-0.1.7부터 앱 ID는 `dev.mobilecodex.app`입니다. 다른 앱 ID를 사용한 이전 버전과는 별도 앱으로 설치됩니다. 자세한 내용은 [업데이트와 배포 안내](docs/app-updates.md)를 참고하세요.
+## Using the app
 
-## 기능 사용 안내
+### Plugins, skills, and MCP
 
-### 플러그인·스킬·MCP
+Open **Plugins · Skills · MCP** in the sidebar.
 
-사이드바의 **플러그인 · 스킬 · MCP**에서 관리합니다.
+- **Plugins:** Browse marketplaces and details, install/enable plugins, and connect additional accounts when prompted.
+- **Skills:** Import a folder with `SKILL.md` directly inside it. Scripts, references, and assets are copied too. Select a skill with `$` in chat.
+- **MCP:** Inspect server status and tools, connect with OAuth where supported, or edit `config.toml`. Commands for stdio servers must run on Android.
 
-- **플러그인:** 마켓플레이스와 상세 정보를 확인해 설치·활성화합니다. 추가 계정 연결이 필요하면 연결 버튼이 표시됩니다.
-- **스킬:** `SKILL.md`가 바로 아래에 있는 폴더를 **스킬 가져오기**로 선택합니다. 스크립트·참고 자료·에셋도 함께 가져오며, 대화에서 `$`로 선택합니다.
-- **MCP:** 서버 상태와 도구 목록을 확인하고 OAuth 연결 또는 `config.toml` 설정을 사용합니다. stdio 서버의 명령은 Android에서 실행 가능해야 합니다.
+### Phone controls and floating chat
 
-### 휴대폰 제어와 플로팅 대화
+In **Settings → Tools → Phone controls**, connect the accessibility service, explicitly enable controls, and start a **new chat**. Use the on-screen stop button to disable controls. They are disabled after the app process restarts.
 
-**설정 → 도구 → 휴대폰 제어**에서 접근성 서비스를 연결한 뒤, 직접 제어를 켜고 **새 대화**에서 요청합니다. 다른 앱을 열고 화면을 확인하거나 탭·입력·스크롤할 수 있습니다. 화면 위 중지 버튼으로 끌 수 있으며 앱 프로세스가 재시작되면 제어가 꺼집니다.
+Android 10 supports reading screen elements; Android 11+ also supports screenshots. **Screen content and images used for a task are sent to the AI service and may remain in chat history.** Accessibility permission alone does not start automation.
 
-Android 10은 화면 요소를 읽고, Android 11 이상은 스크린샷도 사용합니다. **제어에 사용되는 화면 내용과 이미지는 AI 서비스로 전송되고 대화 기록에 남을 수 있습니다.**
+With the service connected, **Open floating chat** lets you chat over other apps. Floating dictation still uses the device’s separate recognition screen. Main-chat dictation stays inside the composer: tap the microphone, speak, choose **Done** or **Cancel**, review the resulting draft, then send it yourself. It never sends automatically.
 
-접근성 서비스가 연결되어 있으면 **플로팅 대화 열기**로 다른 앱 위에서도 대화할 수 있습니다. 음성 입력은 인식 결과를 초안에 넣으며, 내용을 확인한 뒤 직접 전송합니다.
+Recognition uses the device’s configured speech service, which may use external servers. It is not the ChatGPT app’s speech backend; accuracy, supported languages, silence detection, and offline availability depend on that service. The app does not retain audio files. See [dictation](docs/voice-input.md), [phone controls](docs/phone-use.md), and [floating chat](docs/floating-and-changes.md).
 
-[휴대폰 제어 안내](docs/phone-use.md) · [플로팅 대화와 변경 사항](docs/floating-and-changes.md) · [음성 입력 안내](docs/voice-input.md)
+### Images, instructions, and tools
 
-### 이미지·지침·개발 도구
+- Generated images appear in a gallery with individual original-file downloads. Generation availability depends on the runtime and account.
+- Custom instructions are saved to Codex’s global instruction file and read from the next request.
+- Chat character icons can be disabled in General settings without affecting attached/generated images.
+- **Settings → Tools → Check tools** verifies bundled tool execution without requiring sign-in.
 
-- **이미지:** 여러 결과를 갤러리로 묶어 확대·넘기기·개별 원본 저장을 제공합니다. 생성 기능의 사용 가능 여부는 엔진과 계정에 따릅니다.
-- **맞춤 지침:** 설정에서 언어·말투·작업 규칙을 편집합니다. 실제 Codex 전역 지침 파일에 저장하고 다음 요청부터 다시 읽습니다.
-- **대화 아이콘:** 설정 → 일반에서 캐릭터 표시를 켜거나 끕니다. 생성 이미지와 첨부 사진에는 영향을 주지 않습니다.
-- **도구 진단:** 설정 → 도구 → **도구 실행 확인**에서 Python·Node.js·Git 등의 실행 상태를 로그인 없이 확인합니다.
+## Android limitations
 
-## Android에서 알아둘 점
+This is alpha software. Core workflows have user reports of successful use on physical devices, but new behavior still needs device testing. See [verification](docs/verification.md) and the [device checklist](docs/device-validation.md).
 
-현재 알파 버전입니다. 기본 실행·대화·파일 작업에는 사용자 실기기 성공 보고가 있으나, 새 기능의 기기별 동작은 계속 검증 중입니다. 자동 테스트와 실기기 확인 범위는 [검증 기록](docs/verification.md)과 [기기 검증 목록](docs/device-validation.md)에 구분합니다.
+- **File access:** Android permissions apply. Full file access is not root and cannot access other apps’ private data or protected system areas. Cloud document providers use document tools rather than ordinary shell paths.
+- **Task permissions:** The selected mode is passed to Codex. The Android port does not provide the desktop command sandbox; the OS boundary for shell commands is the Android app’s permissions.
+- **Command compatibility:** Python, JavaScript, and Android-compatible packages are supported. A compiler, JDK, Perl, and SSH client are not bundled. Arbitrary Linux/Windows executables and native extensions may not work.
+- **Storage:** Shared storage can restrict execution and symbolic links. App-internal paths work better for npm installations and Git operations. General chats use an internal working folder.
+- **Editing and recovery:** The built-in editor supports UTF-8 text up to 1 MiB. Document tools copy files before modification and deleted files up to 32 MiB, but cannot recover every shell change or entire deleted directory. These editor limits do not restrict ordinary Codex tools or shell commands.
+- **Dedicated interfaces:** An interactive PTY, Git commit/worktree management, and scheduled automation do not yet have dedicated screens. The current terminal provides command entry and streaming output.
+- **Background work:** A foreground service helps keep tasks running, but device battery management can still interrupt them.
 
-- **파일 접근:** Android가 허용한 범위에서 동작합니다. 다른 앱의 비공개 데이터나 시스템 보호 영역에는 접근할 수 없으며, 전체 파일 접근은 루트 권한이 아닙니다. 클라우드 문서 제공자 폴더는 일반 셸 경로 대신 문서 도구를 사용합니다.
-- **작업 권한:** 선택한 권한 모드는 Codex에 전달하는 작업 정책입니다. Android 포트에는 데스크톱의 명령 샌드박스가 없으며, 셸의 OS 접근 경계는 Android 앱 권한입니다.
-- **명령 호환성:** Python·JavaScript와 Android 호환 패키지를 대상으로 합니다. 컴파일러·JDK·Perl·SSH 클라이언트는 번들하지 않습니다. 일반 Linux/Windows 실행 파일과 네이티브 확장이 모두 호환되지는 않습니다.
-- **저장 위치:** 공유 저장소는 실행·심볼릭 링크를 제한할 수 있어 npm 설치·Git 작업에는 앱 내부 경로가 적합합니다. 일반 대화의 터미널은 앱 내부 작업 폴더를 사용합니다.
-- **편집과 복구:** 내장 텍스트 편집기는 UTF-8 1 MiB까지 지원합니다. 문서 도구는 수정 전 파일과 32 MiB 이하의 삭제 파일을 복사하지만, 셸 변경이나 디렉터리 전체 삭제까지 복구하지는 않습니다. 일반 Codex 도구·셸에는 편집기 크기 한도를 적용하지 않습니다.
-- **아직 없는 전용 UI:** 대화형 PTY, Git 커밋·worktree 관리, 예약 자동화 화면은 구현 중인 범위입니다. 현재 터미널은 명령 입력과 출력 스트리밍을 제공합니다.
-- **백그라운드:** foreground service로 작업을 유지하지만 제조사 배터리 관리에 따라 중단될 수 있습니다.
+## Build from source
 
-## 직접 빌드하기
-
-JDK 17, Android SDK Platform 35, Build Tools 35.0.0, NDK 28.2.13676358, Python 3, Node.js 20 이상이 필요합니다. `ANDROID_HOME`은 Android SDK 경로로 설정합니다.
+Install JDK 17, Android SDK Platform 35, Build Tools 35.0.0, NDK 28.2.13676358, Python 3, and Node.js 20+. Set `ANDROID_HOME` to your SDK directory.
 
 ```sh
 python3 tools/prepare_runtime.py
@@ -116,46 +121,47 @@ python3 -m unittest discover -s tests -p 'test_*.py'
 ./gradlew assembleDebug testDebugUnitTest lintDebug assembleDebugAndroidTest
 ```
 
-APK 경로: `app/build/outputs/apk/debug/app-debug.apk`
+APK: `app/build/outputs/apk/debug/app-debug.apk`
 
 <details>
-<summary>서명과 실기기 테스트</summary>
+<summary>Signing and physical-device tests</summary>
 
-프로젝트 전용 서명을 사용하려면 빌드 프로세스에 다음 환경 변수를 제공합니다. 값이 없으면 Android 기본 debug 서명을 사용합니다.
+For a local build, provide `MOBILE_CODEX_KEYSTORE` (absolute path), `MOBILE_CODEX_KEY_ALIAS`, `MOBILE_CODEX_STORE_PASSWORD`, and `MOBILE_CODEX_KEY_PASSWORD` to use your own signing key. Otherwise, Gradle uses its local debug key. Keep keys and passwords outside the repository and use the same key for future updates.
 
-| 환경 변수 | 값 |
-| --- | --- |
-| `MOBILE_CODEX_KEYSTORE` | 키스토어의 절대 경로 |
-| `MOBILE_CODEX_KEY_ALIAS` | 키 별칭 |
-| `MOBILE_CODEX_STORE_PASSWORD` | 키스토어 비밀번호 |
-| `MOBILE_CODEX_KEY_PASSWORD` | 키 비밀번호 |
+CI uses the `MOBILE_CODEX_SIGNING_JSON` repository secret and a pinned expected certificate. Forks must configure their own key/certificate; repository copies do not inherit secrets. Never commit a signing key. See [release setup](docs/app-updates.md).
 
-키와 비밀번호는 저장소 밖에 보관하고, 업데이트를 배포할 때 같은 서명키를 유지합니다.
-
-ARM64 기기를 연결한 경우:
+With an ARM64 device attached:
 
 ```sh
 ./gradlew connectedDebugAndroidTest
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
-런타임 테스트는 별도 테스트 홈에서 실행하며 사용자의 로그인 파일을 사용하지 않습니다. 일반 x86 Linux CI에서 Android ARM64 프로세스의 실기기 실행까지 확인하는 것은 아닙니다.
+Runtime tests use an isolated test home rather than your sign-in files. An x86 Linux CI build does not prove that Android ARM64 processes work on a physical device.
 
 </details>
 
-## 문서와 출처
+## Documentation and provenance
 
-| 문서 | 내용 |
+Additional technical documents are currently mostly in Korean.
+
+| Document | Topic |
 | --- | --- |
-| [입력과 첨부](docs/input-protocol.md) | 파일·앱 멘션, 스킬, 첨부 전달과 저장 방식 |
-| [기기 내 개발 도구](docs/android-devtools.md) | Python·Node.js·Git 패키징, 출처와 제약 |
-| [Git 런타임 수정](docs/git-runtime-fix.md) | 공유 라이브러리 로딩 문제의 원인과 검증 |
-| [업데이트와 배포](docs/app-updates.md) | APK 검증, 서명 호환성, 릴리스 준비 |
-| [검증 기록](docs/verification.md) | 테스트 결과와 실기기 미확인 항목 |
-| [서드파티 고지](THIRD_PARTY_NOTICES.md) | 포함된 구성 요소의 출처와 라이선스 |
+| [Input and attachments](docs/input-protocol.md) | File/app mentions, skills, and attachment storage |
+| [Android developer tools](docs/android-devtools.md) | Python, Node.js, Git, packaging, and limitations |
+| [Git runtime fix](docs/git-runtime-fix.md) | Shared-library loading and verification |
+| [Updates and releases](docs/app-updates.md) | APK checks, signing compatibility, and publication |
+| [Localization](docs/localization.md) | UI translations and adding languages |
+| [Third-party notices](THIRD_PARTY_NOTICES.md) | Component sources and licenses |
 
-Android 실행 엔진은 [DioNanos/codex-termux](https://github.com/DioNanos/codex-termux/tree/v0.155.1)의 `@mmmbuto/codex-cli-termux@0.155.1`을 사용하고, UI와 엔진은 [Codex app-server](https://github.com/openai/codex/tree/main/codex-rs/app-server)의 JSON-RPC 프로토콜로 연결합니다. Termux 앱을 설치하는 방식이 아니라 Android 네이티브 실행 파일을 APK에 포함해 직접 실행합니다.
+The runtime uses [`@mmmbuto/codex-cli-termux@0.155.1`](https://github.com/DioNanos/codex-termux/tree/v0.155.1). The UI connects through the [Codex app-server JSON-RPC protocol](https://github.com/openai/codex/tree/main/codex-rs/app-server). Android native executables are bundled directly in the APK; the Termux app is not installed.
 
-엔진·개발 도구의 버전과 체크섬은 [`runtime-lock.json`](tools/runtime-lock.json)과 [`devtools-lock.json`](tools/devtools-lock.json)에 고정합니다. Android 패키징에 필요한 실행 파일 이름과 라이브러리 참조를 조정하며, 준비 스크립트와 변경 사항을 저장소에 포함합니다. 원본 LICENSE·NOTICE는 APK에, 개발 도구의 대응 소스는 빌드 산출물에 포함합니다. 재배포 시에도 해당 고지와 소스를 함께 제공하세요.
+Versions and checksums are pinned in [`runtime-lock.json`](tools/runtime-lock.json) and [`devtools-lock.json`](tools/devtools-lock.json). Preparation scripts include Android packaging changes to executable names and library references. Original LICENSE/NOTICE files are retained in the APK; corresponding developer-tool sources accompany releases. Preserve these notices and sources when redistributing.
 
-인증 정보는 앱 비공개 저장소에 보관하며 Android 백업·기기 전송에서 제외합니다. 저장소에는 앱 소스·에셋·테스트·빌드 설정을 관리하고, 개인 설정·로그·서명키·인증 파일·빌드 산출물은 커밋하지 않습니다.
+Authentication data stays in app-private storage and is excluded from Android backup/device transfer. Personal settings, logs, signing keys, credentials, and build outputs are not committed.
+
+## License and contributions
+
+Original Mobile Codex code and original artwork are licensed under **[GPL-3.0-only](LICENSE)**. Copyright © 2026 nokryong and contributors. Third-party components retain their own licenses; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). This license does not grant rights to third-party trademarks.
+
+Bug reports, patches, and translation improvements are welcome. Contributions to the original project code are provided under GPL-3.0-only. Please report your device model, Android version, app version, reproduction steps, and logs with credentials and personal content removed.

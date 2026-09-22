@@ -1,5 +1,6 @@
 package dev.mobilecodex.app;
 
+import static dev.mobilecodex.app.core.Texts.t;
 import android.graphics.Rect;
 import android.os.SystemClock;
 import android.view.accessibility.AccessibilityNodeInfo;
@@ -53,19 +54,19 @@ final class PhoneScreen implements AutoCloseable {
     void requireFresh(String requested, long currentRevision, int currentWindow, String currentPackage, int currentWidth, int currentHeight) throws IOException {
         if (!id.equals(requested) || revision != currentRevision || SystemClock.uptimeMillis() - capturedAt > 30000 ||
             windowId != currentWindow || !packageName.equals(currentPackage) || width != currentWidth || height != currentHeight)
-            throw new IOException("화면이 바뀌었거나 오래된 좌표입니다. mobile_phone_screen으로 다시 확인해 주세요.");
+            throw new IOException(t("화면이 바뀌었거나 오래된 좌표입니다. mobile_phone_screen으로 다시 확인해 주세요."));
     }
     AccessibilityNodeInfo node(String id) throws IOException {
         AccessibilityNodeInfo node = nodes.get(id);
-        if (node == null || !node.refresh() || !node.isVisibleToUser() || !node.isEnabled()) throw new IOException("화면 요소가 더 이상 유효하지 않습니다. 화면을 다시 읽어 주세요.");
+        if (node == null || !node.refresh() || !node.isVisibleToUser() || !node.isEnabled()) throw new IOException(t("화면 요소가 더 이상 유효하지 않습니다. 화면을 다시 읽어 주세요."));
         Rect now = new Rect(); node.getBoundsInScreen(now);
-        if (!now.equals(bounds.get(id))) throw new IOException("화면 요소의 위치가 바뀌었습니다. 화면을 다시 읽어 주세요.");
+        if (!now.equals(bounds.get(id))) throw new IOException(t("화면 요소의 위치가 바뀌었습니다. 화면을 다시 읽어 주세요."));
         return node;
     }
     static String value(CharSequence text) { if (text == null) return ""; String s = text.toString(); return s.substring(0, Math.min(s.length(), 1500)); }
     static float coordinate(JSONObject args, String name, int limit) throws Exception {
         double value = args.getDouble(name);
-        if (!Double.isFinite(value) || value < 0 || value >= limit) throw new IOException("화면 밖 좌표입니다: " + name);
+        if (!Double.isFinite(value) || value < 0 || value >= limit) throw new IOException(t("화면 밖 좌표입니다: ") + name);
         return (float)value;
     }
     @Override public void close() { for (AccessibilityNodeInfo node : nodes.values()) node.recycle(); nodes.clear(); bounds.clear(); }

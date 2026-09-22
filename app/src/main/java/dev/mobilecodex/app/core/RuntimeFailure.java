@@ -1,5 +1,6 @@
 package dev.mobilecodex.app.core;
 
+import static dev.mobilecodex.app.core.Texts.t;
 import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 
@@ -10,10 +11,10 @@ public final class RuntimeFailure {
 
     public static String classify(String stderrTail) {
         String value = stderrTail == null ? "" : stderrTail.toLowerCase(Locale.ROOT);
-        if (value.contains("cannot link executable") || value.contains("cannot locate symbol")) return "네이티브 종속성 오류";
-        if (value.contains("panicked at") || value.contains("thread 'main' panicked")) return "런타임 내부 오류";
-        if (value.contains("out of memory") || value.contains("outofmemory") || value.contains("memory allocation")) return "메모리 부족";
-        if (value.contains("config parse") || value.contains("failed to parse config") || value.contains("toml parse")) return "설정 형식 오류";
+        if (value.contains("cannot link executable") || value.contains("cannot locate symbol")) return t("네이티브 종속성 오류");
+        if (value.contains("panicked at") || value.contains("thread 'main' panicked")) return t("런타임 내부 오류");
+        if (value.contains("out of memory") || value.contains("outofmemory") || value.contains("memory allocation")) return t("메모리 부족");
+        if (value.contains("config parse") || value.contains("failed to parse config") || value.contains("toml parse")) return t("설정 형식 오류");
         return "";
     }
 

@@ -1,5 +1,6 @@
 package dev.mobilecodex.app;
 
+import static dev.mobilecodex.app.core.Texts.t;
 import android.content.*;
 import android.graphics.Color;
 import android.graphics.PixelFormat;
@@ -59,22 +60,22 @@ final class FloatingChat implements Engine.Ui {
         GradientDrawable bg = new GradientDrawable(); bg.setColor(Color.rgb(247,247,247)); bg.setCornerRadius(dp(18)); bg.setStroke(dp(1), Color.LTGRAY); root.setBackground(bg); root.setElevation(dp(8));
         LinearLayout bar = new LinearLayout(service); bar.setGravity(Gravity.CENTER_VERTICAL);
         expand = button("Codex", () -> setExpanded(!expanded)); bar.addView(expand, new LinearLayout.LayoutParams(0, dp(44), 1));
-        Button close = button("닫기", this::close); bar.addView(close); root.addView(bar);
+        Button close = button(t("닫기"), this::close); bar.addView(close); root.addView(bar);
         status = new TextView(service); status.setTextColor(Color.DKGRAY); status.setTextSize(12); root.addView(status);
         ScrollView scroll = new ScrollView(service); transcript = new TextView(service); transcript.setTextColor(Color.BLACK); transcript.setTextSize(14); transcript.setTextIsSelectable(true); transcript.setPadding(dp(6), dp(8), dp(6), dp(8)); scroll.addView(transcript);
         root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
-        input = new EditText(service); input.setTextColor(Color.BLACK); input.setHintTextColor(Color.DKGRAY); input.setHint("작업 요청 또는 추가 지시"); input.setTextSize(14);
+        input = new EditText(service); input.setTextColor(Color.BLACK); input.setHintTextColor(Color.DKGRAY); input.setHint(t("작업 요청 또는 추가 지시")); input.setTextSize(14);
         input.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE | android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
         input.setMinLines(1); input.setMaxLines(3);
         LinearLayout inputRow = new LinearLayout(service); inputRow.setGravity(Gravity.CENTER_VERTICAL);
         inputRow.addView(input, new LinearLayout.LayoutParams(0, -2, 1));
-        microphone = button("음성", this::dictate); microphone.setContentDescription("음성으로 초안 입력"); inputRow.addView(microphone); root.addView(inputRow);
+        microphone = button(t("음성"), this::dictate); microphone.setContentDescription(t("음성으로 초안 입력")); inputRow.addView(microphone); root.addView(inputRow);
         LinearLayout actions = new LinearLayout(service);
-        send = button("보내기", this::submit); stop = button("중단", () -> command("chat.stop", obj(), null));
-        resume = button("계속", () -> { if (input.getText().toString().isBlank()) input.setText("중단한 작업을 현재 상태부터 확인하고 이어서 진행해 줘."); submit(); });
+        send = button(t("보내기"), this::submit); stop = button(t("중단"), () -> command("chat.stop", obj(), null));
+        resume = button(t("계속"), () -> { if (input.getText().toString().isBlank()) input.setText(t("중단한 작업을 현재 상태부터 확인하고 이어서 진행해 줘.")); submit(); });
         actions.addView(send, new LinearLayout.LayoutParams(0, dp(48), 1)); actions.addView(stop); actions.addView(resume);
         root.addView(actions);
-        Button app = button("앱에서 전체 대화 / 승인 확인", this::openApp); root.addView(app);
+        Button app = button(t("앱에서 전체 대화 / 승인 확인"), this::openApp); root.addView(app);
         layout = new WindowManager.LayoutParams(dp(172), -2, WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL, PixelFormat.TRANSLUCENT);
         layout.gravity = Gravity.TOP | Gravity.START; layout.x = dp(12); layout.y = dp(120);
@@ -131,13 +132,13 @@ final class FloatingChat implements Engine.Ui {
     private void display() {
         if (root==null) return;
         for (int i=2;i<root.getChildCount();i++) root.getChildAt(i).setVisibility(expanded?View.VISIBLE:View.GONE);
-        expand.setText(expanded?"Codex · 접기":"Codex · 열기");
-        status.setText(state.optString("status", "연결 확인 중") + (expanded ? " · 창을 접으면 휴대폰 조작 가능" : "")); transcript.setText(transcriptText); updateButtons();
+        expand.setText(expanded?t("Codex · 접기"):t("Codex · 열기"));
+        status.setText(state.optString("status", t("연결 확인 중")) + (expanded ? t(" · 창을 접으면 휴대폰 조작 가능") : "")); transcript.setText(transcriptText); updateButtons();
     }
     private void updateButtons() {
         if(send==null) return;
         microphone.setEnabled(!scope.isEmpty() && !sending && !VoiceInput.active());
-        boolean busy=state.optBoolean("busy"); send.setText(busy?"추가 지시":"보내기"); send.setEnabled(!sending&&!input.getText().toString().isBlank()); stop.setEnabled(busy); resume.setEnabled(!busy&&!sending);
+        boolean busy=state.optBoolean("busy"); send.setText(busy?t("추가 지시"):t("보내기")); send.setEnabled(!sending&&!input.getText().toString().isBlank()); stop.setEnabled(busy); resume.setEnabled(!busy&&!sending);
     }
     private void dictate() {
         saveDraft();
@@ -159,10 +160,10 @@ final class FloatingChat implements Engine.Ui {
                 if (!drafts.getBoolean(marker, false)) {
                     String current = target.equals(scope) ? input.getText().toString() : drafts.getString(key, "");
                     String merged = VoiceInput.merge(current, result);
-                    if (!drafts.edit().putString(key, merged).putBoolean(marker, true).commit()) throw new java.io.IOException("음성 초안을 저장하지 못했습니다. 창을 다시 열어 주세요.");
+                    if (!drafts.edit().putString(key, merged).putBoolean(marker, true).commit()) throw new java.io.IOException(t("음성 초안을 저장하지 못했습니다. 창을 다시 열어 주세요."));
                     if (target.equals(scope)) { binding = true; input.setText(merged); input.setSelection(merged.length()); binding = false; }
                     if (!result.optString("error").isEmpty()) Toast.makeText(service, result.optString("error"), Toast.LENGTH_LONG).show();
-                    else if (!result.optString("text").isEmpty()) Toast.makeText(service, target.equals(scope) ? "음성 초안을 확인한 뒤 보내세요." : "원래 대화의 음성 초안을 저장했습니다.", Toast.LENGTH_LONG).show();
+                    else if (!result.optString("text").isEmpty()) Toast.makeText(service, target.equals(scope) ? t("음성 초안을 확인한 뒤 보내세요.") : t("원래 대화의 음성 초안을 저장했습니다."), Toast.LENGTH_LONG).show();
                 }
                 VoiceInput.acknowledge(service, "floating", id); drafts.edit().remove(marker).apply();
             } catch (Exception error) { Toast.makeText(service, error.getMessage(), Toast.LENGTH_LONG).show(); }
@@ -196,12 +197,12 @@ final class FloatingChat implements Engine.Ui {
             else if(name.equals("state")) {
                 String next=scope(copy); if(!next.equals(scope)) { saveDraft(); scope=next; binding=true; input.setText(drafts.getString(draftKey(scope),"")); binding=false; }
                 state=copy; JSONArray messages=copy.optJSONArray("messages"); StringBuilder text=new StringBuilder();
-                if(messages!=null) for(int i=Math.max(0,messages.length()-4);i<messages.length();i++){JSONObject m=messages.optJSONObject(i); if(m!=null) text.append(m.optString("role").equals("user")?"나: ":"Codex: ").append(m.optString("text")).append("\n\n");}
+                if(messages!=null) for(int i=Math.max(0,messages.length()-4);i<messages.length();i++){JSONObject m=messages.optJSONObject(i); if(m!=null) text.append(m.optString("role").equals("user")?t("나: "):"Codex: ").append(m.optString("text")).append("\n\n");}
                 transcriptText=text.length()>12000?text.substring(text.length()-12000):text.toString(); display();
             } else if(name.equals("message.delta")) { transcriptText+=copy.optString("delta"); if(transcriptText.length()>12000)transcriptText=transcriptText.substring(transcriptText.length()-12000); transcript.setText(transcriptText); }
-            else if(name.equals("server.request")) { status.setText("앱에서 승인 / 질문을 확인해 주세요."); }
+            else if(name.equals("server.request")) { status.setText(t("앱에서 승인 / 질문을 확인해 주세요.")); }
             else if(name.equals("error")) status.setText(copy.optString("message"));
         });
     }
-    @Override public void approval(Engine.Approval approval) { main.post(()->{if(visible)status.setText("앱에서 파일 변경을 확인해 주세요.");}); }
+    @Override public void approval(Engine.Approval approval) { main.post(()->{if(visible)status.setText(t("앱에서 파일 변경을 확인해 주세요."));}); }
 }

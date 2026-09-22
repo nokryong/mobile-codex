@@ -5,7 +5,7 @@ on:
   pull_request:
   workflow_dispatch:
 permissions:
-  contents: read
+  contents: write
 concurrency:
   group: android-${{ github.ref }}
   cancel-in-progress: true
@@ -80,6 +80,11 @@ jobs:
           path: artifacts/update/
           if-no-files-found: error
           retention-days: 14
+      - name: Publish versioned GitHub release
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 tools/publish_release.py
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:

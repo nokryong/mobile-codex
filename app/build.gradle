@@ -9,8 +9,8 @@ android {
         applicationId 'dev.mobilecodex.app'
         minSdk 29
         targetSdk 35
-        versionCode 12
-        versionName '0.1.11-alpha'
+        versionCode 13
+        versionName '0.1.12-alpha'
         ndk { abiFilters 'arm64-v8a' }
         testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
     }
@@ -67,4 +67,10 @@ tasks.register('verifyRuntime') {
         }
     }
 }
-tasks.named('preBuild').configure { dependsOn 'verifyRuntime' }
+def legalAssets = layout.buildDirectory.dir('generated/legalAssets')
+android.sourceSets.main.assets.srcDir(legalAssets)
+tasks.register('prepareLegalAssets', Sync) {
+    from(rootProject.file('LICENSE'), rootProject.file('THIRD_PARTY_NOTICES.md'))
+    into(legalAssets.map { it.dir('legal') })
+}
+tasks.named('preBuild').configure { dependsOn 'verifyRuntime', 'prepareLegalAssets' }

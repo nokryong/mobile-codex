@@ -1,5 +1,6 @@
 package dev.mobilecodex.app;
 
+import static dev.mobilecodex.app.core.Texts.t;
 import android.content.Context;
 import android.content.Intent;
 import android.os.Build;
@@ -45,7 +46,7 @@ public final class Engine {
     private String permissionMode;
     private final Map<String, PendingRequest> requests = new LinkedHashMap<>();
     private volatile Process terminalProcess;
-    private String status = "시작할 준비가 됐습니다", threadId = "", turnId = "", serverThreadId = "";
+    private String status = t("시작할 준비가 됐습니다"), threadId = "", turnId = "", serverThreadId = "";
     private JSONObject account = new JSONObject();
     private JSONArray models = new JSONArray();
     private JSONArray sessions = new JSONArray();
@@ -65,7 +66,7 @@ public final class Engine {
         images = new ImageStore(context);
         attachments = new AttachmentStore(context, images);
         try { codexHome = CodexHome.open(context); }
-        catch (IOException e) { throw new IllegalStateException("Codex 홈을 준비하지 못했습니다.", e); }
+        catch (IOException e) { throw new IllegalStateException(t("Codex 홈을 준비하지 못했습니다."), e); }
         instructions = new PersonalInstructions(codexHome);
         devTools = new DevTools(context);
         changes = new ChangeReview(new File(context.getFilesDir(), "change-backups"), this::git);
@@ -94,7 +95,7 @@ public final class Engine {
             if (s != null && !s.optBoolean("deletionPending")) summaries.put(obj("id", s.optString("id"), "title", s.optString("title"),
                 "workspace", s.optString("workspace"), "workspaceKey", s.optString("workspaceKey")));
         }
-        return obj("ready", ready, "busy", busy, "status", status, "account", account,
+        return obj("ready", ready, "busy", busy, "status", t(status), "account", account,
             "models", models, "workspace", documents.workspace(), "projects", documents.projects(), "sessions", summaries,
             "threadId", threadId, "turnId", turnId, "turnDiff", active == null ? "" : active.optString("turnDiff"), "messages", active == null ? new JSONArray() : active.optJSONArray("messages"),
             "pendingDeletionCount", pendingDeletionCount(), "devtools", devTools.status(),
@@ -105,7 +106,7 @@ public final class Engine {
     private void publish() { event("state", snapshot()); }
     private void persist() {
         try { persistSessions(sessions); }
-        catch (IOException e) { event("error", obj("message", "대화 기록을 저장하지 못했습니다.")); }
+        catch (IOException e) { event("error", obj("message", t("대화 기록을 저장하지 못했습니다."))); }
     }
     /** Writes an already-staged session state. Mutating RPCs use this directly so they cannot report a durable success on I/O failure. */
     private void persistSessions(JSONArray value) throws IOException {
@@ -115,7 +116,7 @@ public final class Engine {
             Files.move(pending.toPath(), stateFile.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
         } catch (Exception e) {
             pending.delete();
-            throw new IOException("대화 기록을 저장하지 못했습니다.", e);
+            throw new IOException(t("대화 기록을 저장하지 못했습니다."), e);
         }
     }
     private int pendingDeletionCount() {
@@ -167,7 +168,7 @@ public final class Engine {
                     case "permissions.set" -> {
                         ensureIdle();
                         String mode = args.getString("mode");
-                        if (!Set.of("read-only", "workspace-write", "danger-full-access").contains(mode)) throw new IOException("잘못된 권한 모드입니다.");
+                        if (!Set.of("read-only", "workspace-write", "danger-full-access").contains(mode)) throw new IOException(t("잘못된 권한 모드입니다."));
                         permissionMode = mode;
                         context.getSharedPreferences("settings", 0).edit().putString("permissions", mode).apply();
                         if (active != null && ready) resumeRemote(true);
@@ -187,7 +188,7 @@ public final class Engine {
                     case "rpc" -> { start(); reply.complete(call(args.getString("method"), args.optJSONObject("params") == null ? new JSONObject() : args.getJSONObject("params")), null); }
                     case "rpc.respond" -> {
                         PendingRequest pending = requests.remove(args.getString("key"));
-                        if (pending == null) throw new IOException("이미 종료된 요청입니다.");
+                        if (pending == null) throw new IOException(t("이미 종료된 요청입니다."));
                         pending.connection.respond(pending.id, args.getJSONObject("result"));
                         reply.complete(obj("ok", true), null);
                     }
@@ -208,8 +209,8 @@ public final class Engine {
                     case "changes.backupPreview" -> { requireScope(args); reply.complete(changes.previewBackup(reviewDirectory(), args.getString("id")), null); }
                     case "changes.restore" -> {
                         ensureIdle(); requireScope(args);
-                        if (permissionMode.equals("read-only")) throw new IOException("읽기 전용 모드에서는 복원할 수 없습니다.");
-                        if (terminalProcess != null && terminalProcess.isAlive()) throw new IOException("실행 중인 터미널 명령을 먼저 중지해 주세요.");
+                        if (permissionMode.equals("read-only")) throw new IOException(t("읽기 전용 모드에서는 복원할 수 없습니다."));
+                        if (terminalProcess != null && terminalProcess.isAlive()) throw new IOException(t("실행 중인 터미널 명령을 먼저 중지해 주세요."));
                         JSONObject result = changes.restore(reviewDirectory(), args.getString("token")); event("files.changed", result); reply.complete(result, null);
                     }
                     case "projects.select" -> { ensureIdle(); documents.selectProject(args.optString("key", "")); clearActive(); publish(); reply.complete(snapshot(), null); }
@@ -236,7 +237,7 @@ public final class Engine {
                         if (pendingApproval != null) pendingApproval.decision.complete(false);
                         reply.complete(obj("ok", true), null);
                     }
-                    default -> throw new IOException("지원하지 않는 요청입니다: " + action);
+                    default -> throw new IOException(t("지원하지 않는 요청입니다: ") + action);
                 }
             } catch (Throwable e) {
                 reply.complete(null, unwrap(e));
@@ -252,7 +253,7 @@ public final class Engine {
     }
     private void clearActive() { active = null; threadId = ""; turnId = ""; serverThreadId = ""; }
     public boolean isBusy() { return busy; }
-    private void ensureIdle() throws IOException { if (busy) throw new IOException("진행 중인 작업을 먼저 중지해 주세요."); }
+    private void ensureIdle() throws IOException { if (busy) throw new IOException(t("진행 중인 작업을 먼저 중지해 주세요.")); }
     private void start() throws Exception {
         if (testTransport != null) {
             ready = true;
@@ -272,11 +273,11 @@ public final class Engine {
         if (staleRpc != null) staleRpc.close();
         if (staleProcess != null && staleProcess.isAlive()) staleProcess.destroyForcibly();
         if (!Arrays.asList(Build.SUPPORTED_ABIS).contains("arm64-v8a"))
-            throw new IOException("이 알파 버전은 ARM64 안드로이드 기기용입니다.");
+            throw new IOException(t("이 알파 버전은 ARM64 안드로이드 기기용입니다."));
         File libraryDir = new File(context.getApplicationInfo().nativeLibraryDir);
         File binary = new File(libraryDir, "libcodex.so");
-        if (!binary.isFile() || !binary.canExecute()) throw new IOException("실행 엔진이 포함되지 않았습니다. 전체 APK를 다시 설치해 주세요.");
-        status = "Codex를 시작하고 있습니다"; publish();
+        if (!binary.isFile() || !binary.canExecute()) throw new IOException(t("실행 엔진이 포함되지 않았습니다. 전체 APK를 다시 설치해 주세요."));
+        status = t("Codex를 시작하고 있습니다"); publish();
         // Keep upstream Codex tools/features available; preserve user configuration.
         File config = new File(codexHome.root(), "config.toml");
         if (!config.exists()) dev.mobilecodex.app.core.Utf8Files.write(config.toPath(), "cli_auth_credentials_store = \"file\"\napproval_policy = \"on-request\"\n");
@@ -308,10 +309,10 @@ public final class Engine {
                         requests.forEach((key, value) -> event("server.resolved", obj("key", key)));
                         requests.clear();
                         ready = false; busy = false; turnId = ""; serverThreadId = "";
-                        String detail = error == null ? "Codex 연결이 종료되었습니다." : error.getMessage();
+                        String detail = error == null ? t("Codex 연결이 종료되었습니다.") : error.getMessage();
                         String diagnosis = stderrTail.diagnosis();
-                        status = "실행 엔진 연결이 종료되었습니다" + (exitCode >= 0 ? " (종료 코드 " + exitCode + ")" : "") + ". " + detail
-                            + (diagnosis.isEmpty() ? "" : " 진단 단서: " + diagnosis + ".") + " 다시 연결해 주세요.";
+                        status = t("실행 엔진 연결이 종료되었습니다") + (exitCode >= 0 ? t(" (종료 코드 ") + exitCode + ")" : "") + ". " + detail
+                            + (diagnosis.isEmpty() ? "" : t(" 진단 단서: ") + diagnosis + ".") + t(" 다시 연결해 주세요.");
                         if (pendingApproval != null) pendingApproval.decision.complete(false);
                         publish();
                         context.stopService(new Intent(context, EngineService.class));
@@ -322,7 +323,7 @@ public final class Engine {
             call("initialize", obj("clientInfo", obj("name", "mobile_codex", "title", "Mobile Codex", "version", "0.1.11"),
                 "capabilities", obj("experimentalApi", true)));
             rpc.notify("initialized", new JSONObject());
-            ready = true; status = "연결됨";
+            ready = true; status = t("연결됨");
             readAccount();
             try { models = call("model/list", obj("limit", 100, "includeHidden", false)).optJSONArray("data"); }
             catch (Exception ignored) { models = new JSONArray(); }
@@ -336,14 +337,14 @@ public final class Engine {
             Process failed = process; int exitCode = -1;
             try { if (failed != null) exitCode = failed.exitValue(); } catch (IllegalThreadStateException ignored) { }
             String diagnosis = stderrTail.diagnosis();
-            String detail = "Codex를 시작하지 못했습니다" + (exitCode >= 0 ? " (종료 코드 " + exitCode + ")" : "") + ": " + unwrap(e).getMessage()
-                + (diagnosis.isEmpty() ? "" : " (진단 단서: " + diagnosis + ")");
+            String detail = t("Codex를 시작하지 못했습니다") + (exitCode >= 0 ? t(" (종료 코드 ") + exitCode + ")" : "") + ": " + unwrap(e).getMessage()
+                + (diagnosis.isEmpty() ? "" : t(" (진단 단서: ") + diagnosis + ")");
             stopNow(); throw new IOException(detail, e);
         }
     }
     private JSONObject call(String method, JSONObject params) throws Exception {
         if (testTransport != null) return testTransport.call(method, params);
-        if (rpc == null) throw new IOException("먼저 Codex를 시작해 주세요.");
+        if (rpc == null) throw new IOException(t("먼저 Codex를 시작해 주세요."));
         return rpc.request(method, params).get(65, TimeUnit.SECONDS);
     }
     private void readAccount() throws Exception {
@@ -366,7 +367,7 @@ public final class Engine {
     private void resumeRemote(boolean force) throws Exception {
         if (active == null || threadId.isEmpty() || (!force && threadId.equals(serverThreadId))) return;
         if (!active.optString("workspaceKey").equals(documents.key()))
-            throw new IOException("이 대화의 원래 작업 폴더를 다시 연결해 주세요.");
+            throw new IOException(t("이 대화의 원래 작업 폴더를 다시 연결해 주세요."));
         documents.requireWorkspaceAvailable();
         call("thread/resume", obj("threadId", threadId, "excludeTurns", true, "cwd", projectDirectory().getAbsolutePath(),
             "sandbox", permissionMode, "approvalPolicy", "on-request", "developerInstructions", workspaceInstructions()));
@@ -389,7 +390,7 @@ public final class Engine {
             }
             active.put("imageHistoryVersion", 1); persist(); publish();
         } catch (Exception e) {
-            event("notice", obj("message", "이전 이미지 기록을 불러오지 못했습니다: " + unwrap(e).getMessage()));
+            event("notice", obj("message", t("이전 이미지 기록을 불러오지 못했습니다: ") + unwrap(e).getMessage()));
         }
     }
     private JSONArray input(String text, JSONArray attachmentIds, JSONArray skills, JSONArray mentions) throws Exception {
@@ -407,27 +408,27 @@ public final class Engine {
     }
     private void addSkills(JSONArray result, JSONArray skills) throws Exception {
         if (skills == null) return;
-        if (skills.length() > 32) throw new IOException("한 메시지에는 최대 32개의 스킬을 추가할 수 있습니다.");
+        if (skills.length() > 32) throw new IOException(t("한 메시지에는 최대 32개의 스킬을 추가할 수 있습니다."));
         HashSet<String> seen = new HashSet<>();
         for (int i = 0; i < skills.length(); i++) {
-            JSONObject value = skills.optJSONObject(i); if (value == null) throw new IOException("스킬 정보가 올바르지 않습니다.");
+            JSONObject value = skills.optJSONObject(i); if (value == null) throw new IOException(t("스킬 정보가 올바르지 않습니다."));
             String name = value.optString("name"), path = value.optString("path");
-            if (name.isBlank() || path.isBlank() || !seen.add(path)) throw new IOException("스킬 정보가 올바르지 않습니다.");
+            if (name.isBlank() || path.isBlank() || !seen.add(path)) throw new IOException(t("스킬 정보가 올바르지 않습니다."));
             result.put(obj("type", "skill", "name", name, "path", path));
         }
     }
     private void addMentions(JSONArray result, JSONArray mentions) throws Exception {
         if (mentions == null) return;
-        if (mentions.length() > 64) throw new IOException("한 메시지에는 최대 64개의 멘션을 추가할 수 있습니다.");
+        if (mentions.length() > 64) throw new IOException(t("한 메시지에는 최대 64개의 멘션을 추가할 수 있습니다."));
         HashSet<String> seen = new HashSet<>();
         for (int i = 0; i < mentions.length(); i++) {
-            JSONObject value = mentions.optJSONObject(i); if (value == null) throw new IOException("멘션 정보가 올바르지 않습니다.");
+            JSONObject value = mentions.optJSONObject(i); if (value == null) throw new IOException(t("멘션 정보가 올바르지 않습니다."));
             String name = value.optString("name"), path = value.optString("path");
-            if (name.isBlank() || path.isBlank() || !seen.add(path)) throw new IOException("멘션 정보가 올바르지 않습니다.");
+            if (name.isBlank() || path.isBlank() || !seen.add(path)) throw new IOException(t("멘션 정보가 올바르지 않습니다."));
             if (path.startsWith("app://") || path.startsWith("plugin://")) result.put(obj("type", "mention", "name", name, "path", path));
             else if (new File(path).isAbsolute()) {
                 File file = new File(path).getCanonicalFile();
-                if (!file.isFile() || !allowedMentionFile(file)) throw new IOException("멘션 파일을 읽을 수 없습니다.");
+                if (!file.isFile() || !allowedMentionFile(file)) throw new IOException(t("멘션 파일을 읽을 수 없습니다."));
                 result.put(obj("type", "mention", "name", name, "path", file.getAbsolutePath()));
                 result.put(obj("type", "text", "text", "Mentioned file is available at this absolute path: " + file.getAbsolutePath(), "text_elements", new JSONArray()));
             }
@@ -446,8 +447,8 @@ public final class Engine {
     }
     private String titleFor(String text, JSONArray attachmentIds) {
         if (!text.isBlank()) return text.substring(0, Math.min(40, text.length()));
-        if (attachmentIds != null && attachmentIds.length() > 0) return "첨부 파일 " + attachmentIds.length() + "개";
-        return "제목 없는 대화";
+        if (attachmentIds != null && attachmentIds.length() > 0) return t("첨부 파일 ") + attachmentIds.length() + t("개");
+        return t("제목 없는 대화");
     }
     private JSONObject userMessage(String text, JSONArray attachmentIds, JSONArray skills, JSONArray mentions) throws Exception {
         JSONObject message = obj("role", "user", "text", text, "id", UUID.randomUUID().toString());
@@ -465,17 +466,17 @@ public final class Engine {
         return message;
     }
     private void requireScope(JSONObject args) throws IOException {
-        if (!args.has("workspaceKey") || !args.optString("workspaceKey").equals(documents.key())) throw new IOException("프로젝트가 바뀌었습니다. 다시 열어 주세요.");
+        if (!args.has("workspaceKey") || !args.optString("workspaceKey").equals(documents.key())) throw new IOException(t("프로젝트가 바뀌었습니다. 다시 열어 주세요."));
     }
     private void requireChatScope(JSONObject args) throws IOException {
-        if (args.has("expectedThreadId") && !args.optString("expectedThreadId").equals(threadId)) throw new IOException("대화가 바뀌었습니다. 현재 대화에서 다시 보내 주세요.");
+        if (args.has("expectedThreadId") && !args.optString("expectedThreadId").equals(threadId)) throw new IOException(t("대화가 바뀌었습니다. 현재 대화에서 다시 보내 주세요."));
         if (args.has("workspaceKey")) requireScope(args);
     }
     private void steer(JSONObject args) throws Exception {
         requireChatScope(args);
         String text = args.optString("text").trim();
-        if (text.isEmpty() || text.length() > 50000) throw new IOException("추가 지시는 1~50,000자로 입력해 주세요.");
-        if (!busy || turnId.isEmpty() || !turnId.equals(args.optString("expectedTurnId"))) throw new IOException("진행 중인 작업이 변경되거나 종료되었습니다. 새 메시지로 보내 주세요.");
+        if (text.isEmpty() || text.length() > 50000) throw new IOException(t("추가 지시는 1~50,000자로 입력해 주세요."));
+        if (!busy || turnId.isEmpty() || !turnId.equals(args.optString("expectedTurnId"))) throw new IOException(t("진행 중인 작업이 변경되거나 종료되었습니다. 새 메시지로 보내 주세요."));
         JSONArray input = input(text, args.optJSONArray("attachments"), args.optJSONArray("skills"), args.optJSONArray("mentions"));
         call("turn/steer", obj("threadId", threadId, "expectedTurnId", turnId, "input", input));
         active.getJSONArray("messages").put(userMessage(text, args.optJSONArray("attachments"), args.optJSONArray("skills"), args.optJSONArray("mentions")));
@@ -483,7 +484,7 @@ public final class Engine {
     }
     private File reviewDirectory() throws IOException {
         documents.requireWorkspaceAvailable();
-        if (documents.workspace().optBoolean("selected") && documents.directDirectory() == null) throw new IOException("이 폴더는 문서 제공자 전용입니다. 복구 사본에서 파일별 변경을 확인해 주세요.");
+        if (documents.workspace().optBoolean("selected") && documents.directDirectory() == null) throw new IOException(t("이 폴더는 문서 제공자 전용입니다. 복구 사본에서 파일별 변경을 확인해 주세요."));
         return projectDirectory();
     }
     private byte[] git(File directory, List<String> arguments) throws Exception {
@@ -495,12 +496,12 @@ public final class Engine {
     }
     private void send(String text, String model, String effort, JSONArray attachmentIds, JSONArray skills, JSONArray mentions) throws Exception {
         ensureIdle();
-        if (text.length() > 50000) throw new IOException("메시지는 최대 50,000자까지 입력할 수 있습니다.");
+        if (text.length() > 50000) throw new IOException(t("메시지는 최대 50,000자까지 입력할 수 있습니다."));
         documents.requireWorkspaceAvailable();
         JSONArray input = input(text, attachmentIds, skills, mentions);
-        if (input.length() == 0) throw new IOException("메시지나 첨부 파일을 추가해 주세요.");
+        if (input.length() == 0) throw new IOException(t("메시지나 첨부 파일을 추가해 주세요."));
         start();
-        if (account.length() == 0) throw new IOException("ChatGPT 계정으로 로그인해 주세요.");
+        if (account.length() == 0) throw new IOException(t("ChatGPT 계정으로 로그인해 주세요."));
         JSONObject candidate = null;
         String candidateThreadId = "";
         if (active == null) {
@@ -510,11 +511,11 @@ public final class Engine {
             candidate = obj("id", candidateThreadId, "title", titleFor(text, attachmentIds), "workspace", documents.workspace().optString("name"),
                 "workspaceKey", documents.key(), "messages", new JSONArray(), "imageHistoryVersion", 1, "phoneToolsVersion", 1);
         } else {
-            if (!active.optString("workspaceKey").equals(documents.key())) throw new IOException("이 대화의 원래 작업 폴더를 다시 연결해 주세요.");
+            if (!active.optString("workspaceKey").equals(documents.key())) throw new IOException(t("이 대화의 원래 작업 폴더를 다시 연결해 주세요."));
             resumeRemote(false);
         }
         String targetThread = candidate == null ? threadId : candidateThreadId;
-        busy = true; status = "작업 중"; publish();
+        busy = true; status = t("작업 중"); publish();
         try {
             JSONObject params = obj("threadId", targetThread, "input", input, "cwd", projectDirectory().getAbsolutePath(), "approvalPolicy", "on-request");
             if (!model.isEmpty()) params.put("model", model);
@@ -524,7 +525,7 @@ public final class Engine {
             active.getJSONArray("messages").put(userMessage(text, attachmentIds, skills, mentions));
             if (turn != null) turnId = turn.optString("id", "");
             persist(); publish();
-        } catch (Exception e) { busy = false; status = "요청 실패"; publish(); throw e; }
+        } catch (Exception e) { busy = false; status = t("요청 실패"); publish(); throw e; }
     }
     private void resume(String id) throws Exception {
         ensureIdle();
@@ -538,13 +539,13 @@ public final class Engine {
                 publish(); return;
             }
         }
-        throw new IOException("대화를 찾을 수 없습니다.");
+        throw new IOException(t("대화를 찾을 수 없습니다."));
     }
     private void renameSession(String id, String title) throws Exception {
         ensureIdle();
         // Titles are Mobile Codex local aliases: they remain available without starting or signing in to Codex.
         String trimmed = title.trim();
-        if (trimmed.isEmpty()) throw new IOException("대화 제목을 입력해 주세요.");
+        if (trimmed.isEmpty()) throw new IOException(t("대화 제목을 입력해 주세요."));
         JSONArray replacement = new JSONArray(sessions.toString());
         boolean found = false;
         for (int i = 0; i < replacement.length(); i++) {
@@ -555,7 +556,7 @@ public final class Engine {
                 break;
             }
         }
-        if (!found) throw new IOException("대화를 찾을 수 없습니다.");
+        if (!found) throw new IOException(t("대화를 찾을 수 없습니다."));
         persistSessions(replacement);
         replaceSessions(replacement);
     }
@@ -576,7 +577,7 @@ public final class Engine {
                 break;
             }
         }
-        if (!found) throw new IOException("대화를 찾을 수 없습니다.");
+        if (!found) throw new IOException(t("대화를 찾을 수 없습니다."));
         // Do not clear the visible/active conversation until its pending-deletion record is durable.
         persistSessions(marked);
         replaceSessions(marked);
@@ -590,7 +591,7 @@ public final class Engine {
             return false;
         } catch (IOException e) {
             // The already durable tombstone remains in sessions and will be reconciled later.
-            event("notice", obj("message", "Codex 대화 삭제는 완료됐지만 목록 정리를 나중에 다시 시도합니다."));
+            event("notice", obj("message", t("Codex 대화 삭제는 완료됐지만 목록 정리를 나중에 다시 시도합니다.")));
             return true;
         }
     }
@@ -628,8 +629,8 @@ public final class Engine {
             // For a durable deletion tombstone that is already the requested end state.
             String message = unwrap(e).getMessage();
             if (retry && ("thread not found: " + id).equals(message)) return true;
-            if (retry) event("notice", obj("message", "삭제 대기 중인 Codex 대화를 아직 지우지 못했습니다."));
-            else event("notice", obj("message", "Codex 대화 삭제를 나중에 다시 시도합니다."));
+            if (retry) event("notice", obj("message", t("삭제 대기 중인 Codex 대화를 아직 지우지 못했습니다.")));
+            else event("notice", obj("message", t("Codex 대화 삭제를 나중에 다시 시도합니다.")));
             return false;
         }
     }
@@ -647,7 +648,7 @@ public final class Engine {
                 persistSessions(remaining);
                 replaceSessions(remaining);
             } catch (IOException e) {
-                event("error", obj("message", "대화 기록을 저장하지 못했습니다."));
+                event("error", obj("message", t("대화 기록을 저장하지 못했습니다.")));
                 return;
             }
         }
@@ -656,10 +657,10 @@ public final class Engine {
         try {
             if (method.equals("account/login/completed")) {
                 if (p.optBoolean("success")) {
-                    readAccount(); status = "연결됨";
+                    readAccount(); status = t("연결됨");
                     try { JSONArray data = call("model/list", obj("limit", 100)).optJSONArray("data"); if (data != null) models = data; } catch (Exception ignored) {}
                 }
-                else event("error", obj("message", p.optString("error", "로그인이 취소되었습니다.")));
+                else event("error", obj("message", p.optString("error", t("로그인이 취소되었습니다."))));
                 event("login.completed", p); publish(); return;
             }
             if (method.equals("account/updated")) { readAccount(); publish(); return; }
@@ -691,24 +692,24 @@ public final class Engine {
                 active.put("turnDiff", p.optString("diff")); persist(); publish();
             } else if (method.equals("turn/started")) {
                 JSONObject turn = p.optJSONObject("turn"); if (turn != null) turnId = turn.optString("id");
-                busy = true; status = "작업 중"; publish();
+                busy = true; status = t("작업 중"); publish();
             } else if (method.equals("turn/completed")) {
-                busy = false; turnId = ""; status = "연결됨";
+                busy = false; turnId = ""; status = t("연결됨");
                 JSONObject turn = p.optJSONObject("turn");
-                if (turn != null && turn.optJSONObject("error") != null) event("error", obj("message", turn.getJSONObject("error").optString("message", "작업 실패")));
+                if (turn != null && turn.optJSONObject("error") != null) event("error", obj("message", turn.getJSONObject("error").optString("message", t("작업 실패"))));
                 if (pendingApproval != null) pendingApproval.decision.complete(false);
                 if (active != null) {
                     JSONArray messages = active.getJSONArray("messages");
                     for (int i = 0; i < messages.length(); i++) {
                         JSONObject message = messages.getJSONObject(i);
                         if (message.optString("imageStatus").equals("generating")) message.put("imageStatus", "failed")
-                            .put("imageError", "이미지 생성이 완료되지 않았습니다. 다시 시도해 주세요.");
+                            .put("imageError", t("이미지 생성이 완료되지 않았습니다. 다시 시도해 주세요."));
                     }
                 }
                 persist(); publish();
             } else if (method.equals("error")) {
                 JSONObject error = p.optJSONObject("error");
-                event("error", obj("message", error == null ? "Codex 요청 오류" : error.optString("message", "Codex 요청 오류")));
+                event("error", obj("message", error == null ? t("Codex 요청 오류") : error.optString("message", t("Codex 요청 오류"))));
             } else {
                 event("agent.event", obj("method", method, "params", p));
             }
@@ -717,7 +718,7 @@ public final class Engine {
     private JSONObject readImage(String path) throws Exception {
         if (path.startsWith("sandbox:")) path = path.substring("sandbox:".length());
         if (path.startsWith("file://")) path = android.net.Uri.parse(path).getPath();
-        if (path == null || path.isBlank()) throw new IOException("이미지 경로가 없습니다.");
+        if (path == null || path.isBlank()) throw new IOException(t("이미지 경로가 없습니다."));
         File file = new File(path);
         if (file.isAbsolute()) return images.importFile(file);
         if (documents.workspace().optBoolean("selected")) return documents.image(path, images);
@@ -748,18 +749,18 @@ public final class Engine {
         try {
             if (generation) {
                 if (!item.isNull("failure") || item.optString("status").equals("failed"))
-                    throw new IOException("이미지 생성에 실패했습니다. " + (item.optJSONObject("failure") != null && "usageLimitExceeded".equals(item.getJSONObject("failure").optString("type")) ? "이미지 사용 한도를 확인해 주세요." : "다시 시도해 주세요."));
+                    throw new IOException(t("이미지 생성에 실패했습니다. ") + (item.optJSONObject("failure") != null && "usageLimitExceeded".equals(item.getJSONObject("failure").optString("type")) ? t("이미지 사용 한도를 확인해 주세요.") : t("다시 시도해 주세요.")));
                 String path = item.optString("savedPath", ""), result = item.optString("result", "");
                 if (!path.isEmpty()) {
                     try { attachments.put(images.importFile(new File(path))); }
                     catch (Exception e) { if (result.isEmpty()) throw e; attachments.put(images.importBase64(result, "")); }
                 } else if (!result.isEmpty()) attachments.put(images.importBase64(result, ""));
-                else throw new IOException("생성 결과에 이미지 파일이 없습니다. 다시 생성해 주세요.");
+                else throw new IOException(t("생성 결과에 이미지 파일이 없습니다. 다시 생성해 주세요."));
             } else if (view) attachments.put(readImage(item.getString("path")));
         } catch (Exception e) { errors.add(unwrap(e).getMessage()); }
         for (int i = 0; i < encoded.length(); i++) {
             try { attachments.put(images.importBase64(encoded.getString(i), "")); }
-            catch (Exception e) { errors.add((i + 1) + "번째 이미지: " + unwrap(e).getMessage()); }
+            catch (Exception e) { errors.add((i + 1) + t("번째 이미지: ") + unwrap(e).getMessage()); }
         }
         if (errors.isEmpty()) message.remove("imageError");
         else message.put("imageStatus", "failed").put("imageError", String.join("\n", errors));
@@ -783,12 +784,12 @@ public final class Engine {
                 return;
             }
             if (!p.optString("threadId").equals(threadId) || active == null || !active.optString("workspaceKey").equals(documents.key()))
-                throw new IOException("대화의 작업 폴더가 일치하지 않습니다.");
+                throw new IOException(t("대화의 작업 폴더가 일치하지 않습니다."));
             String tool = p.getString("tool"); JSONObject args = p.getJSONObject("arguments");
             event("tool", obj("name", tool, "path", args.optString("path", args.optString("query", ""))));
             if (PhoneToolCatalog.NAMES.contains(tool)) {
                 if (tool.equals("mobile_phone_action") && permissionMode.equals("read-only"))
-                    throw new IOException("읽기 전용 모드에서는 화면 조회만 가능합니다. 조작하려면 작업 권한을 변경해 주세요.");
+                    throw new IOException(t("읽기 전용 모드에서는 화면 조회만 가능합니다. 조작하려면 작업 권한을 변경해 주세요."));
                 connection.respond(id, PhoneUseService.execute(context, tool, args));
             } else if (ToolCatalog.WRITE.contains(tool)) {
                 mutate(tool, args, false, (result, error) -> {
@@ -800,7 +801,7 @@ public final class Engine {
                     case "mobile_list" -> documents.list(args.optString("path", ""));
                     case "mobile_search" -> documents.search(args.getString("query"));
                     case "mobile_read" -> documents.read(args.getString("path"));
-                    default -> throw new IOException("알 수 없는 파일 도구입니다.");
+                    default -> throw new IOException(t("알 수 없는 파일 도구입니다."));
                 };
                 connection.respond(id, ToolCatalog.result(true, result.toString()));
             }
@@ -809,9 +810,9 @@ public final class Engine {
         }
     }
     private void mutate(String operation, JSONObject args, boolean interactive, Reply reply) throws Exception {
-        if (!ToolCatalog.WRITE.contains(operation)) throw new IOException("지원하지 않는 파일 작업입니다.");
-        if (permissionMode.equals("read-only")) throw new IOException("현재 읽기 전용 모드입니다. 권한 설정을 변경해 주세요.");
-        if (pendingApproval != null && !pendingApproval.decision.isDone()) throw new IOException("다른 변경 사항을 확인 중입니다. 한 번에 하나씩 요청해 주세요.");
+        if (!ToolCatalog.WRITE.contains(operation)) throw new IOException(t("지원하지 않는 파일 작업입니다."));
+        if (permissionMode.equals("read-only")) throw new IOException(t("현재 읽기 전용 모드입니다. 권한 설정을 변경해 주세요."));
+        if (pendingApproval != null && !pendingApproval.decision.isDone()) throw new IOException(t("다른 변경 사항을 확인 중입니다. 한 번에 하나씩 요청해 주세요."));
         DocumentStore.Mutation mutation = documents.prepare(operation, args);
         if (!interactive) {
             JSONObject result = documents.commit(mutation); event("files.changed", result); reply.complete(result, null); return;
@@ -823,7 +824,7 @@ public final class Engine {
             timeout.cancel(false);
             if (pendingApproval == approval) pendingApproval = null;
             try {
-                if (error != null || !Boolean.TRUE.equals(approved)) throw new IOException("사용자가 변경을 취소했습니다.");
+                if (error != null || !Boolean.TRUE.equals(approved)) throw new IOException(t("사용자가 변경을 취소했습니다."));
                 JSONObject result = documents.commit(mutation);
                 event("files.changed", result); reply.complete(result, null);
             } catch (Throwable e) { reply.complete(null, unwrap(e)); }
@@ -848,14 +849,14 @@ public final class Engine {
         requests.forEach((key, value) -> event("server.resolved", obj("key", key)));
         requests.clear();
         if (terminalProcess != null) terminalProcess.destroyForcibly();
-        ready = false; busy = false; turnId = ""; serverThreadId = ""; status = "연결 종료";
+        ready = false; busy = false; turnId = ""; serverThreadId = ""; status = t("연결 종료");
         persist(); publish();
         context.stopService(new Intent(context, EngineService.class));
     }
     private File projectDirectory() { File dir = documents.directDirectory(); return dir == null ? workDir : dir; }
     private File runtimeAliases() throws Exception {
         File bin = new File(context.getFilesDir(), "runtime-bin");
-        if (!bin.isDirectory() && !bin.mkdirs()) throw new IOException("명령 경로를 만들 수 없습니다.");
+        if (!bin.isDirectory() && !bin.mkdirs()) throw new IOException(t("명령 경로를 만들 수 없습니다."));
         for (String[] pair : new String[][]{{"codex", "libcodex.so"}, {"codex-code-mode-host", "libcodexmodehostx.so"}}) {
             File alias = new File(bin, pair[0]);
             String target = new File(context.getApplicationInfo().nativeLibraryDir, pair[1]).getAbsolutePath();
@@ -866,11 +867,11 @@ public final class Engine {
         return bin;
     }
     private void runTerminal(String command) throws Exception {
-        if (terminalProcess != null && terminalProcess.isAlive()) throw new IOException("터미널 명령이 실행 중입니다.");
-        if (command.isBlank()) throw new IOException("명령을 입력해 주세요.");
+        if (terminalProcess != null && terminalProcess.isAlive()) throw new IOException(t("터미널 명령이 실행 중입니다."));
+        if (command.isBlank()) throw new IOException(t("명령을 입력해 주세요."));
         documents.requireWorkspaceAvailable();
         if (documents.workspace().optBoolean("selected") && documents.directDirectory() == null)
-            throw new IOException("이 문서 제공자 폴더에서는 셸을 실행할 수 없습니다. 기기 파일 접근 권한을 확인하거나 일반 대화의 앱 내부 작업 폴더를 사용해 주세요.");
+            throw new IOException(t("이 문서 제공자 폴더에서는 셸을 실행할 수 없습니다. 기기 파일 접근 권한을 확인하거나 일반 대화의 앱 내부 작업 폴더를 사용해 주세요."));
         ProcessBuilder builder = new ProcessBuilder("/system/bin/sh", "-c", command).directory(projectDirectory()).redirectErrorStream(true);
         devTools.configure(builder, codexHome.root(), runtimeAliases());
         Process running = builder.start(); terminalProcess = running;
@@ -879,7 +880,7 @@ public final class Engine {
                 char[] buffer = new char[2048]; int n;
                 while ((n = out.read(buffer)) != -1) event("terminal.output", obj("text", new String(buffer, 0, n)));
                 int code = running.waitFor(); event("terminal.exit", obj("code", code));
-            } catch (Exception e) { event("error", obj("message", "터미널 연결이 종료되었습니다.")); }
+            } catch (Exception e) { event("error", obj("message", t("터미널 연결이 종료되었습니다."))); }
             finally { if (terminalProcess == running) terminalProcess = null; }
         }, "mobile-terminal"); reader.setDaemon(true); reader.start();
     }

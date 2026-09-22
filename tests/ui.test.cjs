@@ -23,6 +23,8 @@ function setup(overrides = {}, options = {}) {
       w.mobileCodexEvent('response',{id:m.id,result});
     } catch(error) { w.mobileCodexEvent('response',{id:m.id,error:error.message}); }
   });}};
+  w.Native.locale = () => JSON.stringify({choice:options.language || 'ko',systemLanguage:options.systemLanguage || 'ko'});
+  w.eval(fs.readFileSync(root+'translations.js','utf8')); w.eval(fs.readFileSync(root+'locale.js','utf8'));
   w.eval(fs.readFileSync(root+'ui-core.js','utf8')); w.eval(fs.readFileSync(root+'app.js','utf8'));
   return {w,calls,responses,snapshot};
 }
@@ -658,4 +660,37 @@ test('edited update source disables old candidate actions and download names its
  const source=w.document.getElementById('update-repository');source.value='other/repo';source.dispatchEvent(new w.Event('input'));
  assert.equal(w.document.getElementById('update-download').disabled,true);assert.equal(w.document.getElementById('update-install').disabled,true);
  assert.equal(w.document.getElementById('update-check').disabled,false);
+});
+
+test('language switch preserves drafts, model content and editor values',async()=>{
+ const {w,snapshot,calls}=setup({}, {language:'ko'});await tick();const d=w.document;
+ const raw='설정 파일 보내기';w.mobileCodexEvent('state',{...snapshot,messages:[{id:'a',role:'assistant',text:raw}]});
+ d.getElementById('prompt').value='기존 초안';d.getElementById('prompt').dispatchEvent(new w.Event('input'));
+ d.getElementById('editor').value='사용자 파일';d.getElementById('instructions-editor').value='기존 지침';
+ d.getElementById('language').value='en';d.getElementById('language').dispatchEvent(new w.Event('change'));await tick();await tick();
+ assert.equal(d.documentElement.lang,'en');assert.match(d.getElementById('settings').textContent,/Settings/);
+ assert.equal(d.getElementById('prompt').value,'기존 초안');assert.equal(d.getElementById('editor').value,'사용자 파일');assert.equal(d.getElementById('instructions-editor').value,'기존 지침');
+ w.mobileCodexEvent('state',{...snapshot,messages:[{id:'a',role:'assistant',text:raw}]});
+ assert.match(d.getElementById('messages').textContent,/설정 파일 보내기/);assert.match(d.getElementById('messages').textContent,/Copy/);
+ assert.match(d.querySelector('[data-prompt]').dataset.prompt,/Look through/);
+ assert.equal(calls.filter(x=>['runtime.stop','runtime.start'].includes(x.action)).length,0);
+ d.getElementById('language').value='ko';d.getElementById('language').dispatchEvent(new w.Event('change'));await tick();await tick();
+ assert.equal(d.getElementById('prompt').value,'기존 초안');assert.match(d.getElementById('settings').textContent,/설정/);
+});
+test('system locale defaults to English outside Korean and catalog copies match',async()=>{
+ const {w}=setup({}, {language:'system',systemLanguage:'ja-JP'});await tick();
+ assert.equal(w.document.documentElement.lang,'en');assert.match(w.document.getElementById('prompt').placeholder,/Ask anything/);
+ assert.deepEqual(JSON.parse(JSON.stringify(w.MobileCodexEnglish)), JSON.parse(fs.readFileSync('app/src/main/assets/translations-en.json','utf8')));
+});
+test('inline dictation displays partial text, supports done and cancel, and cannot auto-send',async()=>{
+ const {w,calls}=setup({}, {language:'en'});await tick();const d=w.document;
+ d.getElementById('prompt').value='Existing draft';
+ w.mobileCodexEvent('voice.state',{phase:'listening',partial:'partial voice',level:0.6,elapsedMs:4200});
+ assert.equal(d.getElementById('dictation').hidden,false);assert.match(d.getElementById('dictation-status').textContent,/Listening/);
+ assert.equal(d.getElementById('dictation-preview').textContent,'partial voice');assert.equal(d.getElementById('prompt').value,'Existing draft');assert.equal(d.getElementById('prompt').readOnly,true);
+ d.getElementById('composer').dispatchEvent(new w.Event('submit',{cancelable:true}));await tick();assert.equal(calls.some(x=>x.action==='chat.send'),false);
+ d.getElementById('dictation-done').click();await tick();assert.equal(calls.some(x=>x.action==='voice.stop'),true);
+ w.mobileCodexEvent('voice.state',{phase:'transcribing'});assert.equal(d.getElementById('dictation-done').disabled,true);
+ d.getElementById('dictation-cancel').click();await tick();assert.equal(calls.some(x=>x.action==='voice.cancel'),true);
+ w.mobileCodexEvent('voice.state',{phase:'idle'});assert.equal(d.getElementById('dictation').hidden,true);assert.equal(d.getElementById('prompt').readOnly,false);assert.equal(d.getElementById('prompt').value,'Existing draft');
 });

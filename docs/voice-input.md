@@ -1,19 +1,20 @@
-# Voice input — 0.1.10 alpha
+# Voice input — 0.1.12 alpha
 
-메인 입력창의 **마이크** 또는 플로팅 창의 **음성**을 누르면 Android에 설치된 음성 인식 화면이 열립니다. 기기의 언어 설정을 사용합니다. 인식된 텍스트를 확인·수정한 뒤 **보내기 / 추가 지시**를 누르세요. 음성 결과는 자동 전송하지 않습니다.
+In the main chat, the microphone starts **inline dictation**. The composer displays microphone permission/preparation, listening, and transcription states. It shows actual microphone level and interim text when supplied by the device service. Choose **Done** to stop recording and wait for final transcription, or **Cancel** to discard it. Final text goes into the draft and is never sent automatically.
 
-- 기존 초안이 그대로면 커서 위치에 넣거나 선택 영역을 바꿉니다. 인식 중 초안을 수정했다면 새 텍스트 끝에 덧붙여 수정을 보존합니다.
-- 인식 결과는 시작한 대화·프로젝트에 연결됩니다. 다른 대화로 이동하면 원래 대화의 초안에 저장됩니다. 메인과 플로팅 초안은 각 입력창의 기존 보관 방식을 따릅니다.
-- 결과를 네이티브 저장소에 먼저 기록하고 초안이 저장된 후 확인 처리합니다. Activity/프로세스가 재생성되거나 결과가 다시 전달되어도 이미 적용한 텍스트를 중복 삽입하지 않습니다. 인식 서비스가 결과를 반환하기 전에 중단된 경우에는 다시 음성 입력을 시작해야 합니다.
-- 음성 인식 중에는 플로팅 창을 숨겨 인식 화면을 가리지 않고, 새 휴대폰 화면 읽기·자동 조작을 대기시킵니다. 마친 뒤 플로팅 창을 복원합니다. 이미 실행 중인 시스템 제스처는 즉시 취소할 수 없습니다.
-- 취소하면 기존 초안을 유지합니다. 인식 앱이 없거나 시작할 수 없으면 안내하며 텍스트 입력을 계속 사용할 수 있습니다.
+The first use requests Android microphone permission. Backgrounding/locking the main activity cancels an active recording; returning does not automatically restart it. A permission dialog is allowed to complete without being treated as a recording interruption. Provider silence detection may finish recognition before Done is pressed. Listening is bounded to two minutes, and startup/final-result waits have timeouts. Late results after cancellation cannot be inserted into a new session.
 
-앱은 오디오 파일을 저장하거나 개발자 서버로 보내지 않습니다. Android의 `ACTION_RECOGNIZE_SPEECH`를 처리하는 서비스가 마이크 사용과 인식을 담당하며, 서비스에 따라 네트워크·외부 서버를 사용할 수 있습니다. 오프라인 인식 여부와 지원 언어는 해당 서비스 설정에 따릅니다. 자체 음성 모델·지속 청취·답변 음성 재생은 이번 변경에 포함하지 않습니다.
+Floating chat currently retains Android’s separate recognition screen. Both paths use the same durable result receipts:
+
+- If the draft is unchanged, insert at the original cursor or replace the selected range. If it changed, preserve the edit and append the recognized text.
+- Results belong to the original conversation/project even if the user switches chats.
+- Persist the native receipt before acknowledging it. A recovered receipt must not append twice after process recreation.
+- Recognition blocks new phone automation actions. Cancelling or an error keeps the original draft intact.
+
+Recognition uses Android `SpeechRecognizer` in the main composer and `ACTION_RECOGNIZE_SPEECH` for floating chat. This is not the ChatGPT app’s speech backend. The selected app language is requested for inline recognition; System uses the device locale. The service may send audio to its servers and may require internet access. Accuracy, supported languages, silence handling, and offline availability depend on that provider. Mobile Codex does not save an audio file or send audio to a developer-operated server. Continuous listening, spoken replies, and realtime voice conversation are not implemented.
 
 ## Verification
 
-자동 검사: 결과 텍스트 파싱, 인식 Intent의 언어·모델, 결과 사본의 대화별 보관과 소비자별 확인, Activity 재생성 시 인식 재실행 방지, 자동 조작 대기, 플로팅 창 복귀와 프로젝트 전환, UI 선택 영역 삽입, 수정 보존, 자동 전송 방지, 결과 재전달·중단된 초안 저장 복구.
+Automated checks cover language requests, result parsing, recording states, cancellation/late callbacks, scope-bound receipt recovery, preserving edits, and preventing automatic sends. Physical-device checks remain necessary for microphone permissions, Korean/English recognition, Samsung speech services, silence detection, network loss, rotation, screen lock, and floating chat return behavior.
 
-실기기 확인 항목: 한국어/영어 받아쓰기, 인식 서비스가 없는 기기, 서비스의 마이크 권한 거절, 취소·빈 결과·네트워크 오류, 인식 중 회전·화면 잠금·앱 재생성, 삼성 키보드와 복귀 후 입력, 다른 앱 위의 플로팅 음성 입력과 원래 앱 복귀. 기기별 정확도·서비스 동작을 자동 검사로 검증했다고 간주하지 않습니다.
-
-Reference: [Android RecognizerIntent](https://developer.android.com/reference/android/speech/RecognizerIntent).
+References: [SpeechRecognizer](https://developer.android.com/reference/android/speech/SpeechRecognizer) · [RecognizerIntent](https://developer.android.com/reference/android/speech/RecognizerIntent).
