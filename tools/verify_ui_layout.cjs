@@ -47,6 +47,8 @@ async function open(browser, width, height, theme='light', language='en', extra=
  return {context,page,errors};
 }
 async function checkComposer(page) {
+ await page.locator('#prompt').focus();
+ await page.waitForFunction(()=>document.getElementById('composer')?.classList.contains('composer-expanded'));
  const result=await page.evaluate(()=>{
   const ids=['add-attachment','composer-folder','composer-options','voice-input','send'];
   const bounds=id=>{const r=document.getElementById(id).getBoundingClientRect();return {id,x:r.x,y:r.y,right:r.right,bottom:r.bottom,width:r.width,height:r.height};};
@@ -126,6 +128,8 @@ async function checkSidebar(page,width) {
    assert.deepEqual(errors,[],'Browser errors');await context.close();
   }
   const {context,page}=await open(browser,393,852,'light','en',{reducedMotion:'reduce'});
+  await page.locator('#prompt').focus();
+  await page.waitForFunction(()=>document.getElementById('composer')?.classList.contains('composer-expanded'));
   await page.locator('#composer-options').click();
   assert.equal(await page.locator('#options-dialog').evaluate(el=>getComputedStyle(el).animationName),'none');
   assert.equal(await page.locator('#send').evaluate(el=>getComputedStyle(el).transitionDuration),'0s');
