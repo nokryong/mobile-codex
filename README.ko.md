@@ -1,12 +1,23 @@
 # Mobile Codex
 
+## 설치 전에 확인하세요
+
+Play 프로텍트가 APK 설치를 막는 경우, 다음 순서로 잠시 설정을 바꾸세요.
+
+1. **Google Play 스토어 → 프로필 아이콘 → Play 프로텍트 → 설정**을 엽니다.
+2. **Play 프로텍트로 앱 검사**를 끕니다.
+3. [공식 프로젝트 GitHub 릴리스](https://github.com/nokryong/mobile-codex/releases)의 APK를 설치합니다.
+4. 같은 Play 프로텍트 화면으로 돌아가 검사를 다시 켭니다.
+
+APK를 여는 앱에서 **이 출처 허용**을 별도로 요구할 수 있습니다. Android 버전에 따라 메뉴 이름이 다를 수 있으니 [Google Play 프로텍트 공식 도움말](https://support.google.com/googleplay/answer/2812853?hl=ko)도 확인하세요.
+
 [English](README.md) · **한국어**
 
 **Android 휴대폰과 태블릿에서, 대화부터 파일 작업과 코드 실행까지.**
 
 Codex 데스크톱의 작업 방식을 모바일로 옮기는 개인용 클라이언트입니다. Codex 실행 엔진과 Python·Node.js·Git을 APK에 포함해, Termux 설치나 별도 PC 서버 없이 기기에서 바로 작업할 수 있습니다.
 
-**0.1.16 alpha** · **ARM64 / Android 10 이상** · 제작 [nokryong](https://github.com/nokryong)
+**0.1.17 alpha** · **ARM64 / Android 10 이상** · 제작 [nokryong](https://github.com/nokryong)
 
 [APK 다운로드](https://github.com/nokryong/mobile-codex/releases) · [개발 빌드](https://github.com/nokryong/mobile-codex/actions/workflows/android.yml) · [문제 제보](https://github.com/nokryong/mobile-codex/issues)
 
@@ -39,7 +50,7 @@ Codex 데스크톱의 작업 방식을 모바일로 옮기는 개인용 클라�
 
 | Actions 산출물 | 용도 |
 | --- | --- |
-| **`mobile-codex-update-assets`** | **설치할 때 받을 파일.** ZIP을 풀면 `mobile-codex-0.1.16-alpha-arm64.apk`와 검증 파일이 나옵니다. |
+| **`mobile-codex-update-assets`** | **설치할 때 받을 파일.** ZIP을 풀면 `mobile-codex-0.1.17-alpha-arm64.apk`와 검증 파일이 나옵니다. |
 | `mobile-codex-arm64-debug` | APK·런타임 정보·개발 도구의 대응 소스를 함께 담은 큰 묶음입니다. |
 | `check-reports` | 테스트·Lint 결과와 브라우저 화면 검사·스크린샷입니다. 설치 파일은 없습니다. |
 

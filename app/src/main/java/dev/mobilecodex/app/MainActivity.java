@@ -6,6 +6,7 @@ import android.annotation.SuppressLint;
 import android.app.*;
 import android.content.*;
 import android.content.pm.PackageManager;
+import android.content.res.AssetManager;
 import android.graphics.Color;
 import android.net.Uri;
 import android.provider.Settings;
@@ -26,6 +27,20 @@ import static dev.mobilecodex.app.core.Json.*;
 public final class MainActivity extends Activity implements Engine.Ui {
     static boolean isChatIconPath(String path) {
         return path != null && path.matches("/chat-icons/[0-9]{2}-[a-z]+(?:-[a-z]+)*\\.png");
+    }
+    static boolean isPackagedLogoPath(String path) {
+        return "/codex-logo.png".equals(path);
+    }
+    static WebResourceResponse packagedLogoResponse(AssetManager assets, Uri uri) {
+        if (!"https".equals(uri.getScheme()) || !HOST.equals(uri.getHost()) || !isPackagedLogoPath(uri.getPath())) {
+            return deniedResponse();
+        }
+        try {
+            return new WebResourceResponse("image/png", null, 200, "OK",
+                Map.of("Cache-Control", "private, max-age=86400", "X-Content-Type-Options", "nosniff"), assets.open("web/codex-logo.png"));
+        } catch (Exception e) {
+            return deniedResponse();
+        }
     }
     static boolean isBrowserUri(Uri uri, boolean allowHttp) {
         return ("https".equals(uri.getScheme()) || (allowHttp && "http".equals(uri.getScheme())))
@@ -95,6 +110,9 @@ public final class MainActivity extends Activity implements Engine.Ui {
                         Map.of("Cache-Control", "private, max-age=86400", "X-Content-Type-Options", "nosniff"), getAssets().open("web" + path)); }
                     catch (Exception e) { return denied(); }
                 }
+                if (isPackagedLogoPath(path)) {
+                    return packagedLogoResponse(getAssets(), uri);
+                }
                 if (path == null || !(path.equals("/index.html") || path.equals("/app.css") || path.equals("/app.js") || path.equals("/ui-core.js") || path.equals("/translations.js") || path.equals("/locale.js"))) return denied();
                 String mime = path.endsWith(".css") ? "text/css" : path.endsWith(".js") ? "application/javascript" : "text/html";
                 try {
@@ -135,6 +153,9 @@ public final class MainActivity extends Activity implements Engine.Ui {
         web.loadUrl("https://" + HOST + "/index.html");
     }
     private WebResourceResponse denied() {
+        return deniedResponse();
+    }
+    private static WebResourceResponse deniedResponse() {
         return new WebResourceResponse("text/plain", "UTF-8", 403, "Forbidden", Map.of(), new ByteArrayInputStream(new byte[0]));
     }
     @Override protected void onStart() { super.onStart(); if (loaded) engine.attach(this); }

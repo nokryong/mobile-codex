@@ -1,12 +1,23 @@
 # Mobile Codex
 
+## Before installing
+
+If Play Protect blocks the APK installation, follow these steps temporarily:
+
+1. Open **Google Play Store → profile icon → Play Protect → Settings**.
+2. Turn off **Scan apps with Play Protect**.
+3. Install the APK from the [official project GitHub release](https://github.com/nokryong/mobile-codex/releases).
+4. Return to the same Play Protect screen and turn scanning back on.
+
+The APK-opening app may separately require **Allow from this source**. Menu names can vary by Android version; see [Google's official Play Protect help](https://support.google.com/android/answer/2812853?hl=en).
+
 **English** · [한국어](README.ko.md)
 
 **Use Codex on your Android phone or tablet, with files and tools running on the device.**
 
 Mobile Codex is an independent Android client built around the Codex app-server. It bundles an Android port of Codex, Python, Node.js, and Git, so you do not need to install Termux or keep a separate PC server running.
 
-**0.1.16 alpha** · **ARM64 / Android 10+** · Created by [nokryong](https://github.com/nokryong)
+**0.1.17 alpha** · **ARM64 / Android 10+** · Created by [nokryong](https://github.com/nokryong)
 
 [Download APK](https://github.com/nokryong/mobile-codex/releases) · [Builds](https://github.com/nokryong/mobile-codex/actions/workflows/android.yml) · [Report an issue](https://github.com/nokryong/mobile-codex/issues)
 
@@ -35,7 +46,7 @@ You need an **ARM64 device running Android 10 or later**, an up-to-date Android 
 
 ### Download the APK
 
-Open [Releases](https://github.com/nokryong/mobile-codex/releases) and download **`mobile-codex-0.1.16-alpha-arm64.apk`** from the release assets. Open the APK and follow Android’s installation prompts. If requested, allow installation from the app you used to download/open it.
+Open [Releases](https://github.com/nokryong/mobile-codex/releases) and download **`mobile-codex-0.1.17-alpha-arm64.apk`** from the release assets. Open the APK and follow Android’s installation prompts. If requested, allow installation from the app you used to download/open it.
 
 New app versions are published automatically after the `main` workflow passes its tests, builds, and original-key signature verification. Alpha versions are marked as prereleases. A published version is never silently replaced; maintainers must increment both `versionName` and `versionCode` for the next release.
 
