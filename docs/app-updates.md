@@ -8,9 +8,9 @@
 
 기본 조회 대상은 공개 저장소 `nokryong/mobile-codex`입니다. 로그인 토큰 없이 GitHub Releases API의 최근 20개 릴리스를 확인합니다. 저장소를 `소유자/저장소` 형식으로 변경할 수 있으며, 변경하면 이전 저장소의 설치 후보를 해제합니다. 앱 시작 시에는 저장된 상태·현재 버전만 읽습니다. 사용자 요청 없이 릴리스를 조회하거나 APK를 다운로드하지 않습니다.
 
-지원하는 파일은 `mobile-codex-<version>-arm64.apk`이며, 예시는 `mobile-codex-0.1.11-alpha-arm64.apk`입니다. 버전은 숫자로 비교하고 `alpha`, `beta`, `rc` 및 번호를 지원합니다. GitHub 자산의 `digest`에 SHA-256이 있어야 하고, 파일 크기는 2 GiB 이하여야 합니다. ZIP 묶음, 다른 아키텍처, 초안 릴리스, 해시 없는 자산은 설치 후보로 삼지 않습니다. 시험판 제외 설정이면 시험판 릴리스와 시험판 APK 이름을 모두 제외합니다. 접근 거부·조회 한도·응답 오류·적합한 자산 없음은 최신 버전이라는 뜻으로 표시하지 않습니다.
+지원하는 파일은 `mobile-codex-<version>-arm64.apk`이며, 예시는 `mobile-codex-0.1.12-alpha-arm64.apk`입니다. 버전은 숫자로 비교하고 `alpha`, `beta`, `rc` 및 번호를 지원합니다. GitHub 자산의 `digest`에 SHA-256이 있어야 하고, 파일 크기는 2 GiB 이하여야 합니다. ZIP 묶음, 다른 아키텍처, 초안 릴리스, 해시 없는 자산은 설치 후보로 삼지 않습니다. 시험판 제외 설정이면 시험판 릴리스와 시험판 APK 이름을 모두 제외합니다. 접근 거부·조회 한도·응답 오류·적합한 자산 없음은 최신 버전이라는 뜻으로 표시하지 않습니다.
 
-현재 공개 릴리스가 설치된 개발 버전보다 오래됐다면 그 사실을 표시합니다. CI 빌드 성공이나 main 커밋 자체가 공개 릴리스를 뜻하지 않습니다. 이 변경은 공개 저장소에 릴리스를 생성하거나 업로드하지 않습니다.
+현재 공개 릴리스가 설치된 개발 버전보다 오래됐다면 그 사실을 표시합니다. 새 버전의 main 빌드에서 Publish versioned GitHub release 단계까지 성공해야 릴리스가 게시됩니다. 같은 버전이 이미 게시되어 있으면 파일을 덮어쓰지 않고 건너뜁니다.
 
 ## Verification and installation
 
@@ -31,7 +31,7 @@ python3 tools/prepare_update_release.py --build-tools "$ANDROID_HOME/build-tools
 
 스크립트는 Android `apksigner verify` 성공 후 `aapt2`에서 실제 앱 ID·버전·ABI를 읽고 이름 있는 APK, `.sha256`, `mobile-codex-update.json`을 `artifacts/update`에 만듭니다. JSON은 버전·크기·해시·공개 서명 인증서 지문을 기록합니다. 앱의 다운로드 검증은 GitHub 자산의 `digest`를 사용합니다.
 
-CI의 **mobile-codex-update-assets**에는 같은 파일이 들어 있습니다. 공개 배포할 때는 검토한 APK와 체크섬·메타데이터를 선택한 저장소의 GitHub Release에 업로드하고, 기존 **mobile-codex-arm64-debug** 묶음에 포함되는 대응 소스·라이선스 자료도 함께 배포하세요. 준비 스크립트와 CI는 공개 업로드를 자동 실행하지 않습니다.
+CI의 **mobile-codex-update-assets**에는 같은 파일이 들어 있습니다. main CI는 APK·체크섬·메타데이터와 대응 소스·라이선스를 버전별 GitHub Release에 함께 게시합니다. prepare_update_release.py는 파일 준비만 담당하고, 실제 업로드와 게시에는 publish_release.py를 사용합니다.
 
 ## Actions signing
 

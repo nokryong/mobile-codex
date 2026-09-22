@@ -138,7 +138,7 @@ public final class MainActivity extends Activity implements Engine.Ui {
         return new WebResourceResponse("text/plain", "UTF-8", 403, "Forbidden", Map.of(), new ByteArrayInputStream(new byte[0]));
     }
     @Override protected void onStart() { super.onStart(); if (loaded) engine.attach(this); }
-    @Override protected void onResume() { super.onResume(); foreground = true; event("updates.changed", updates.snapshot()); if (loaded) engine.attach(this); event("voice.changed", obj()); }
+    @Override protected void onResume() { super.onResume(); AppLanguage.configure(this); foreground = true; event("updates.changed", updates.snapshot()); if (loaded) engine.attach(this); event("voice.changed", obj()); }
     @Override protected void onPause() { foreground = false; if (dictation != null && !dictation.waitingPermission()) dictation.cancel(); super.onPause(); }
     @Override protected void onStop() { if (dictation != null) dictation.cancel(); engine.detach(this); super.onStop(); }
     @Override protected void onSaveInstanceState(Bundle out) {
@@ -431,7 +431,7 @@ public final class MainActivity extends Activity implements Engine.Ui {
                     }); return;
                 }
                 if (action.equals("ui.locale")) {
-                    AppLanguage.set(MainActivity.this, args.optString("language", "system")); engine.attach(MainActivity.this); event("updates.changed", updates.snapshot()); respond(id, AppLanguage.snapshot(MainActivity.this), null); return;
+                    AppLanguage.set(MainActivity.this, args.optString("language", "system")); event("updates.changed", updates.snapshot()); respond(id, AppLanguage.snapshot(MainActivity.this), null); return;
                 }
                 if (action.equals("ui.theme")) {
                     String choice = args.optString("theme", "system");
