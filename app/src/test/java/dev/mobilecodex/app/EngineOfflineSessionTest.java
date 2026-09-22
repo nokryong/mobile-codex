@@ -16,6 +16,7 @@ import java.io.File;
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.util.Base64;
 import java.lang.reflect.Method;
 import java.util.concurrent.*;
 import static dev.mobilecodex.app.core.Json.*;
@@ -94,11 +95,23 @@ public class EngineOfflineSessionTest {
         readAccount.invoke(engine); String target = profiles.activeKey(); assertNotEquals(previous, target);
         profiles.switchTo(previous);
         engine.setTestTransport((method, params) -> {
-            if (method.equals("account/read")) return obj("account", profiles.activeKey().equals(target)
-                ? obj("type", "chatgpt", "email", "two@example.test", "planType", "pro")
-                : obj("type", "chatgpt", "email", "one@example.test", "planType", "plus"));
-            if (method.equals("account/rateLimits/read") && profiles.activeKey().equals(target)) throw new java.io.IOException("401 token_revoked");
-            if (method.equals("account/rateLimits/read")) return obj("rateLimits", obj("primary", obj("usedPercent", 1)));
+            if (method.equals("account/read")) {
+                // The active marker remains on the previous profile until
+                // validation commits. Identify the staged account from the
+                // live credential that stageSwitch copied instead.
+                String raw = new String(Files.readAllBytes(auth.toPath()), StandardCharsets.UTF_8);
+                return obj("account", raw.contains("opaque-two")
+                    ? obj("type", "chatgpt", "email", "two@example.test", "planType", "pro")
+                    : obj("type", "chatgpt", "email", "one@example.test", "planType", "plus"));
+            }
+            if (method.equals("account/rateLimits/read")) {
+                // The staged target is intentionally not active yet. Validate
+                // the credential that was copied into live auth.json rather
+                // than observing the old active marker.
+                String raw = new String(Files.readAllBytes(auth.toPath()), StandardCharsets.UTF_8);
+                if (raw.contains("opaque-two")) throw new java.io.IOException("401 token_revoked");
+                return obj("rateLimits", obj("primary", obj("usedPercent", 1)));
+            }
             throw new AssertionError(method);
         });
         engine.setTestAccountValidation(true); setField(engine, "account", obj("type", "chatgpt", "email", "one@example.test"));
@@ -173,16 +186,19 @@ public class EngineOfflineSessionTest {
         });
         readAccount.invoke(engine);
         String a = profiles.activeKey();
+        assertFalse("initial login must create a profile", a.isBlank());
         login[0] = "b"; beginLogin.invoke(engine, true);
         File pendingB = engine.processHomeForTest(); assertNotEquals(auth.getParentFile().getAbsolutePath(), pendingB.getAbsolutePath());
         writeNamedAuth(new File(pendingB, "auth.json"), "b@example.test", "token-b-0");
         notification.invoke(engine, "account/login/completed", obj("success", true));
         String b = profiles.activeKey(); assertNotEquals(a, b);
+        assertFalse("second login must create a profile", b.isBlank());
         login[0] = "c"; beginLogin.invoke(engine, true);
         File pendingC = engine.processHomeForTest();
         writeNamedAuth(new File(pendingC, "auth.json"), "c@example.test", "token-c-0");
         notification.invoke(engine, "account/login/completed", obj("success", true));
         String c = profiles.activeKey(); assertNotEquals(b, c);
+        assertFalse("third login must create a profile", c.isBlank());
 
         engine.setTestAccountValidation(true);
         for (String key : new String[]{a, b, c, a, b}) {
@@ -257,7 +273,13 @@ public class EngineOfflineSessionTest {
     private static JSONObject accountFor(String name) { return obj("type", "chatgpt", "email", name + "@example.test", "planType", "plus"); }
     private static void writeNamedAuth(File file, String email, String token) throws Exception {
         File parent = file.getParentFile(); if (parent != null) parent.mkdirs();
-        Files.write(file.toPath(), obj("tokens", obj("access_token", token)).toString().getBytes(StandardCharsets.UTF_8));
+        JSONObject claims = obj("email", email, "sub", "subject-" + email,
+            "https://api.openai.com/auth", obj("chatgpt_account_id", "account-" + email,
+                "chatgpt_plan_type", "plus"));
+        String payload = Base64.getUrlEncoder().withoutPadding().encodeToString(claims.toString().getBytes(StandardCharsets.UTF_8));
+        JSONObject auth = obj("tokens", obj("id_token", "x." + payload + ".id-signature",
+            "access_token", "x." + payload + "." + token, "account_id", "account-" + email));
+        Files.write(file.toPath(), auth.toString().getBytes(StandardCharsets.UTF_8));
     }
     private JSONObject handle(Engine engine, String action, JSONObject args) throws Exception {
         CompletableFuture<JSONObject> done = new CompletableFuture<>();
