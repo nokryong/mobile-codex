@@ -819,7 +819,6 @@ window.MobileCodexEnglish = {
   "아래로 끌거나 눌러서 닫기": "Drag down or press to close",
   "계정과 사용 한도": "Accounts and usage limits",
   "등록된 계정": "Saved account",
-  "계정마다 로그인과 대화 기록을 분리합니다.": "Sign-in and chat history stay separate for each account.",
   "계정 추가": "Add account",
   "현재 계정 로그아웃": "Sign out current account",
   "사용 한도 정보 없음": "Usage limit unavailable",

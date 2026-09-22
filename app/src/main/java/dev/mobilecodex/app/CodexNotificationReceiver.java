@@ -18,9 +18,7 @@ public final class CodexNotificationReceiver extends BroadcastReceiver {
         if (!ACTION.equals(intent.getAction())) return;
         var prefs = context.getSharedPreferences("notifications", 0);
         String threadId = intent.getStringExtra("threadId");
-        boolean sameVisibleThread = prefs.getBoolean("foreground", false)
-            && (threadId == null || threadId.equals(prefs.getString("visibleThread", "")));
-        if (!prefs.getBoolean("enabled", true) || sameVisibleThread) return;
+        if (!prefs.getBoolean("enabled", true)) return;
         if (Build.VERSION.SDK_INT >= 33 && context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) return;
         String kind = intent.getStringExtra("kind");
         String title = intent.getStringExtra("title");

@@ -164,7 +164,7 @@ public final class MainActivity extends Activity implements Engine.Ui {
         return new WebResourceResponse("text/plain", "UTF-8", 403, "Forbidden", Map.of(), new ByteArrayInputStream(new byte[0]));
     }
     @Override protected void onStart() { super.onStart(); if (loaded) engine.attach(this); }
-    @Override protected void onResume() { super.onResume(); AppLanguage.configure(this); foreground = true; getSharedPreferences("notifications", 0).edit().putBoolean("foreground", true).commit(); event("notifications.changed", obj()); event("updates.changed", updates.snapshot()); if (loaded) engine.attach(this); event("voice.changed", obj()); }
+    @Override protected void onResume() { super.onResume(); AppLanguage.configure(this); foreground = true; getSharedPreferences("notifications", 0).edit().putBoolean("foreground", true).commit(); requestNotificationPermissionIfNeeded(); event("notifications.changed", obj()); event("updates.changed", updates.snapshot()); if (loaded) engine.attach(this); event("voice.changed", obj()); }
     @Override protected void onPause() { foreground = false; getSharedPreferences("notifications", 0).edit().putBoolean("foreground", false).commit(); if (dictation != null && !dictation.waitingPermission()) dictation.cancel(); super.onPause(); }
     @Override protected void onNewIntent(Intent intent) { super.onNewIntent(intent); setIntent(intent); handleNotificationIntent(intent); }
     private void handleNotificationIntent(Intent intent) {
@@ -204,6 +204,15 @@ public final class MainActivity extends Activity implements Engine.Ui {
         if (code == MICROPHONE_PERMISSION) {
             if (grants.length > 0 && grants[0] == PackageManager.PERMISSION_GRANTED) dictation.start(); else dictation.denied();
         } else if (code == 41) event("notifications.changed", obj());
+    }
+    private void requestNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT < 33) return;
+        var preferences = getSharedPreferences("notifications", 0);
+        if (!preferences.getBoolean("enabled", true)
+            || preferences.getBoolean("permissionAsked", false)
+            || checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) return;
+        preferences.edit().putBoolean("permissionAsked", true).apply();
+        requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 41);
     }
     private void applyTheme(String choice) {
         theme = choice;
@@ -442,9 +451,12 @@ public final class MainActivity extends Activity implements Engine.Ui {
                 }
                 if (action.equals("notifications.configure")) {
                     boolean enabled = args.optBoolean("enabled", true), vibration = args.optBoolean("vibration", true);
-                    getSharedPreferences("notifications", 0).edit().putBoolean("enabled", enabled).putBoolean("vibration", vibration).apply();
-                    if (Build.VERSION.SDK_INT >= 33 && enabled && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
+                    var notificationPreferences = getSharedPreferences("notifications", 0);
+                    notificationPreferences.edit().putBoolean("enabled", enabled).putBoolean("vibration", vibration).apply();
+                    if (Build.VERSION.SDK_INT >= 33 && enabled && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                        notificationPreferences.edit().putBoolean("permissionAsked", true).apply();
                         runOnUiThread(() -> requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 41));
+                    }
                     if (Build.VERSION.SDK_INT >= 26) getSystemService(NotificationManager.class).deleteNotificationChannel(CodexNotificationReceiver.CHANNEL);
                     respond(id, obj("enabled", enabled, "vibration", vibration), null); return;
                 }
