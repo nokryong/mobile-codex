@@ -544,3 +544,118 @@ test('removing a project keeps its conversations and draft scope in the detached
  assert.match(d.querySelector('.detached-projects').textContent,/연결 해제된 프로젝트/);assert.match(d.querySelector('.detached-projects').textContent,/보존 대화/);assert.equal(w.localStorage.getItem(draft),'첨부와 초안');
  d.querySelector('.detached-projects .session').click();await tick();assert.deepEqual(calls.filter(c=>c.action==='chat.resume').at(-1).args,{id:'old'});
 });
+
+test('phone control requires native consent and does not enable on service connection',async()=>{
+ const {w,calls,snapshot}=setup({'ui.phoneEnable':()=>({cancelled:true})});await tick();
+ w.mobileCodexEvent('state',{...snapshot,phone:{connected:true,enabled:false,status:'접근성 연결됨',screenshotsSupported:true},phoneToolsAvailable:false});
+ assert.equal(calls.some(c=>c.action==='ui.phoneEnable'),false);
+ assert.equal(w.document.getElementById('phone-thread-note').hidden,false);
+ w.document.getElementById('phone-enable').click();await tick();
+ assert.equal(calls.filter(c=>c.action==='ui.phoneEnable').length,1);
+ assert.equal(w.document.getElementById('phone-stop-banner').hidden,true);
+ w.document.getElementById('phone-settings').click();await tick();
+ assert.equal(calls.some(c=>c.action==='ui.phoneSettings'),true);
+});
+test('phone emergency stop remains visible and stops without ending a chat or losing its draft',async()=>{
+ const {w,calls,snapshot}=setup();await tick();
+ w.document.getElementById('prompt').value='keep my draft';
+ w.mobileCodexEvent('state',{...snapshot,busy:true,phone:{connected:true,enabled:true,status:'휴대폰 제어 켜짐',screenshotsSupported:false},phoneToolsAvailable:true});
+ assert.equal(w.document.getElementById('phone-stop-banner').hidden,false);
+ assert.match(w.document.getElementById('phone-screenshot-note').textContent,/Android 10/);
+ w.document.getElementById('phone-stop-banner').click();await tick();
+ assert.equal(calls.some(c=>c.action==='phone.stop'),true);
+ assert.equal(calls.some(c=>c.action==='runtime.stop'),false);
+ assert.equal(w.document.getElementById('phone-stop-banner').hidden,true);
+ assert.equal(w.document.getElementById('prompt').value,'keep my draft');
+});
+
+test('busy composer steers the exact active turn and retains rejected instructions',async()=>{
+ const {w,calls,snapshot}=setup({'chat.steer':async()=>{throw new Error('turn already completed');}});await tick();
+ w.mobileCodexEvent('state',{...snapshot,busy:true,turnId:'active-turn'});
+ const prompt=w.document.getElementById('prompt');prompt.value='색만 바꿔';prompt.dispatchEvent(new w.Event('input'));assert.equal(w.document.getElementById('send').disabled,false);assert.equal(w.document.getElementById('send').hidden,false);
+ w.document.getElementById('composer').dispatchEvent(new w.Event('submit',{cancelable:true}));await tick();
+ const call=calls.find(x=>x.action==='chat.steer');assert.equal(call.args.expectedTurnId,'active-turn');assert.equal(call.args.expectedThreadId,'t');assert.equal(prompt.value,'색만 바꿔');assert.equal(calls.some(x=>x.action==='chat.send'),false);
+});
+test('change preview renders file text safely and restore uses its exact token and project',async()=>{
+ const {w,calls,snapshot}=setup({'changes.list':()=>({entries:[{path:'a.txt',status:' M'}]}),'changes.preview':()=>({path:'a.txt',token:'review-1',before:'old',after:'<img src=x onerror=alert(1)>',canRestore:true,actionLabel:'복원'})});await tick();
+ w.mobileCodexEvent('state',{...snapshot,workspace:{selected:true,key:'project-a'}});w.document.getElementById('show-changes').click();await tick();
+ w.document.querySelector('#changes-list button').click();await tick();assert.equal(w.document.querySelectorAll('#change-diff img').length,0);assert.match(w.document.getElementById('change-diff').textContent,/<img/);
+ w.document.getElementById('change-restore').click();await tick();const r=calls.find(x=>x.action==='changes.restore');assert.equal(r.args.token,'review-1');assert.equal(r.args.workspaceKey,'project-a');
+});
+test('late change previews cannot restore into a switched project',async()=>{
+ let resolve;const {w,calls,snapshot}=setup({'changes.list':()=>({entries:[{path:'a.txt'}]}),'changes.preview':()=>new Promise(r=>resolve=r)});await tick();
+ w.mobileCodexEvent('state',{...snapshot,workspace:{selected:true,key:'a'}});w.document.getElementById('show-changes').click();await tick();w.document.querySelector('#changes-list button').click();await tick();
+ w.mobileCodexEvent('state',{...snapshot,workspace:{selected:true,key:'b'}});resolve({path:'a.txt',token:'old',canRestore:true,before:'one',after:'two'});await tick();
+ assert.equal(w.document.getElementById('change-preview').hidden,true);assert.equal(w.document.getElementById('change-restore').disabled,true);assert.equal(calls.some(x=>x.action==='changes.restore'),false);
+});
+test('floating chat requires an accessibility connection but not armed phone control',async()=>{
+ const {w,calls,snapshot}=setup();await tick();w.mobileCodexEvent('state',{...snapshot,phone:{connected:false,enabled:false}});assert.equal(w.document.getElementById('floating-chat').disabled,true);
+ w.mobileCodexEvent('state',{...snapshot,phone:{connected:true,enabled:false}});w.document.getElementById('floating-chat').click();await tick();assert.equal(calls.some(x=>x.action==='ui.floatingChat'),true);assert.equal(calls.some(x=>x.action==='ui.phoneEnable'),false);
+});
+
+test('voice input captures selection, fills the draft and never sends automatically',async()=>{
+ let receipts=[];const {w,calls}=setup({'voice.recover':()=>({receipts,active:false})});await tick();
+ const prompt=w.document.getElementById('prompt');prompt.value='old draft';prompt.setSelectionRange(0,3);prompt.dispatchEvent(new w.Event('input'));
+ w.document.getElementById('voice-input').click();await tick();
+ const request=calls.find(c=>c.action==='voice.start').args;assert.equal(request.original,'old draft');assert.equal(request.start,0);assert.equal(request.end,3);
+ receipts=[{...request,origin:'main',receiptId:'v1',text:'새 음성'}];w.mobileCodexEvent('voice.changed',{});await tick();
+ assert.equal(prompt.value,'새 음성 draft');assert.equal(calls.filter(c=>c.action==='chat.send'||c.action==='chat.steer').length,0);
+ assert.equal(calls.filter(c=>c.action==='voice.ack').length,1);
+ w.mobileCodexEvent('voice.changed',{});await tick();assert.equal(prompt.value,'새 음성 draft');assert.equal(calls.filter(c=>c.action==='voice.ack').length,1);
+});
+test('voice results stay with the original conversation after a project switch',async()=>{
+ let receipts=[];const {w,snapshot,calls}=setup({'voice.recover':()=>({receipts})});await tick();
+ const prompt=w.document.getElementById('prompt');prompt.value='A';prompt.setSelectionRange(1,1);prompt.dispatchEvent(new w.Event('input'));
+ w.document.getElementById('voice-input').click();await tick();const request=calls.find(c=>c.action==='voice.start').args;
+ w.mobileCodexEvent('state',{...snapshot,threadId:'other',workspace:{key:'other-project',name:'Other'}});prompt.value='B';prompt.dispatchEvent(new w.Event('input'));
+ receipts=[{...request,origin:'main',receiptId:'v2',text:' 원래 요청'}];w.mobileCodexEvent('voice.changed',{});await tick();
+ assert.equal(prompt.value,'B');assert.equal(w.localStorage.getItem('draft:'+request.scope),'A 원래 요청');
+ w.mobileCodexEvent('state',snapshot);assert.equal(prompt.value,'A 원래 요청');
+});
+test('voice errors, cancellation and edits during recognition preserve the current draft',async()=>{
+ let receipts=[];const {w,calls}=setup({'voice.recover':()=>({receipts})});await tick();
+ const prompt=w.document.getElementById('prompt');prompt.value='before';prompt.dispatchEvent(new w.Event('input'));
+ w.document.getElementById('voice-input').click();await tick();const request=calls.find(c=>c.action==='voice.start').args;
+ prompt.value='edited';prompt.dispatchEvent(new w.Event('input'));
+ receipts=[{...request,origin:'main',receiptId:'v3',text:'dictation'}];w.mobileCodexEvent('voice.changed',{});await tick();assert.equal(prompt.value,'edited\ndictation');
+ receipts=[{...request,origin:'main',receiptId:'v4',text:'',error:'인식 서비스 없음'},{...request,origin:'main',receiptId:'v5',text:'',cancelled:true}];w.mobileCodexEvent('voice.changed',{});await tick();
+ assert.equal(prompt.value,'edited\ndictation');assert.match(w.document.getElementById('toast').textContent,/인식 서비스 없음/);assert.equal(w.document.getElementById('voice-input').disabled,false);
+});
+test('interrupted voice receipt application recovers without appending twice',async()=>{
+ const scope=C.draftKey('/test/project','t'),receipt={scope,origin:'main',receiptId:'recovered',original:'before',start:6,end:6,text:' voice'};
+ const {w,calls}=setup({'voice.recover':()=>({receipts:[receipt]})},{drafts:{['draft:'+scope]:'before voice',['voice-receipt:recovered']:JSON.stringify({before:'before',after:'before voice'})}});await tick();await tick();
+ assert.equal(w.document.getElementById('prompt').value,'before voice');assert.equal(calls.filter(c=>c.action==='voice.ack').length,1);
+});
+
+test('updates load local version without automatically checking or downloading',async()=>{
+ const {w,calls}=setup({'updates.state':()=>({versionName:'0.1.11-alpha',versionCode:12,repository:'nokryong/mobile-codex',prereleases:true,status:'idle',revision:1})});await tick();
+ assert.equal(w.document.getElementById('app-version').textContent,'0.1.11-alpha');assert.equal(calls.filter(c=>['updates.check','updates.download','updates.install'].includes(c.action)).length,0);
+ const field=w.document.getElementById('update-repository');field.value='other/repo';field.dispatchEvent(new w.Event('input'));
+ w.mobileCodexEvent('updates.changed',{revision:2,status:'idle',repository:'old/repo'});assert.equal(field.value,'other/repo');
+ w.document.getElementById('update-check').click();await tick();assert.equal(calls.find(c=>c.action==='updates.configure').args.repository,'other/repo');assert.equal(calls.filter(c=>c.action==='updates.check').length,1);
+});
+test('update progress cannot regress and installation requires explicit permission and click',async()=>{
+ const {w,calls,snapshot}=setup();await tick();const candidate={versionName:'0.1.12-alpha',size:100,notes:'<script>bad</script>'};
+ w.mobileCodexEvent('updates.changed',{revision:3,status:'downloading',candidate,busy:true,received:50,canCancel:true});assert.equal(w.document.getElementById('update-progress').value,50);assert.equal(w.document.getElementById('update-cancel').hidden,false);
+ w.mobileCodexEvent('updates.changed',{revision:2,status:'idle'});assert.equal(w.document.getElementById('update-progress').value,50);assert.equal(w.document.querySelectorAll('#update-notes script').length,0);
+ w.mobileCodexEvent('updates.changed',{revision:4,status:'ready',candidate,ready:true,available:true,canInstall:false});assert.equal(w.document.getElementById('update-install').disabled,true);
+ w.document.getElementById('update-permission').click();await tick();assert.equal(calls.filter(c=>c.action==='updates.install').length,0);
+ w.mobileCodexEvent('updates.changed',{revision:5,status:'ready',candidate,ready:true,canInstall:true});w.mobileCodexEvent('state',{...snapshot,busy:true});assert.equal(w.document.getElementById('update-install').disabled,true);
+ w.mobileCodexEvent('state',{...snapshot,busy:false});w.document.getElementById('update-install').click();await tick();assert.equal(calls.filter(c=>c.action==='updates.install').length,1);
+});
+test('update cancellation and signature errors never offer automatic installation',async()=>{
+ const {w,calls}=setup({'updates.cancel':()=>({revision:3,status:'cancelled',message:'취소했습니다',busy:false})});await tick();
+ w.mobileCodexEvent('updates.changed',{revision:2,status:'downloading',busy:true,canCancel:true});w.document.getElementById('update-cancel').click();await tick();assert.equal(w.document.getElementById('update-status').textContent,'취소했습니다');
+ w.mobileCodexEvent('updates.changed',{revision:4,status:'error',message:'서명키가 다릅니다. <b>삭제하지 마세요</b>',available:true,candidate:{versionName:'0.1.12-alpha',size:200},ready:false});
+ assert.equal(w.document.getElementById('update-install').hidden,true);assert.equal(w.document.querySelectorAll('#update-status b').length,0);assert.equal(calls.filter(c=>c.action==='updates.install').length,0);
+});
+
+test('edited update source disables old candidate actions and download names its hash',async()=>{
+ const {w,calls}=setup();await tick();const candidate={versionName:'0.1.12-alpha',size:100,sha256:'ab'.repeat(32)};
+ w.mobileCodexEvent('updates.changed',{revision:1,status:'available',candidate,available:true,repository:'owner/repo'});
+ w.document.getElementById('update-download').click();await tick();assert.equal(calls.find(c=>c.action==='updates.download').args.sha256,candidate.sha256);
+ w.mobileCodexEvent('updates.changed',{revision:2,status:'ready',candidate,available:true,ready:true,canInstall:true});
+ const source=w.document.getElementById('update-repository');source.value='other/repo';source.dispatchEvent(new w.Event('input'));
+ assert.equal(w.document.getElementById('update-download').disabled,true);assert.equal(w.document.getElementById('update-install').disabled,true);
+ assert.equal(w.document.getElementById('update-check').disabled,false);
+});

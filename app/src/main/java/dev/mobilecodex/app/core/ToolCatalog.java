@@ -28,6 +28,7 @@ public final class ToolCatalog {
             obj("path", str("Existing relative path"), "destination", str("Relative destination directory")), "path", "destination"));
         out.put(tool("mobile_delete", "Delete a file or directory from the selected folder. For files up to 32 MiB the app also saves a recovery copy. Directory deletion is recursive when supported by the provider.",
             obj("path", str("Relative path")), "path"));
+        PhoneToolCatalog.append(out);
         return out;
     }
     private static JSONObject str(String description) { return obj("type", "string", "description", description); }
@@ -50,5 +51,5 @@ public final class ToolCatalog {
         "Python, Node.js, npm, pip and Git are bundled on PATH. Native third-party pip/npm extensions require Android-compatible binaries; there is no bundled compiler. " +
         "Use the app-private $HOME/workspace for projects needing executable scripts or symlinks; Android shared storage can prohibit them. " +
         "Git HTTPS requires user-supplied credentials; do not assume interactive terminal input is available. " +
-        "Check tool results and do not assume arbitrary desktop executables work on Android.";
+        "Check tool results and do not assume arbitrary desktop executables work on Android." + PhoneToolCatalog.INSTRUCTIONS;
 }

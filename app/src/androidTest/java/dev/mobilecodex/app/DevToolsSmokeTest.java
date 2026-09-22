@@ -31,7 +31,8 @@ public class DevToolsSmokeTest {
         for (String[] command : new String[][]{
                 {"npm", "run", "test", "--offline"}, {"git", "init"}, {"git", "add", "."},
                 {"git", "-c", "user.name=Runtime Test", "-c", "user.email=test@example.invalid", "commit", "-m", "offline smoke"},
-                {"git", "log", "-1", "--oneline"}}) {
+                {"git", "log", "-1", "--oneline"},
+                {"git", "grep", "-P", "^o(?=k)", "--", "result.txt"}}) {
             command[0] = new File(prefix, "bin/" + command[0]).getAbsolutePath();
             ProcessBuilder builder = new ProcessBuilder(command).directory(project).redirectErrorStream(true);
             tools.configure(builder, project, project);

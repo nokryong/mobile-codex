@@ -371,6 +371,13 @@ public final class DocumentStore {
             }
             default -> throw new IOException("지원하지 않는 작업입니다.");
         }
+        if (!recoveryId.isEmpty()) {
+            File metadata = new File(backups, recoveryId + ".json");
+            JSONObject saved = parse(dev.mobilecodex.app.core.Utf8Files.read(metadata.toPath()));
+            if (m.operation.equals("mobile_write")) saved.put("afterSha256", WorkspacePath.hash(bytes(resolve(path), TEXT_LIMIT)));
+            else if (m.operation.equals("mobile_delete")) saved.put("afterMissing", true);
+            saved.put("completed", true); dev.mobilecodex.app.core.Utf8Files.write(metadata.toPath(), saved.toString());
+        }
         return obj("ok", true, "operation", m.operation, "path", path, "recoveryId", recoveryId);
     }
     private void write(Uri uri, byte[] data) throws IOException {
@@ -402,6 +409,33 @@ public final class DocumentStore {
             if (out.length() >= 100) break;
         }
         return out;
+    }
+    private JSONObject recoveryMetadata(String id) throws Exception {
+        requireTree();
+        if (!id.matches("[a-f0-9-]{36}")) throw new IOException("잘못된 복구 항목입니다.");
+        JSONObject meta = parse(dev.mobilecodex.app.core.Utf8Files.read(new File(backups, id + ".json").toPath()));
+        if (!tree.toString().equals(meta.optString("tree"))) throw new IOException("다른 프로젝트의 복구 항목입니다.");
+        return meta;
+    }
+    public synchronized JSONObject previewRecovery(String id) throws Exception {
+        JSONObject meta = recoveryMetadata(id); byte[] before = Files.readAllBytes(new File(backups, id + ".bin").toPath());
+        WorkspacePath.requireVersion(meta.getString("sha256"), before);
+        String path = meta.getString("path"), current = "", reason = "", currentHash = "";
+        boolean present = exists(path), canRestore = meta.optBoolean("completed") && before.length <= TEXT_LIMIT;
+        if (present) {
+            byte[] after = bytes(resolve(path), TEXT_LIMIT); current = decode(after); currentHash = WorkspacePath.hash(after);
+            if (!WorkspacePath.hash(after).equals(meta.optString("afterSha256"))) { canRestore = false; reason = "파일이 이후에 변경되었습니다. 사본을 다른 위치에 저장해서 비교해 주세요."; }
+        } else if (!meta.optBoolean("afterMissing")) { canRestore = false; reason = "현재 파일이 없습니다. 사본을 다른 위치에 저장해 주세요."; }
+        if (!meta.optBoolean("completed")) reason = "이전 버전 또는 완료 상태를 확인할 수 없는 사본입니다. 다른 위치에 저장할 수 있습니다.";
+        return obj("id", id, "path", path, "before", before.length <= TEXT_LIMIT ? decode(before) : "[1 MiB보다 큰 사본 · 다른 위치에 저장해 확인하세요]", "after", current, "currentSha256", currentHash, "beforeExists", true, "afterExists", present,
+            "canRestore", canRestore, "actionLabel", "이 사본으로 복원", "note", reason.isEmpty() ? "수정·삭제 직전 사본입니다. 복원 전에 현재 파일을 다시 확인합니다." : reason);
+    }
+    public synchronized JSONObject recoveryMutation(String id) throws Exception {
+        JSONObject preview = previewRecovery(id);
+        if (!preview.getBoolean("canRestore")) throw new IOException(preview.optString("note", "이 사본을 자동 복원할 수 없습니다."));
+        String path = preview.getString("path");
+        if (preview.getBoolean("afterExists")) return obj("operation", "mobile_write", "arguments", obj("path", path, "content", preview.getString("before"), "expectedSha256", preview.getString("currentSha256")));
+        return obj("operation", "mobile_create", "arguments", obj("path", path, "content", preview.getString("before")));
     }
     /** Exports a backup to a fresh user-picked destination; never overwrites the source. */
     public synchronized void exportRecovery(String id, Uri destination) throws Exception {

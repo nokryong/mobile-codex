@@ -36,6 +36,8 @@ public final class Engine {
     public final ExecutorService io = Executors.newSingleThreadExecutor();
     private final ScheduledExecutorService approvalTimer = Executors.newSingleThreadScheduledExecutor();
     private volatile Ui ui;
+    private final Set<Ui> observers = new CopyOnWriteArraySet<>();
+    private final ChangeReview changes;
     private Process process;
     private RpcClient rpc;
     private TestTransport testTransport;
@@ -66,6 +68,7 @@ public final class Engine {
         catch (IOException e) { throw new IllegalStateException("Codex 홈을 준비하지 못했습니다.", e); }
         instructions = new PersonalInstructions(codexHome);
         devTools = new DevTools(context);
+        changes = new ChangeReview(new File(context.getFilesDir(), "change-backups"), this::git);
         workDir = new File(context.getFilesDir(), "workspace"); workDir.mkdirs();
         stateFile = new File(context.getFilesDir(), "sessions.json");
         try { sessions = new JSONArray(dev.mobilecodex.app.core.Utf8Files.read(stateFile.toPath())); } catch (Exception ignored) {}
@@ -80,8 +83,10 @@ public final class Engine {
         });
     }
     public void detach(Ui ui) { if (this.ui == ui) this.ui = null; }
+    public void observe(Ui observer) { observers.add(observer); io.execute(() -> { if (observers.contains(observer)) { observer.event("state", snapshot()); if (pendingApproval != null && !pendingApproval.decision.isDone()) observer.approval(pendingApproval); requests.forEach((key, request) -> observer.event("server.request", obj("key", key, "method", request.method, "params", request.params))); } }); }
+    public void unobserve(Ui observer) { observers.remove(observer); }
     void setTestTransport(TestTransport value) { testTransport = value; }
-    private void event(String name, JSONObject data) { Ui current = ui; if (current != null) current.event(name, data); }
+    private void event(String name, JSONObject data) { Ui current = ui; if (current != null) current.event(name, data); for (Ui observer : observers) if (observer != current) observer.event(name, data); }
     private JSONObject snapshot() {
         JSONArray summaries = new JSONArray();
         for (int i = sessions.length() - 1; i >= 0; i--) {
@@ -91,8 +96,9 @@ public final class Engine {
         }
         return obj("ready", ready, "busy", busy, "status", status, "account", account,
             "models", models, "workspace", documents.workspace(), "projects", documents.projects(), "sessions", summaries,
-            "threadId", threadId, "messages", active == null ? new JSONArray() : active.optJSONArray("messages"),
+            "threadId", threadId, "turnId", turnId, "turnDiff", active == null ? "" : active.optString("turnDiff"), "messages", active == null ? new JSONArray() : active.optJSONArray("messages"),
             "pendingDeletionCount", pendingDeletionCount(), "devtools", devTools.status(),
+            "phone", PhoneUseService.status(context), "phoneToolsAvailable", active == null || active.optInt("phoneToolsVersion") >= 1,
             "permissions", permissionMode, "allFilesAccess", (Build.VERSION.SDK_INT >= 30 ? Environment.isExternalStorageManager() : context.checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE) == android.content.pm.PackageManager.PERMISSION_GRANTED),
             "directWorkspace", documents.directDirectory() != null, "cwd", projectDirectory().getAbsolutePath());
     }
@@ -140,11 +146,18 @@ public final class Engine {
         }
         if (changed) persist();
     }
+    public void updatesChanged(JSONObject data) { event("updates.changed", data); }
+    public boolean canInstallUpdate() { return !busy && !VoiceInput.active() && (terminalProcess == null || !terminalProcess.isAlive()); }
+    public void voiceInputChanged() { event("voice.changed", obj()); }
+    public void phoneStateChanged() { io.execute(this::publish); }
     public void handle(String action, JSONObject args, Reply reply) {
+        // Never queue consent revocation behind a slow engine/tool operation.
+        if (Set.of("phone.stop", "chat.stop", "runtime.stop", "auth.logout").contains(action)) PhoneUseService.stopControl();
         io.execute(() -> {
             try {
                 switch (action) {
                     case "state" -> reply.complete(snapshot(), null);
+                    case "phone.stop" -> { publish(); reply.complete(snapshot(), null); }
                     case "runtime.start" -> { start(); reply.complete(snapshot(), null); }
                     case "devtools.check" -> { JSONObject result = devTools.check(codexHome.root(), runtimeAliases()); publish(); reply.complete(result, null); }
                     case "runtime.stop" -> { stopNow(); reply.complete(snapshot(), null); }
@@ -187,11 +200,24 @@ public final class Engine {
                     case "images.read" -> reply.complete(readImage(args.getString("path")), null);
                     case "files.mutate" -> mutate(args.getString("operation"), args.getJSONObject("arguments"), true, reply);
                     case "recovery.list" -> reply.complete(obj("entries", documents.recoveryList()), null);
+                    case "recovery.preview" -> { requireScope(args); reply.complete(documents.previewRecovery(args.getString("id")), null); }
+                    case "recovery.restore" -> { ensureIdle(); requireScope(args); JSONObject restore = documents.recoveryMutation(args.getString("id")); mutate(restore.getString("operation"), restore.getJSONObject("arguments"), true, reply); }
+                    case "changes.list" -> { requireScope(args); reply.complete(changes.list(reviewDirectory()), null); }
+                    case "changes.history" -> { requireScope(args); reply.complete(obj("entries", changes.history(reviewDirectory())), null); }
+                    case "changes.preview" -> { requireScope(args); reply.complete(changes.preview(reviewDirectory(), args.getString("path")), null); }
+                    case "changes.backupPreview" -> { requireScope(args); reply.complete(changes.previewBackup(reviewDirectory(), args.getString("id")), null); }
+                    case "changes.restore" -> {
+                        ensureIdle(); requireScope(args);
+                        if (permissionMode.equals("read-only")) throw new IOException("읽기 전용 모드에서는 복원할 수 없습니다.");
+                        if (terminalProcess != null && terminalProcess.isAlive()) throw new IOException("실행 중인 터미널 명령을 먼저 중지해 주세요.");
+                        JSONObject result = changes.restore(reviewDirectory(), args.getString("token")); event("files.changed", result); reply.complete(result, null);
+                    }
                     case "projects.select" -> { ensureIdle(); documents.selectProject(args.optString("key", "")); clearActive(); publish(); reply.complete(snapshot(), null); }
                     case "projects.remove" -> { ensureIdle(); String key = args.getString("key"); boolean current = key.equals(documents.key()); JSONObject removed = documents.removeProject(key); if (current) clearActive(); publish(); reply.complete(removed, null); }
                     case "documents.projects" -> reply.complete(obj("projects", documents.projects()), null);
-                    case "chat.send" -> { send(args.optString("text", ""), args.optString("model", ""), args.optString("effort", ""),
+                    case "chat.send" -> { requireChatScope(args); send(args.optString("text", ""), args.optString("model", ""), args.optString("effort", ""),
                         args.optJSONArray("attachments"), args.optJSONArray("skills"), args.optJSONArray("mentions")); reply.complete(obj("ok", true), null); }
+                    case "chat.steer" -> { steer(args); reply.complete(obj("ok", true), null); }
                     case "chat.new" -> {
                         ensureIdle();
                         String key = args.has("workspaceKey") ? args.optString("workspaceKey", "") : documents.key();
@@ -277,6 +303,7 @@ public final class Engine {
                         int exitCode = -1;
                         try { exitCode = launched.exitValue(); } catch (IllegalThreadStateException ignored) { }
                         if (launched.isAlive()) launched.destroyForcibly();
+                        PhoneUseService.stopControl();
                         process = null; rpc = null;
                         requests.forEach((key, value) -> event("server.resolved", obj("key", key)));
                         requests.clear();
@@ -292,7 +319,7 @@ public final class Engine {
                 }
             });
             rpc.start();
-            call("initialize", obj("clientInfo", obj("name", "mobile_codex", "title", "Mobile Codex", "version", "0.1.7"),
+            call("initialize", obj("clientInfo", obj("name", "mobile_codex", "title", "Mobile Codex", "version", "0.1.11"),
                 "capabilities", obj("experimentalApi", true)));
             rpc.notify("initialized", new JSONObject());
             ready = true; status = "연결됨";
@@ -437,6 +464,35 @@ public final class Engine {
         }
         return message;
     }
+    private void requireScope(JSONObject args) throws IOException {
+        if (!args.has("workspaceKey") || !args.optString("workspaceKey").equals(documents.key())) throw new IOException("프로젝트가 바뀌었습니다. 다시 열어 주세요.");
+    }
+    private void requireChatScope(JSONObject args) throws IOException {
+        if (args.has("expectedThreadId") && !args.optString("expectedThreadId").equals(threadId)) throw new IOException("대화가 바뀌었습니다. 현재 대화에서 다시 보내 주세요.");
+        if (args.has("workspaceKey")) requireScope(args);
+    }
+    private void steer(JSONObject args) throws Exception {
+        requireChatScope(args);
+        String text = args.optString("text").trim();
+        if (text.isEmpty() || text.length() > 50000) throw new IOException("추가 지시는 1~50,000자로 입력해 주세요.");
+        if (!busy || turnId.isEmpty() || !turnId.equals(args.optString("expectedTurnId"))) throw new IOException("진행 중인 작업이 변경되거나 종료되었습니다. 새 메시지로 보내 주세요.");
+        JSONArray input = input(text, args.optJSONArray("attachments"), args.optJSONArray("skills"), args.optJSONArray("mentions"));
+        call("turn/steer", obj("threadId", threadId, "expectedTurnId", turnId, "input", input));
+        active.getJSONArray("messages").put(userMessage(text, args.optJSONArray("attachments"), args.optJSONArray("skills"), args.optJSONArray("mentions")));
+        persist(); publish();
+    }
+    private File reviewDirectory() throws IOException {
+        documents.requireWorkspaceAvailable();
+        if (documents.workspace().optBoolean("selected") && documents.directDirectory() == null) throw new IOException("이 폴더는 문서 제공자 전용입니다. 복구 사본에서 파일별 변경을 확인해 주세요.");
+        return projectDirectory();
+    }
+    private byte[] git(File directory, List<String> arguments) throws Exception {
+        File prefix = devTools.prepare();
+        List<String> argv = new ArrayList<>(); argv.add(new File(prefix, "bin/git").getAbsolutePath()); argv.add("--no-pager"); argv.add("--literal-pathspecs"); argv.addAll(arguments);
+        ProcessBuilder builder = new ProcessBuilder(argv).directory(directory);
+        devTools.configure(builder, codexHome.root(), runtimeAliases()); builder.environment().put("GIT_OPTIONAL_LOCKS", "0"); builder.environment().put("GIT_TERMINAL_PROMPT", "0");
+        return ProcessOutput.run(builder, 16 * 1024 * 1024, 15);
+    }
     private void send(String text, String model, String effort, JSONArray attachmentIds, JSONArray skills, JSONArray mentions) throws Exception {
         ensureIdle();
         if (text.length() > 50000) throw new IOException("메시지는 최대 50,000자까지 입력할 수 있습니다.");
@@ -452,7 +508,7 @@ public final class Engine {
             JSONObject thread = call("thread/start", params).getJSONObject("thread");
             candidateThreadId = thread.getString("id");
             candidate = obj("id", candidateThreadId, "title", titleFor(text, attachmentIds), "workspace", documents.workspace().optString("name"),
-                "workspaceKey", documents.key(), "messages", new JSONArray(), "imageHistoryVersion", 1);
+                "workspaceKey", documents.key(), "messages", new JSONArray(), "imageHistoryVersion", 1, "phoneToolsVersion", 1);
         } else {
             if (!active.optString("workspaceKey").equals(documents.key())) throw new IOException("이 대화의 원래 작업 폴더를 다시 연결해 주세요.");
             resumeRemote(false);
@@ -631,6 +687,8 @@ public final class Engine {
                 } else if (completed && item != null && "agentMessage".equals(item.optString("type"))) {
                     message(item.getString("id")).put("text", item.optString("text")); persist(); publish();
                 } else event("agent.event", obj("method", method, "params", p));
+            } else if (method.equals("turn/diff/updated") && active != null) {
+                active.put("turnDiff", p.optString("diff")); persist(); publish();
             } else if (method.equals("turn/started")) {
                 JSONObject turn = p.optJSONObject("turn"); if (turn != null) turnId = turn.optString("id");
                 busy = true; status = "작업 중"; publish();
@@ -667,6 +725,8 @@ public final class Engine {
     }
     private boolean recordImages(JSONObject item, boolean completed, String group) throws Exception {
         String type = item.optString("type");
+        // Observation screenshots are tool context, not generated artwork for the persistent gallery.
+        if (type.equals("dynamicToolCall") && (item.optString("tool").startsWith("mobile_phone_") || item.optString("name").startsWith("mobile_phone_"))) return false;
         boolean generation = type.equals("imageGeneration"), view = type.equals("imageView");
         JSONArray outputs = null;
         if (type.equals("mcpToolCall") && item.optJSONObject("result") != null) outputs = item.getJSONObject("result").optJSONArray("content");
@@ -726,7 +786,11 @@ public final class Engine {
                 throw new IOException("대화의 작업 폴더가 일치하지 않습니다.");
             String tool = p.getString("tool"); JSONObject args = p.getJSONObject("arguments");
             event("tool", obj("name", tool, "path", args.optString("path", args.optString("query", ""))));
-            if (ToolCatalog.WRITE.contains(tool)) {
+            if (PhoneToolCatalog.NAMES.contains(tool)) {
+                if (tool.equals("mobile_phone_action") && permissionMode.equals("read-only"))
+                    throw new IOException("읽기 전용 모드에서는 화면 조회만 가능합니다. 조작하려면 작업 권한을 변경해 주세요.");
+                connection.respond(id, PhoneUseService.execute(context, tool, args));
+            } else if (ToolCatalog.WRITE.contains(tool)) {
                 mutate(tool, args, false, (result, error) -> {
                     try { connection.respond(id, ToolCatalog.result(error == null, error == null ? result.toString() : error.getMessage())); }
                     catch (IOException ignored) {}
@@ -766,14 +830,17 @@ public final class Engine {
         }, io);
         Ui current = ui;
         if (current != null) current.approval(approval);
-        else approval.decision.complete(false);
+        for (Ui observer : observers) if (observer != current) observer.approval(approval);
+        if (current == null && observers.isEmpty()) approval.decision.complete(false);
     }
     public void stop() {
+        PhoneUseService.stopControl();
         // Closing approval first allows a pending action to resolve without changes.
         Approval approval = pendingApproval; if (approval != null) approval.decision.complete(false);
         io.execute(this::stopNow);
     }
     private void stopNow() {
+        PhoneUseService.stopControl();
         if (pendingApproval != null) pendingApproval.decision.complete(false);
         Process old = process; process = null;
         if (old != null) old.destroyForcibly();

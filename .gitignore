@@ -1,34 +1,43 @@
-# Gradle files
 .gradle/
-build/
-
-# Local configuration file (sdk path, etc)
+**/build/
 local.properties
-
-# Log/OS Files
-*.log
-
-# Android Studio generated files and folders
+.idea/
+*.iml
+.runtime-cache/
+app/src/main/jniLibs/
+app/src/main/assets/runtime/
+app/src/main/assets/devtools/
+*.jks
+*.keystore
 captures/
+node_modules/
+*.log
 .externalNativeBuild/
 .cxx/
 *.aab
 *.apk
 output-metadata.json
-
-# IntelliJ
-*.iml
-.idea/
+google-services.json
+*.hprof
+__pycache__/
+*.pyc
 misc.xml
 deploymentTargetDropDown.xml
 render.experimental.xml
 
-# Keystore files
-*.jks
-*.keystore
+# Local design sources and distributable outputs; runtime icons live in app/src/main/assets/web/chat-icons/.
+/sheet/
+/artifacts/
 
-# Google Services (e.g. APIs or Firebase)
-google-services.json
-
-# Android Profiling
-*.hprof
+# Local agent state, credentials and private signing material.
+.codex/
+.env
+.env.*
+!.env.example
+**/auth.json
+**/credentials.json
+*.p12
+*.pfx
+*.key
+*signing-key*.zip
+/signing/

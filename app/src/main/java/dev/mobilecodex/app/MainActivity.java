@@ -31,13 +31,14 @@ public final class MainActivity extends Activity implements Engine.Ui {
             && uri.getHost() != null && !uri.getHost().isEmpty() && uri.getUserInfo() == null;
     }
     private static final String HOST = "appassets.androidplatform.net";
-    private static final int PICK_FOLDER = 31, EXPORT_RECOVERY = 32, IMPORT_SKILL = 33, EXPORT_IMAGE = 34, PICK_ATTACHMENTS = 35, EXPORT_ATTACHMENT = 36;
+    private static final int PICK_FOLDER = 31, EXPORT_RECOVERY = 32, IMPORT_SKILL = 33, EXPORT_IMAGE = 34, PICK_ATTACHMENTS = 35, EXPORT_ATTACHMENT = 36, INSTALL_UPDATE = 37;
     private WebView web;
     private SafeWebViewLayout root;
     private boolean keyboardVisible;
     private String theme = "system";
     private Engine engine;
-    private boolean loaded;
+    private boolean loaded, foreground;
+    private AppUpdates updates;
     private AlertDialog approvalDialog;
     private String approvalId = "", exportId = "";
     private String pendingPickerId, pendingSkillId;
@@ -53,6 +54,7 @@ public final class MainActivity extends Activity implements Engine.Ui {
         getWindow().setNavigationBarColor(Color.TRANSPARENT);
         getWindow().setNavigationBarContrastEnforced(false);
         engine = ((MobileCodexApp) getApplication()).engine();
+        updates = ((MobileCodexApp) getApplication()).updates();
         if (savedInstanceState != null) { exportId = savedInstanceState.getString("exportId", ""); pendingPickerId = savedInstanceState.getString("pickerId"); pendingSkillId = savedInstanceState.getString("skillId"); }
         if (savedInstanceState != null) pendingImageId = savedInstanceState.getString("imageId");
         if (savedInstanceState != null) {
@@ -132,7 +134,8 @@ public final class MainActivity extends Activity implements Engine.Ui {
         return new WebResourceResponse("text/plain", "UTF-8", 403, "Forbidden", Map.of(), new ByteArrayInputStream(new byte[0]));
     }
     @Override protected void onStart() { super.onStart(); if (loaded) engine.attach(this); }
-    @Override protected void onResume() { super.onResume(); if (loaded) engine.attach(this); }
+    @Override protected void onResume() { super.onResume(); foreground = true; event("updates.changed", updates.snapshot()); if (loaded) engine.attach(this); event("voice.changed", obj()); }
+    @Override protected void onPause() { foreground = false; super.onPause(); }
     @Override protected void onStop() { engine.detach(this); super.onStop(); }
     @Override protected void onSaveInstanceState(Bundle out) {
         out.putString("reconnectProjectKey", reconnectProjectKey);
@@ -213,7 +216,8 @@ public final class MainActivity extends Activity implements Engine.Ui {
     @SuppressLint("WrongConstant") // URI grant flags are explicitly masked to the two accepted constants.
     @Override protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);
-        if (request == PICK_ATTACHMENTS) {
+        if (request == INSTALL_UPDATE) { updates.installEnded(); event("updates.changed", updates.snapshot()); }
+        else if (request == PICK_ATTACHMENTS) {
             String id = pendingAttachmentRequest, scope = attachmentDraftKey;
             pendingAttachmentRequest = null; attachmentDraftKey = null;
             java.util.LinkedHashSet<Uri> uris = new java.util.LinkedHashSet<>();
@@ -293,6 +297,25 @@ public final class MainActivity extends Activity implements Engine.Ui {
             });
         }
     }
+    private void installUpdate(String requestId, String sha256) {
+        try {
+            if (!engine.canInstallUpdate()) throw new java.io.IOException("진행 중인 작업과 터미널 명령을 마친 뒤 설치해 주세요.");
+            if (!getPackageManager().canRequestPackageInstalls()) throw new java.io.IOException("먼저 이 앱의 업데이트 설치를 허용해 주세요.");
+            updates.prepareInstall(sha256, (file, failure) -> runOnUiThread(() -> {
+                if (failure != null) { respond(requestId, null, failure); return; }
+                try {
+                    if (isDestroyed() || isFinishing() || !foreground) throw new java.io.IOException("앱으로 돌아와 설치를 다시 눌러 주세요.");
+                    if (!engine.canInstallUpdate()) throw new java.io.IOException("진행 중인 작업과 터미널 명령을 마친 뒤 설치해 주세요.");
+                    if (!getPackageManager().canRequestPackageInstalls()) throw new java.io.IOException("앱 설치 허용 설정을 확인해 주세요.");
+                    PhoneUseService.stopControl(); PhoneUseService.closeFloatingForUpdate();
+                    Uri uri = androidx.core.content.FileProvider.getUriForFile(this, getPackageName() + ".updates", file);
+                    Intent install = new Intent(Intent.ACTION_INSTALL_PACKAGE).setData(uri).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION).putExtra(Intent.EXTRA_RETURN_RESULT, true);
+                    install.setClipData(ClipData.newRawUri("Mobile Codex update", uri));
+                    startActivityForResult(install, INSTALL_UPDATE); respond(requestId, obj("ok", true), null);
+                } catch (Exception error) { updates.installEnded(); respond(requestId, null, error); }
+            }));
+        } catch (Exception error) { respond(requestId, null, error); }
+    }
     private final class Bridge {
         @JavascriptInterface public void postMessage(String raw) {
             if (raw == null || raw.length() > 2 * 1024 * 1024) return;
@@ -348,6 +371,44 @@ public final class MainActivity extends Activity implements Engine.Ui {
                                 .addCategory(Intent.CATEGORY_OPENABLE).putExtra(Intent.EXTRA_TITLE, name), EXPORT_IMAGE);
                             respond(id, obj("ok", true), null);
                         } catch (Exception e) { pendingImageId = null; respond(id, null, e); }
+                    }); return;
+                }
+                if (action.equals("updates.state")) { respond(id, updates.snapshot(), null); return; }
+                if (action.equals("updates.configure")) { updates.configure(args.getString("repository"), args.optBoolean("prereleases", true)); respond(id, updates.snapshot(), null); return; }
+                if (action.equals("updates.check")) { updates.check(); respond(id, updates.snapshot(), null); return; }
+                if (action.equals("updates.download")) { updates.download(args.optString("sha256")); respond(id, updates.snapshot(), null); return; }
+                if (action.equals("updates.cancel")) { updates.cancel(); respond(id, updates.snapshot(), null); return; }
+                if (action.equals("updates.clear")) { updates.clear(); respond(id, updates.snapshot(), null); return; }
+                if (action.equals("updates.install")) { runOnUiThread(() -> installUpdate(id, parameters.optString("sha256"))); return; }
+                if (action.equals("updates.permission")) {
+                    runOnUiThread(() -> { try { PhoneUseService.stopControl(); PhoneUseService.closeFloatingForUpdate(); startActivity(new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + getPackageName()))); respond(id, obj("ok", true), null); } catch (Exception e) { respond(id, null, e); } }); return;
+                }
+                if (action.equals("voice.recover")) { respond(id, obj("receipts", VoiceInput.pending(MainActivity.this, "main"), "active", VoiceInput.active()), null); return; }
+                if (action.equals("voice.ack")) { VoiceInput.acknowledge(MainActivity.this, "main", args.getString("receiptId")); respond(id, obj("ok", true), null); return; }
+                if (action.equals("voice.start")) {
+                    runOnUiThread(() -> { try { respond(id, VoiceInput.start(MainActivity.this, "main", parameters), null); } catch (Exception e) { respond(id, null, e); } }); return;
+                }
+                if (action.equals("ui.floatingChat")) {
+                    runOnUiThread(() -> { try { PhoneUseService.showFloatingChat(); respond(id, obj("ok", true), null); } catch (Exception e) { respond(id, null, e); } }); return;
+                }
+                if (action.equals("ui.phoneSettings")) {
+                    runOnUiThread(() -> {
+                        try { startActivity(PhoneUseService.settingsIntent(MainActivity.this)); respond(id, obj("ok", true), null); }
+                        catch (Exception e) { respond(id, null, e); }
+                    }); return;
+                }
+                if (action.equals("ui.phoneEnable")) {
+                    runOnUiThread(() -> {
+                        if (!PhoneUseService.status(MainActivity.this).optBoolean("connected")) {
+                            respond(id, null, new IllegalStateException("접근성 설정에서 Mobile Codex 휴대폰 제어를 먼저 켜 주세요.")); return;
+                        }
+                        new AlertDialog.Builder(MainActivity.this).setTitle("휴대폰 제어 켜기")
+                            .setMessage("Codex가 요청을 수행하면서 다른 앱의 화면 내용과 스크린샷을 AI 서비스로 전송하고 탭·입력·스크롤할 수 있습니다. 화면 정보는 Codex 대화 기록에 남을 수 있습니다. 화면 위의 중지 버튼이나 앱 설정에서 언제든 끌 수 있습니다.")
+                            .setPositiveButton("동의하고 켜기", (dialog, which) -> {
+                                try { PhoneUseService.enableFromUi(); respond(id, PhoneUseService.status(MainActivity.this), null); }
+                                catch (Exception e) { respond(id, null, e); }
+                            }).setNegativeButton("취소", (dialog, which) -> respond(id, obj("cancelled", true), null))
+                            .setOnCancelListener(dialog -> respond(id, obj("cancelled", true), null)).show();
                     }); return;
                 }
                 if (action.equals("ui.theme")) {

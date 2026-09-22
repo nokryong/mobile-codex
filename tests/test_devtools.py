@@ -2,7 +2,11 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
+import shutil
+import subprocess
+import sys
 import tempfile
 import unittest
 import zipfile
@@ -16,6 +20,41 @@ spec.loader.exec_module(devtools)
 
 
 class DevtoolsPackagingTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform.startswith("linux") and shutil.which("cc"), "requires Linux ELF compiler")
+    def test_versioned_dependency_relocation_preserves_abi_and_executes(self):
+        lief = devtools.require_lief()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "dep.c").write_text("int answer(void) { return 42; }\n")
+            (root / "dep.map").write_text("PCRE2_FIXTURE_1 { global: answer; local: *; };\n")
+            (root / "main.c").write_text("extern int answer(void); int main(void) { return answer() == 42 ? 0 : 1; }\n")
+            original = root / "libpcre2-8.so"
+            subprocess.run(["cc", "-shared", "-fPIC", "dep.c", "-Wl,-soname,libpcre2-8.so",
+                            "-Wl,--version-script=dep.map", "-o", str(original)], cwd=root, check=True, capture_output=True)
+            executable = root / "git-fixture"
+            subprocess.run(["cc", "main.c", "-L.", "-Wl,-rpath,$ORIGIN", "-l:libpcre2-8.so",
+                            "-o", str(executable)], cwd=root, check=True, capture_output=True)
+            renamed = "libdep_fixture.so"
+            mapping = {"libpcre2-8.so": renamed}
+            before = lief.parse(str(executable))
+            # Reproduce the old packager: DT_NEEDED changed but vn_file unchanged.
+            before.remove_library("libpcre2-8.so"); before.add_library(renamed)
+            broken = root / "broken"
+            before.write(str(broken))
+            with self.assertRaisesRegex(devtools.PackagingError, "libpcre2-8.so"):
+                devtools.verify_version_requirements(lief.parse(str(broken)), "git-fixture")
+            versions = lambda b: sorted((r.name, tuple((a.name, a.hash, a.other) for a in r.get_auxiliary_symbols()))
+                                        for r in b.symbols_version_requirement)
+            expected = sorted((mapping.get(n, n), aux) for n, aux in versions(lief.parse(str(executable))))
+            output = root / "libgit_fixture.so"
+            devtools.rewrite_elf(original, root / renamed, mapping, renamed)
+            devtools.rewrite_elf(executable, output, mapping, output.name)
+            self.assertEqual(expected, versions(lief.parse(str(output))))
+            original.unlink(); executable.unlink()
+            output.chmod(0o755)
+            env = dict(os.environ); env.pop("LD_LIBRARY_PATH", None); env.pop("LD_PRELOAD", None)
+            subprocess.run([str(output)], env=env, cwd=root, check=True, capture_output=True, timeout=10)
+
     def test_dependency_closure_prefers_requested_node_lts_alternative(self):
         index = {
             "npm": {"Depends": "nodejs | nodejs-lts"},
@@ -101,6 +140,12 @@ class DevtoolsPackagingTests(unittest.TestCase):
         for name, record in manifest["nativeFiles"].items():
             self.assertTrue((devtools.NATIVE_DIR / name).is_file())
             self.assertTrue(set(record["needed"]).issubset(available), (name, record["needed"]))
+            binary = devtools.require_lief().parse(str(devtools.NATIVE_DIR / name))
+            devtools.verify_version_requirements(binary, name)
+            self.assertEqual(list(binary.libraries), record["needed"])
+            for requirement in binary.symbols_version_requirement:
+                if requirement.name in manifest["nativeFiles"]:
+                    self.assertEqual(requirement.name, manifest["nativeFiles"][requirement.name]["soname"])
 
         links = manifest["links"]
         def resolve_path(target: str, seen: set[str]) -> str:

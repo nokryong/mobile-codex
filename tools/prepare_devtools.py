@@ -28,6 +28,7 @@ import sys
 import tarfile
 import tempfile
 import urllib.request
+import urllib.error
 import zipfile
 from typing import Any, Iterable
 
@@ -77,14 +78,25 @@ def download(url: str, destination: Path, expected_sha256: str | None = None) ->
         return
     partial = destination.with_suffix(destination.suffix + ".partial")
     partial.unlink(missing_ok=True)
-    try:
-        with urllib.request.urlopen(url, timeout=180) as response, partial.open("wb") as output:
-            shutil.copyfileobj(response, output)
-        if expected_sha256 and sha256_file(partial) != expected_sha256:
-            raise PackagingError(f"SHA-256 mismatch for {url}")
-        partial.replace(destination)
-    finally:
-        partial.unlink(missing_ok=True)
+    # A pinned package can disappear from the primary pool while a listed mirror still
+    # retains it. Mirrors may only supply the identical bytes from the existing lock.
+    urls = [url]
+    if expected_sha256 and url.startswith(POOL_URL):
+        urls.append("https://ro.mirror.flokinet.net/termux/termux-main/" + url[len(POOL_URL):])
+    last_error = None
+    for candidate in urls:
+        try:
+            with urllib.request.urlopen(candidate, timeout=180) as response, partial.open("wb") as output:
+                shutil.copyfileobj(response, output)
+            if expected_sha256 and sha256_file(partial) != expected_sha256:
+                raise PackagingError(f"SHA-256 mismatch for {candidate}")
+            partial.replace(destination)
+            return
+        except (urllib.error.URLError, TimeoutError) as error:
+            last_error = error
+        finally:
+            partial.unlink(missing_ok=True)
+    raise PackagingError(f"Could not download pinned input {url}: {last_error}")
 
 
 def parse_control(text: str) -> dict[str, dict[str, str]]:
@@ -516,8 +528,16 @@ def lief_soname(binary: Any, lief: Any) -> str | None:
     return None
 
 
+def verify_version_requirements(binary: Any, label: str) -> None:
+    """Bionic matches each DT_VERNEED vn_file against a direct dependency's SONAME."""
+    needed = set(binary.libraries)
+    stale = sorted({requirement.name for requirement in binary.symbols_version_requirement} - needed)
+    if stale:
+        raise PackagingError(f"version requirements absent from DT_NEEDED in {label}: {stale}")
+
+
 def rewrite_elf(source: Path, destination: Path, rename_needed: dict[str, str], native_name: str) -> tuple[str | None, list[str]]:
-    """Rewrite DT_NEEDED, RUNPATH/RPATH and SONAME after flattening into JNI libs."""
+    """Rewrite dependency names, version requirements, runpaths and SONAME together."""
     lief = require_lief()
     binary = lief.parse(str(source))
     if binary is None or not isinstance(binary, lief.ELF.Binary):
@@ -528,6 +548,12 @@ def rewrite_elf(source: Path, destination: Path, rename_needed: dict[str, str], 
         if replacement and replacement != needed:
             binary.remove_library(needed)
             binary.add_library(replacement)
+    # Removing/adding DT_NEEDED does not update .gnu.version_r. Android's
+    # linker resolves vn_file by SONAME before looking up versioned symbols;
+    # leaving e.g. libpcre2-8.so here prevents even `git --version` from starting.
+    # Preserve auxiliary version names, hashes and indices (the ABI contract).
+    for requirement in binary.symbols_version_requirement:
+        requirement.name = rename_needed.get(requirement.name, requirement.name)
     # There is one Android native-library directory, so old Termux runpaths
     # would point at an inaccessible prefix. Remove them rather than retaining
     # a plausible-looking but wrong path.
@@ -550,6 +576,7 @@ def rewrite_elf(source: Path, destination: Path, rename_needed: dict[str, str], 
     parsed = lief.parse(str(destination))
     if parsed is None:
         raise PackagingError(f"LIEF failed to write {destination}")
+    verify_version_requirements(parsed, destination.name)
     return lief_soname(parsed, lief), list(parsed.libraries)
 
 
@@ -882,6 +909,10 @@ def verify_output() -> None:
         path = NATIVE_DIR / name
         if not path.exists() or sha256_file(path) != record["sha256"] or elf_info(path.read_bytes()) is None:
             raise PackagingError(f"invalid packaged native file: {name}")
+        binary = require_lief().parse(str(path))
+        if binary is None:
+            raise PackagingError(f"cannot inspect packaged native file: {name}")
+        verify_version_requirements(binary, name)
     for name in manifest["requiredNative"]:
         if not (NATIVE_DIR / name).exists():
             raise PackagingError(f"required native library is absent: {name}")

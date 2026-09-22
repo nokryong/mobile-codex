@@ -1,0 +1,4 @@
+<resources>
+    <string name="phone_use_label">Mobile Codex 휴대폰 제어</string>
+    <string name="phone_use_description">사용자가 앱에서 제어를 켜면 Codex가 요청을 수행하기 위해 다른 앱의 화면 내용과 스크린샷을 AI 서비스로 전송하고 탭·입력·스크롤합니다. 화면 정보는 Codex 대화 기록에 남을 수 있습니다. 화면 위의 중지 버튼으로 언제든 끌 수 있습니다. 접근성 권한만 켜면 제어는 시작되지 않습니다.</string>
+</resources>

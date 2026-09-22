@@ -9,15 +9,17 @@
   let viewerImages = [], viewerIndex = 0, viewerGroup = null;
   let seq = 0, state = {messages: [], sessions: [], projects: [], models: [], account: {}, workspace: {}}, folder = '', openedFile = null, login = null, inputResolve = null, toastTimer, fileSeq = 0, modelKey = '', displayedRequest = null;
   let draftContext = {attachments: [], mentions: [], skills: []}, draftOptions = {model:'', effort:''}, autocomplete = {items: [], index: -1, token: '', type: '', version: 0};
-  const handledReceipts = new Set();
+  const handledReceipts = new Set(), handledVoiceReceipts = new Set();
+  let voiceStarting = false, voiceActive = false, voiceRecoveryGeneration = 0;
   let chatIconsEnabled = localStorage.getItem('chat-icons') !== 'off', activityIcon = 'thinking';
   let instructionsOriginal = '', instructionsLoaded = false, instructionsSaving = false, devtoolsCheckResult = null, devtoolsCheckSummary = '', devtoolsChecking = false, usageLoading = false;
   const toolCache = [null, null, null];
+  let updateState = {}, updateSourceDirty = false, updateRequestPending = false;
   function call(action, args = {}) {
     return new Promise((resolve, reject) => {
       if (!window.Native) return reject(new Error('Android 앱에서 실행해 주세요.'));
       const id = String(++seq);
-      const timer = setTimeout(() => { pending.delete(id); reject(new Error('요청 시간이 초과되었습니다. 상태를 확인하고 다시 시도해 주세요.')); }, action === 'files.mutate' ? 610000 : 150000);
+      const timer = setTimeout(() => { pending.delete(id); reject(new Error('요청 시간이 초과되었습니다. 상태를 확인하고 다시 시도해 주세요.')); }, ['files.mutate','recovery.restore','updates.install'].includes(action) ? 610000 : 150000);
       pending.set(id, {resolve, reject, timer});
       window.Native.postMessage(JSON.stringify({id, action, args}));
     });
@@ -104,7 +106,7 @@
     efforts(); if ([...$('effort').options].some(o => o.value === draftOptions.effort)) $('effort').value = draftOptions.effort;
     sizeComposer();
   }
-  function updateSend() { $('send').disabled = (! $('prompt').value.trim() && !(draftContext.attachments || []).length) || !!sending || !!state.busy; }
+  function updateSend() { $('voice-input').disabled = !draftScope || voiceStarting || voiceActive || !!sending; $('voice-input').setAttribute('aria-busy', String(voiceStarting || voiceActive)); $('send').disabled = (! $('prompt').value.trim() && !(draftContext.attachments || []).length) || !!sending; $('send').setAttribute('aria-label', state.busy ? '진행 중인 작업에 추가 지시' : '메시지 보내기'); $('send').title = state.busy ? '추가 지시' : '보내기'; }
   function scrollLatest() { following = true; $('chat-scroll').scrollTop = $('chat-scroll').scrollHeight; $('jump-latest').hidden = true; }
   function sizeComposer() {
     const field = $('prompt'), cap = Math.max(60, Math.min(160, window.innerHeight * .24));
@@ -237,6 +239,89 @@
     if (scope === draftScope) { draftContext = context; renderDraftContext(); updateSend(); }
     if (result.errors?.length && !result.cancelled) toast(result.errors.join('\n'));
     if (receipt) { handledReceipts.add(receipt); call('attachments.ack', {receiptId:receipt}).catch(() => {}); }
+  }
+  async function startVoiceInput() {
+    if (voiceStarting || voiceActive || !draftScope || sending) return;
+    const field = $('prompt'); saveDraft(); hideAutocomplete();
+    const draft = {scope:draftKeyFor(), original:field.value, start:field.selectionStart, end:field.selectionEnd};
+    voiceStarting = true; updateSend();
+    try { await call('voice.start', draft); }
+    finally { voiceStarting = false; updateSend(); await recoverVoiceInput(); }
+  }
+  function mergeVoiceText(current, result) {
+    if (!result.text) return current;
+    if (current === result.original) {
+      const start = Math.max(0, Math.min(current.length, Number.isInteger(result.start) ? result.start : current.length));
+      const end = Math.max(start, Math.min(current.length, Number.isInteger(result.end) ? result.end : start));
+      return current.slice(0, start) + result.text + current.slice(end);
+    }
+    return current + (!current || /\s$/.test(current) ? '' : '\n') + result.text;
+  }
+  function acceptVoiceReceipt(result) {
+    if (!result || result.origin !== 'main' || !result.receiptId || !result.scope || handledVoiceReceipts.has(result.receiptId)) return;
+    const scope = 'draft:' + result.scope, marker = 'voice-receipt:' + result.receiptId;
+    try {
+      let journal = JSON.parse(localStorage.getItem(marker) || 'null');
+      if (!journal?.done) {
+        const current = scope === draftScope ? $('prompt').value : localStorage.getItem(scope) || '';
+        if (!journal) {
+          journal = {before:current, after:mergeVoiceText(current, result)};
+          localStorage.setItem(marker, JSON.stringify(journal));
+        }
+        // A process restart between saving the draft and its completion marker must not append twice.
+        const merged = current === journal.before || current === journal.after ? journal.after : mergeVoiceText(current, {...result, original:null});
+        localStorage.setItem(scope, merged);
+        localStorage.setItem(marker, JSON.stringify({done:true}));
+        if (scope === draftScope) { $('prompt').value = merged; sizeComposer(); }
+        if (result.error) toast(result.error);
+        else if (result.text) toast(scope === draftScope ? '음성 초안을 확인한 뒤 보내세요.' : '원래 대화의 음성 초안을 저장했습니다.');
+      }
+      handledVoiceReceipts.add(result.receiptId);
+      call('voice.ack', {receiptId:result.receiptId}).then(() => localStorage.removeItem(marker)).catch(() => {});
+    } catch { toast('음성 초안을 저장하지 못했습니다. 저장 공간을 확인한 뒤 앱을 다시 열어 주세요.'); }
+  }
+  async function recoverVoiceInput() {
+    const generation = ++voiceRecoveryGeneration;
+    try {
+      const result = await call('voice.recover');
+      if (generation !== voiceRecoveryGeneration) return;
+      voiceActive = !!result.active; updateSend();
+      for (const receipt of result.receipts || []) acceptVoiceReceipt(receipt);
+    } catch { /* Receipts remain native until the next resume or startup. */ }
+  }
+  function drawUpdates(value) {
+    if (!value || (Number.isFinite(value.revision) && value.revision < (updateState.revision || 0))) return;
+    updateState = value;
+    const busy = !!value.busy || updateRequestPending, release = value.candidate;
+    if (value.versionName) { $('update-current').textContent = '현재 ' + value.versionName + ' · 빌드 ' + value.versionCode; $('app-version').textContent = value.versionName; }
+    if (!updateSourceDirty) { if (value.repository) $('update-repository').value = value.repository; if (typeof value.prereleases === 'boolean') $('update-prereleases').checked = value.prereleases; }
+    $('update-repository').disabled = busy; $('update-prereleases').disabled = busy; $('update-check').disabled = busy;
+    $('update-status').textContent = value.message || '업데이트 확인을 누르면 공개 릴리스를 조회합니다.';
+    $('update-cancel').hidden = !value.canCancel; $('update-cancel').disabled = updateRequestPending;
+    $('update-progress').hidden = !['downloading','verifying'].includes(value.status);
+    const percent = release?.size ? Math.max(0, Math.min(100, 100 * (value.received || 0) / release.size)) : 0;
+    $('update-progress').value = percent;
+    $('update-release').hidden = !release;
+    $('update-version').textContent = release ? '공개 릴리스 ' + release.versionName : '';
+    $('update-size').textContent = release ? (release.size / 1048576).toFixed(1) + ' MiB' + (value.status === 'downloading' ? ' · ' + Math.floor(percent) + '%' : '') : '';
+    $('update-notes').textContent = release?.notes || '';
+    $('update-download').hidden = !value.available || !!value.ready; $('update-download').disabled = busy || updateSourceDirty;
+    $('update-permission').hidden = !value.ready || !!value.canInstall; $('update-permission').disabled = busy;
+    $('update-install').hidden = !value.ready; $('update-install').disabled = busy || updateSourceDirty || !value.canInstall || state.busy;
+    $('update-clear').hidden = !value.ready && !value.hasDownload; $('update-clear').disabled = busy;
+  }
+  async function loadUpdates() { try { drawUpdates(await call('updates.state')); } catch(error) { $('update-status').textContent = error.message; } }
+  async function updateAction(action) {
+    if (updateRequestPending) return;
+    updateRequestPending = true; drawUpdates(updateState);
+    try {
+      if (action === 'check' && updateSourceDirty) {
+        const result = await call('updates.configure', {repository:$('update-repository').value.trim(), prereleases:$('update-prereleases').checked});
+        updateSourceDirty = false; drawUpdates(result);
+      }
+      const result = await call('updates.' + action, ['download','install'].includes(action) ? {sha256:updateState.candidate?.sha256 || ''} : {});
+      if (result.status) drawUpdates(result);
+    } finally { updateRequestPending = false; drawUpdates(updateState); }
   }
   function inline(target, text) {
     // Text nodes only, including untrusted Markdown. Safe links open in external browser.
@@ -655,6 +740,24 @@
     }
     if (!projects.length) target.append(button('작업 폴더 선택', pickFolder, 'project-button'));
   }
+  function renderPhone() {
+    const phone = state.phone || {};
+    $('phone-status').textContent = phone.status || '접근성 설정에서 Mobile Codex 휴대폰 제어를 켜 주세요.';
+    $('phone-enable').disabled = !phone.connected || !!phone.enabled; $('floating-chat').disabled = !phone.connected;
+    $('phone-enable').hidden = !!phone.enabled;
+    $('phone-disable').hidden = !phone.enabled;
+    $('phone-stop-banner').hidden = !phone.enabled;
+    $('phone-thread-note').hidden = state.phoneToolsAvailable !== false;
+    $('phone-screenshot-note').textContent = phone.screenshotsSupported === false ? 'Android 10에서는 화면 요소를 읽어 조작합니다. 스크린샷은 Android 11 이상에서 지원합니다.' : '화면 위의 중지 버튼으로 즉시 끌 수 있습니다. 앱 프로세스가 다시 시작되면 제어는 꺼집니다.';
+  }
+  async function enablePhone() {
+    const result = await call('ui.phoneEnable');
+    if (!result.cancelled) { state.phone = result; renderPhone(); }
+  }
+  async function stopPhone() {
+    await call('phone.stop');
+    state.phone = {...state.phone, enabled:false, status:'휴대폰 제어 꺼짐'}; renderPhone();
+  }
   function render(next) {
     const changedThread = state.threadId !== next.threadId;
     setDraftScope(next); state = next;
@@ -676,7 +779,7 @@
     const pendingDeletes = Number(state.pendingDeletionCount) || 0;
     $('pending-deletions').hidden = pendingDeletes === 0;
     $('pending-deletions').textContent = pendingDeletes ? `원본 삭제 대기 ${pendingDeletes}건. 아래 ‘Codex 시작 / 다시 연결’을 누르면 다시 시도합니다.` : '';
-    $('send').hidden = state.busy; $('stop').hidden = !state.busy; $('activity').hidden = !state.busy;
+    $('send').hidden = false; $('stop').hidden = !state.busy; $('activity').hidden = !state.busy;
     if (!state.busy) activityIcon = 'thinking';
     drawStatusIcons();
     $('permissions').value = state.permissions || 'workspace-write'; $('permissions').disabled = !!state.busy;
@@ -685,6 +788,10 @@
     $('storage-status').textContent = state.directWorkspace ? '선택한 폴더에서 셸 명령을 실행합니다.' : '폴더의 셸 접근은 기기 파일 권한이 필요합니다. 문서 제공자 폴더는 파일 도구로 접근합니다.';
     $('storage-access').textContent = state.allFilesAccess ? '기기 파일 접근 설정' : '기기 파일 접근 허용';
     renderDevtools();
+    renderPhone();
+    if (changesScope !== reviewScope()) { changesGeneration++; changesScope = reviewScope(); selectedChange = null; $('change-preview').hidden = true; $('change-restore').disabled = true; $('changes-list').replaceChildren(); if ($('changes-dialog').open) $('changes-status').textContent = '대화 또는 프로젝트가 바뀌었습니다. 새로고침해 주세요.'; }
+    $('changes-turn-diff').textContent = state.turnDiff || '이 대화에 기록된 작업 diff가 없습니다.';
+    if (selectedChange) $('change-restore').disabled = restoringChange || !selectedChange.data.canRestore || !!state.busy || state.permissions === 'read-only';
     renderProjects();
     $('sessions').replaceChildren();
     for (const session of (state.sessions || []).filter(s => !(s.workspaceKey || s.workspace))) $('sessions').append(sessionRow(session));
@@ -693,7 +800,7 @@
     if (key !== modelKey) { modelKey = key; const value = draftOptions.model || $('model').value; $('model').replaceChildren(new Option('기본 모델', '')); for (const m of state.models) $('model').add(new Option(m.displayName || m.model || m.id, m.model || m.id)); if ([...$('model').options].some(o => o.value === value)) $('model').value = value; efforts(); if ([...$('effort').options].some(o => o.value === draftOptions.effort)) $('effort').value = draftOptions.effort; }
     renderModelList();
     if (changedThread) { following = true; $('event-log').replaceChildren(); $('messages').replaceChildren(); }
-    updateSend(); optionsSummary();
+    updateSend(); optionsSummary(); drawUpdates(updateState);
     drawMessages();
     if (logged && $('login-dialog').open) { login = null; close('login-dialog'); }
   }
@@ -773,9 +880,70 @@
     finally { instructionsSaving = false; $('instructions-save').disabled = false; }
   }
   async function config() { const result = await call('config.read'); configOriginal = result.content; $('config-editor').value = result.content; show('config-dialog'); }
+  let changesGeneration = 0, changesScope = '', selectedChange = null, restoringChange = false;
+  const reviewScope = () => (state.workspace?.key || '') + '\0' + (state.threadId || '');
+  const reviewArgs = extra => ({workspaceKey:state.workspace?.key || '', ...extra});
+  function showFileDiff(before, after) {
+    const a = String(before || '').split('\n'), b = String(after || '').split('\n');
+    let first=0, last=0;
+    while(first<a.length && first<b.length && a[first]===b[first]) first++;
+    while(last<a.length-first && last<b.length-first && a[a.length-1-last]===b[b.length-1-last]) last++;
+    const lines = [];
+    for(let i=Math.max(0,first-3);i<first;i++) lines.push([' ',a[i]]);
+    for(let i=first;i<a.length-last;i++) lines.push(['-',a[i]]);
+    for(let i=first;i<b.length-last;i++) lines.push(['+',b[i]]);
+    for(let i=0;i<Math.min(last,3);i++) lines.push([' ',a[a.length-last+i]]);
+    const box=$('change-diff'); box.replaceChildren();
+    for(const [sign,text] of lines.slice(0,2000)) box.append(node('span',sign+' '+text+'\n',sign==='-'?'diff-removed':sign==='+'?'diff-added':'diff-context'));
+    if(lines.length>2000) box.append(node('span','\n… 미리보기 2,000줄 이후 생략. 파일 탐색기에서 전체 내용을 확인하세요.'));
+    if(first===a.length && first===b.length) box.textContent='내용 차이가 없습니다.';
+  }
+  async function previewChange(kind, value) {
+    const generation=++changesGeneration, scope=reviewScope(), args=reviewArgs(kind==='git'?{path:value}:{id:value});
+    selectedChange=null; $('change-restore').disabled=true; $('changes-status').textContent='파일 내용을 확인하는 중…';
+    const action=kind==='git'?'changes.preview':kind==='backup'?'changes.backupPreview':'recovery.preview';
+    try {
+      const data=await call(action,args); if(generation!==changesGeneration || scope!==reviewScope())return;
+      selectedChange={kind,data,workspaceKey:args.workspaceKey};
+      $('change-path').textContent=data.path; $('change-note').textContent=data.note || '';
+      if (data.previewLimited) $('change-diff').textContent = '텍스트 전체를 표시할 수 없는 파일입니다.\n이전: ' + data.before + '\nSHA-256: ' + data.beforeSha256 + '\n현재: ' + data.after + '\nSHA-256: ' + data.afterSha256;
+      else showFileDiff(data.before,data.after);
+      $('change-preview').hidden=false;
+      $('change-restore').textContent=data.actionLabel || '복원'; $('change-restore').disabled=!data.canRestore || state.busy || state.permissions==='read-only';
+      $('changes-status').textContent=(data.beforeExists===false?'이전 파일 없음 · ':'')+(data.afterExists===false?'현재 파일 없음':'');
+    } catch(error) { if(generation===changesGeneration) $('changes-status').textContent=error.message; }
+  }
+  async function loadChanges(history=false) {
+    const generation=++changesGeneration, scope=reviewScope(), args=reviewArgs({}); changesScope=scope;
+    selectedChange=null; $('change-preview').hidden=true; $('change-restore').disabled=true;
+    show('changes-dialog'); sidebar(false); $('changes-list').replaceChildren(); $('changes-status').textContent='불러오는 중…';
+    try {
+      const result=await call(history?'changes.history':'changes.list',args);
+      if(generation!==changesGeneration || scope!==reviewScope())return;
+      $('changes-status').textContent=result.note || (history?'파일 복원 직전의 사본입니다. 이후 수정된 파일은 자동으로 덮어쓰지 않습니다.':'');
+      for(const entry of result.entries || []) {
+        const row=node('div',null,'recovery-item'), desc=node('div'); desc.append(node('strong',entry.path),node('small',history?new Date(entry.timestamp).toLocaleString():entry.status));
+        row.append(desc,button('비교',()=>previewChange(history?'backup':'git',history?entry.id:entry.path))); $('changes-list').append(row);
+      }
+      if(!result.entries?.length) $('changes-list').append(node('p',history?'복원 사본이 없습니다.':'현재 Git 변경 사항이 없습니다.','empty-note'));
+    } catch(error) { if(generation===changesGeneration) $('changes-status').textContent=error.message+' 문서 제공자 파일은 복구 사본에서 확인할 수 있습니다.'; }
+  }
+  async function restoreChange() {
+    const selected=selectedChange; if(!selected || !selected.data.canRestore || restoringChange)return;
+    if(selected.workspaceKey!==(state.workspace?.key || ''))throw new Error('프로젝트가 바뀌었습니다.');
+    if(!confirm(selected.data.path+'\n'+(selected.data.actionLabel || '복원')+'할까요?'))return;
+    restoringChange=true; $('change-restore').disabled=true;
+    try {
+      const args={workspaceKey:selected.workspaceKey};
+      if(selected.kind==='saf')args.id=selected.data.id;else args.token=selected.data.token;
+      await call(selected.kind==='saf'?'recovery.restore':'changes.restore',args);
+      toast('파일 내용을 복원했습니다.');
+      if(selected.workspaceKey===(state.workspace?.key || '')) { if(selected.kind==='saf'){close('changes-dialog');await recovery();}else await loadChanges(); if(!$('file-panel').hidden)await listFiles(); }
+    } finally { restoringChange=false; if(selectedChange===selected)$('change-restore').disabled=false; }
+  }
   async function recovery() {
     show('recovery-dialog'); const {entries} = await call('recovery.list'); $('recovery-list').replaceChildren();
-    for (const entry of entries || []) { const row = node('div', null, 'recovery-item'), desc = node('div'); desc.append(node('strong', entry.path), node('small', new Date(entry.timestamp).toLocaleString())); row.append(desc, button('다른 위치에 저장', () => call('recovery.export', {id: entry.id, name: C.basename(entry.path)}))); $('recovery-list').append(row); }
+    for (const entry of entries || []) { const row = node('div', null, 'recovery-item'), desc = node('div'); desc.append(node('strong', entry.path), node('small', new Date(entry.timestamp).toLocaleString())); row.append(desc, button('비교 / 복원', async () => { close('recovery-dialog'); show('changes-dialog'); await previewChange('saf',entry.id); }), button('다른 위치에 저장', () => call('recovery.export', {id: entry.id, name: C.basename(entry.path)}))); $('recovery-list').append(row); }
     if (!entries?.length) $('recovery-list').append(node('p', '저장된 복구 사본이 없습니다.', 'empty-note'));
   }
   let toolsScope = "", toolsGeneration = 0;
@@ -956,6 +1124,8 @@
     else if (name === 'tool') { activityIcon = /read|list|search/.test(data.name) ? 'inspecting' : 'working'; drawStatusIcons(); $('activity-text').textContent = data.name.replace('mobile_', '') + ' · ' + data.path; logEvent(data.name, data); }
     else if (name === 'agent.event') { if (!data.method.endsWith('/delta')) logEvent(data.method, data.params); if (data.method === 'turn/diff/updated') logEvent('변경 사항', data.params.diff); }
     else if (name === 'files.changed' && !$('file-panel').hidden) listFiles().catch(e => toast(e.message));
+    else if (name === 'updates.changed') drawUpdates(data);
+    else if (name === 'voice.changed') recoverVoiceInput();
     else if (name === 'attachments.picked') acceptPickedAttachments(data, data.draftKey || '');
     else if (name === 'login.completed') { if (data.success) { login = null; close('login-dialog'); toast('ChatGPT 계정을 연결했습니다.'); } else $('login-help').textContent = data.error || '로그인이 취소되었습니다. 다시 연결해 주세요.'; }
     else if (name === 'terminal.output') { $('terminal-output').textContent += data.text; if ($('terminal-output').textContent.length > 1000000) $('terminal-output').textContent = $('terminal-output').textContent.slice(-1000000); $('terminal-output').scrollTop = $('terminal-output').scrollHeight; }
@@ -986,6 +1156,7 @@
   on('file-close', () => $('file-panel').hidden = true); on('file-up', async () => { folder = C.parent(folder); await listFiles(); });
   let searchTimer; on('file-query', () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => listFiles($('file-query').value.trim()).catch(e => toast(e.message)), 300); }, 'input');
   ['file-new', 'folder-new'].forEach(id => on(id, async () => { const name = await input(id === 'file-new' ? '새 파일' : '새 폴더', '이름을 입력하세요.'); if (name) await mutate(id === 'file-new' ? 'mobile_create' : 'mobile_mkdir', {path: C.join(folder, name), content: ''}); }));
+  on('show-changes', () => loadChanges()); on('changes-refresh', () => loadChanges()); on('changes-history', () => loadChanges(true)); on('change-restore', restoreChange);
   on('editor-save', async () => { const result = await mutate('mobile_write', {path: openedFile.path, expectedSha256: openedFile.sha256, content: $('editor').value}); openedFile = await call('files.read', {path: result.path || openedFile.path}); });
   on('editor-delete', async () => { await mutate('mobile_delete', {path: openedFile.path}); close('editor-dialog'); });
   on('editor-rename', async () => { const name = await input('이름 변경', '새 파일 이름', C.basename(openedFile.path)); if (name) { await mutate('mobile_rename', {path: openedFile.path, name}); await openFile(C.join(C.parent(openedFile.path), name)); } });
@@ -995,11 +1166,12 @@
   on('input-value', e => { if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) $('input-confirm').click(); }, 'keydown');
   on('composer', async () => {
     const value = $('prompt').value, text = value.trim();
-    if ((!text && !draftContext.attachments.length) || state.busy || sending) return;
+    if ((!text && !draftContext.attachments.length) || sending) return;
+    const steer = !!state.busy, expectedTurnId = state.turnId || '', expectedThreadId = state.threadId || '', workspaceKey = state.workspace?.key || '';
     const submitted = {value, context:JSON.parse(JSON.stringify(draftContext)), scopes:new Set([draftScope])}; sending = submitted;
     saveDraft(); updateSend(); scrollLatest();
     try {
-      await call('chat.send', {text, model:$('model').value, effort:$('effort').value, attachments:submitted.context.attachments.map(x => x.id), skills:submitted.context.skills, mentions:submitted.context.mentions});
+      await call(steer ? 'chat.steer' : 'chat.send', {text, expectedTurnId, expectedThreadId, workspaceKey, model:$('model').value, effort:$('effort').value, attachments:submitted.context.attachments.map(x => x.id), skills:submitted.context.skills, mentions:submitted.context.mentions});
       // Keep text typed during the request, or drafts from a different conversation.
       if (submitted.scopes.has(draftScope) && $('prompt').value === value) {
         $('prompt').value = '';
@@ -1033,6 +1205,7 @@
     const area = $('chat-scroll'); following = area.scrollHeight - area.scrollTop - area.clientHeight < 80;
     $('jump-latest').hidden = following || !state.messages.length;
   }, {passive:true});
+  on('voice-input', startVoiceInput);
   on('jump-latest', scrollLatest); on('composer-options', () => { optionsSummary(); show('options-dialog'); });
   on('image-save', () => openedImage && call('images.export', {id:openedImage.id, name:openedImage.name}));
   on('image-zoom', () => { const zoomed = $('image-stage').classList.toggle('zoomed'); $('image-zoom').setAttribute('aria-pressed', String(zoomed)); });
@@ -1056,18 +1229,24 @@
     document.querySelectorAll('[data-settings-panel]').forEach(panel => panel.hidden = panel.dataset.settingsPanel !== selected);
     if (selected === 'personal' && !instructionsLoaded) loadInstructions();
     if (selected === 'account') loadUsage();
+    if (selected === 'updates') loadUpdates();
   }));
   on('device-code', async () => { if (login) { await call('ui.copyCode', {code: login.userCode}); toast('코드를 복사했습니다.'); } });
   on('open-login', () => login && call('ui.loginBrowser', {url: login.verificationUrl}));
   $('login-dialog').addEventListener('close', () => { if (login?.loginId) call('auth.cancel', {loginId: login.loginId}).catch(() => {}); login = null; });
   on('restart', async () => { await call('runtime.stop'); await call('runtime.start'); }); on('engine-stop', () => call('runtime.stop')); on('logout', () => call('auth.logout'));
   on('usage-refresh', loadUsage);
+  ['check','download','cancel','clear','permission','install'].forEach(action => on('update-' + action, () => updateAction(action)));
+  $('update-repository').addEventListener('input', () => { updateSourceDirty = true; drawUpdates(updateState); });
+  $('update-prereleases').addEventListener('change', () => { updateSourceDirty = true; drawUpdates(updateState); });
   on('chat-icons-toggle', setChatIcons, 'change');
   $('chat-icons-toggle').checked = chatIconsEnabled; drawStatusIcons();
   on('instructions-reload', loadInstructions); on('instructions-save', saveInstructions);
   $('settings-dialog').addEventListener('cancel', event => { event.preventDefault(); dismiss('settings-dialog'); });
   on('storage-access', () => call('ui.storageAccess')); on('theme', setTheme, 'change');
   on('devtools-check', checkDevtools);
+  on('floating-chat', () => call('ui.floatingChat')); on('phone-settings', () => call('ui.phoneSettings')); on('phone-enable', enablePhone);
+  on('phone-disable', stopPhone); on('phone-stop-banner', stopPhone);
   ['edit-config', 'tools-config'].forEach(id => on(id, config)); on('config-save', async () => { await call('config.save', {content: $('config-editor').value}); configOriginal = $('config-editor').value; await call('runtime.start'); close('config-dialog'); toast('설정을 적용했습니다.'); });
   on('show-recovery', recovery); on('show-terminal', () => { show('terminal-dialog'); sidebar(false); }); on('terminal-stop', () => call('terminal.stop'));
   on('terminal-form', async e => { e.preventDefault(); const command = $('terminal-command').value; if (command.trim()) { await call('terminal.run', {command}); $('terminal-output').textContent += '$ ' + command + '\n'; $('terminal-command').value = ''; } }, 'submit');
@@ -1079,7 +1258,7 @@
   window.addEventListener('resize', viewportChanged);
   window.visualViewport?.addEventListener('resize', viewportChanged);
   window.addEventListener('pagehide', saveDraft);
-  document.addEventListener('visibilitychange', () => { if (document.hidden) saveDraft(); });
+  document.addEventListener('visibilitychange', () => { if (document.hidden) saveDraft(); else recoverVoiceInput(); });
   document.addEventListener('keydown', e => {
     if (dialogs.at(-1) === 'image-dialog' && !$('image-stage').classList.contains('zoomed') && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) { e.preventDefault(); changeImage(e.key === 'ArrowRight' ? 1 : -1); }
     if (e.key === 'Escape' && !dialogs.length) window.mobileCodexBack();
@@ -1089,5 +1268,5 @@
     else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
   });
   viewportChanged();
-  call('state').then(async initial => { render(initial); try { acceptPickedAttachments(await call('attachments.recover'), ''); } catch {} }).catch(e => toast(e.message));
+  call('state').then(async initial => { render(initial); recoverVoiceInput(); loadUpdates(); try { acceptPickedAttachments(await call('attachments.recover'), ''); } catch {} }).catch(e => toast(e.message));
 })();

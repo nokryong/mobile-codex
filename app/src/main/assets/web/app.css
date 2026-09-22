@@ -521,3 +521,21 @@ html[data-theme=dark] .message.user {
 /* Enlarge mobile touch targets */
 .chip-remove { width: 30px; height: 30px; min-width: 30px; min-height: 30px; }
 .project-new { width: 32px; height: 32px; }
+
+/* Phone control remains reachable outside Settings, with native stop access over other apps. */
+.phone-actions{display:flex;flex-wrap:wrap;gap:8px}
+.phone-stop-banner{position:fixed;right:16px;top:64px;z-index:60;max-width:calc(100vw - 32px);min-height:44px;padding:10px 16px;border:1px solid #b55b5b;border-radius:24px;background:#7d2525;color:#fff;font:inherit;box-shadow:0 3px 12px #0002;cursor:pointer}
+.phone-stop-banner[hidden]{display:none}
+
+.changes-dialog{width:min(900px,calc(100vw - 24px));max-height:calc(100dvh - 32px)}
+.change-diff{overflow:auto;max-height:48dvh;padding:14px;border:1px solid var(--border);border-radius:12px;font:12px/1.65 monospace;white-space:pre;tab-size:4}
+.change-diff span{white-space:pre}
+.diff-removed{background:#e6555518;color:#b64141}.diff-added{background:#3aab6418;color:#247e45}.diff-context{color:var(--muted)}
+.change-legend{display:flex;flex-wrap:wrap;gap:16px;font-size:12px;color:var(--muted)}
+#change-path{overflow-wrap:anywhere}#change-restore{min-height:44px;margin-top:12px}
+[data-theme="dark"] .diff-removed{color:#ff9d9d}[data-theme="dark"] .diff-added{color:#85dca0}
+
+.voice-button{flex:none;min-width:44px;min-height:44px}.voice-button[aria-busy="true"]{color:var(--text);background:var(--hover)}
+@media(max-width:420px){.composer-actions{gap:2px}.options-button{max-width:100px}.options-button #model-summary{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.composer-bottom{gap:2px}}
+
+.update-actions{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}.update-prereleases{display:flex;gap:8px;align-items:center;min-height:44px}.update-notes{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;max-height:220px;overflow:auto}#update-repository{width:100%;min-height:44px}#update-progress{width:100%;height:12px}#update-status{overflow-wrap:anywhere}
