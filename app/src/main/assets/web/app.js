@@ -15,7 +15,7 @@
   let voiceStarting = false, voiceActive = false, voiceRecoveryGeneration = 0;
   let chatIconsEnabled = localStorage.getItem('chat-icons') !== 'off', activityIcon = 'thinking';
   let characterState = {folderName:'', folderConfigured:false, selectedPackId:'builtin', packs:[{id:'builtin',name:'Builtin',valid:true,icons:{}}]};
-  let instructionsOriginal = '', instructionsLoaded = false, instructionsSaving = false, devtoolsCheckResult = null, devtoolsCheckSummary = '', devtoolsChecking = false, usageLoading = false;
+  let instructionsOriginal = '', instructionsLoaded = false, instructionsSaving = false, devtoolsCheckResult = null, devtoolsCheckSummary = '', devtoolsChecking = false, usageLoading = false, accountActionStatus = {text:'', error:false};
   const toolCache = [null, null, null];
   let updateState = {}, updateSourceDirty = false, updateRequestPending = false;
   function call(action, args = {}) {
@@ -1160,15 +1160,32 @@
   }
   function renderAccounts() {
     const target = $('accounts-list'); if (!target) return; target.replaceChildren();
+    const status = node('p', accountActionStatus.text, 'muted account-action-status' + (accountActionStatus.error ? ' error' : ''));
+    status.id = 'accounts-status'; status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite'); status.hidden = !accountActionStatus.text; target.append(status);
     const profiles = Array.isArray(state.accounts) ? state.accounts : [];
     for (const profile of profiles) {
       const row = node('div', null, 'account-profile' + (profile.active ? ' active' : ''));
       const mark = node('span', profile.active ? '✓' : (profile.email || 'C').charAt(0).toUpperCase(), 'account-profile-mark');
-      const copy = node('span', null, 'account-profile-copy'); copy.append(node('strong', profile.email || profile.label || t('ChatGPT 계정')), node('small', profile.planType || (profile.active ? t('현재 사용 중') : t('등록된 계정'))));
+      const copy = node('span', null, 'account-profile-copy'); copy.append(node('strong', profile.email || profile.label || t('ChatGPT 계정')), node('small', profile.needsLogin ? t('다시 로그인이 필요합니다') : (profile.planType || (profile.active ? t('현재 사용 중') : t('등록된 계정')))));
       const actions = node('span', null, 'account-profile-actions');
-      if (profile.active) actions.append(node('span', t('사용 중'), 'status-pill online'));
+      if (profile.needsLogin) actions.append(button(t('다시 로그인'), () => startLogin(true), 'secondary-button'));
+      else if (profile.active) actions.append(node('span', t('사용 중'), 'status-pill online'));
       else {
-        actions.append(button(t('전환'), async () => { await call('auth.switch',{key:profile.key}); toast(t('계정을 전환했습니다.')); }, 'secondary-button'));
+        actions.append(button(t('전환'), async () => {
+          accountActionStatus = {text:t('계정 전환 중…'), error:false}; renderAccounts();
+          try {
+            const result = await call('auth.switch', {key:profile.key});
+            if (result && Array.isArray(result.accounts)) { state = result; render(result); }
+            const active = (state.accounts || []).find(value => value.active) || profile;
+            accountActionStatus = {text:t('계정을 전환했습니다.') + (active.email ? ' · ' + active.email : ''), error:false}; renderAccounts();
+          } catch (error) {
+            // The settings dialog is a top-layer modal; the global toast is
+            // hidden behind it. Refresh the authoritative state first so a
+            // revoked target can expose its needsLogin marker inline.
+            try { const latest = await call('state'); if (latest) { state = latest; render(latest); } } catch (_) {}
+            accountActionStatus = {text:t('계정 전환에 실패했습니다. ') + (error?.message || t('오류가 발생했습니다.')), error:true}; renderAccounts();
+          }
+        }, 'secondary-button'));
         actions.append(button(t('삭제'), async () => { if (!confirm((profile.email || profile.label) + '\n' + t('이 기기에 저장된 계정을 삭제할까요?'))) return; await call('auth.remove',{key:profile.key}); }, 'secondary-button subtle-danger'));
       }
       row.append(mark,copy,actions); target.append(row);

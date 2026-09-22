@@ -13,6 +13,9 @@ import java.util.*;
 /** App-private ChatGPT credential profiles. Secret values are never returned to the UI. */
 final class AccountProfiles {
     private static final String AUTH = "auth.json";
+    private static final String ADD_LOGIN_MARKER = ".add-login.json";
+    private static final String SWITCH_MARKER = ".switch.json";
+    private static final String SWITCH_BACKUP = ".switch-auth-backup";
     private final File liveAuth, root, profilesRoot, activeFile;
 
     AccountProfiles(File codexHome, File filesDir) throws IOException {
@@ -21,6 +24,8 @@ final class AccountProfiles {
         profilesRoot = child(root, "profiles");
         activeFile = child(root, "active");
         ensureDirectory(profilesRoot);
+        recoverInterruptedSwitch();
+        recoverInterruptedAddLogin();
         restoreActiveIfMissing();
     }
 
@@ -43,30 +48,187 @@ final class AccountProfiles {
             result.put(obj("key", directory.getName(),
                 "email", metadata.optString("email"),
                 "planType", metadata.optString("planType"),
+                "needsLogin", metadata.optBoolean("needsLogin", false),
                 "label", label(metadata, directory.getName()),
                 "active", directory.getName().equals(active)));
         }
         return result;
     }
 
-    JSONObject saveCurrent(JSONObject account) throws IOException {
-        if (!liveAuth.isFile()) throw new IOException(t("현재 로그인 정보를 찾지 못했습니다."));
-        JSONObject auth = readJson(liveAuth);
-        Identity identity = identity(auth, account);
+    JSONObject saveCurrent(JSONObject account) throws IOException { return saveCurrent(account, true); }
+
+    /** Snapshot the live credentials without changing the active-profile marker. */
+    JSONObject saveCurrentSnapshot(JSONObject account) throws IOException { return saveCurrent(account, false); }
+
+    /** Snapshot before add-login while preserving a prior re-login-needed flag. */
+    JSONObject saveCurrentForAddLogin(JSONObject account) throws IOException {
+        String key = activeKey();
+        boolean needsLogin = validKey(key) && readMetadata(profileDirectory(key)).optBoolean("needsLogin", false);
+        JSONObject profile = saveCurrent(account, true);
+        if (needsLogin) markNeedsLogin(profile.optString("key"));
+        return profile;
+    }
+
+    private JSONObject saveCurrent(JSONObject account, boolean activate) throws IOException {
+        File source = authSource();
+        if (!source.isFile()) throw new IOException(t("현재 로그인 정보를 찾지 못했습니다."));
+        JSONObject auth = readJson(source);
+        JSONObject effectiveAccount;
+        try { effectiveAccount = account == null ? new JSONObject() : new JSONObject(account.toString()); }
+        catch (Exception error) { throw new IOException(t("계정 정보를 준비하지 못했습니다."), error); }
+        String active = activeKey();
+        if (validKey(active)) {
+            JSONObject previous = readMetadata(profileDirectory(active));
+            try {
+                if (effectiveAccount.optString("email").isBlank() && !previous.optString("email").isBlank()) effectiveAccount.put("email", previous.optString("email"));
+                if (effectiveAccount.optString("planType").isBlank() && !previous.optString("planType").isBlank()) effectiveAccount.put("planType", previous.optString("planType"));
+                if (effectiveAccount.optString("accountId").isBlank() && !previous.optString("accountId").isBlank()) effectiveAccount.put("accountId", previous.optString("accountId"));
+            } catch (Exception error) { throw new IOException(t("계정 정보를 준비하지 못했습니다."), error); }
+        }
+        Identity identity = identity(auth, effectiveAccount);
         if (!identity.hasAuth) throw new IOException(t("현재 로그인 정보를 찾지 못했습니다."));
         String matching = matchingKey(identity);
         String key = matching.isEmpty() ? uniqueKey(identity) : matching;
         File directory = profileDirectory(key);
         ensureDirectory(directory);
-        copyAtomic(liveAuth, new File(directory, AUTH));
+        copyAtomic(source, new File(directory, AUTH));
         JSONObject metadata = obj("email", identity.email,
             "planType", identity.planType,
             "accountId", identity.accountId,
             "subject", identity.subject,
+            "needsLogin", false,
             "updatedAt", System.currentTimeMillis());
         writeAtomic(new File(directory, "profile.json"), metadata.toString());
+        if (activate) writeAtomic(activeFile, key + "\n");
+        return publicProfile(key, metadata, activate && key.equals(activeKey()));
+    }
+
+    /**
+     * Start an isolated login transaction. The existing auth remains in the
+     * primary CODEX_HOME; Engine launches the login app-server with the unique
+     * home returned by pendingLoginHome(), so account/login cannot revoke or
+     * overwrite another profile's credential.
+     */
+    JSONObject prepareAddLogin(JSONObject account) throws IOException {
+        return prepareAddLogin(account, false);
+    }
+
+    /** Prepare after the caller has already snapshotted live auth. */
+    JSONObject prepareAddLogin(JSONObject account, boolean alreadySnapshotted) throws IOException {
+        if (!liveAuth.isFile()) throw new IOException(t("현재 로그인 정보를 찾지 못했습니다."));
+        String previousKey = activeKey();
+        boolean previouslyNeedsLogin = validKey(previousKey) && readMetadata(profileDirectory(previousKey)).optBoolean("needsLogin", false);
+        JSONObject profile = alreadySnapshotted
+            ? publicProfile(previousKey, readMetadata(profileDirectory(previousKey)), true)
+            : saveCurrent(account, true);
+        String key = profile.optString("key");
+        if (key.isBlank()) throw new IOException(t("현재 로그인 정보를 찾지 못했습니다."));
+        if (previouslyNeedsLogin) markNeedsLogin(key);
+        String homeName = ".pending-login-" + UUID.randomUUID();
+        File home = child(root, homeName);
+        ensureDirectory(home);
+        try { writeAtomic(child(root, ADD_LOGIN_MARKER), obj("phase", "prepared", "restoreKey", key, "home", homeName).toString()); }
+        catch (Exception error) {
+            removeTree(home);
+            throw error instanceof IOException value ? value : new IOException(t("새 로그인 준비에 실패했습니다."), error);
+        }
+        return profile;
+    }
+
+    /** Unique CODEX_HOME for the in-progress login, or null when none exists. */
+    File pendingLoginHome() throws IOException {
+        File marker = child(root, ADD_LOGIN_MARKER);
+        if (!marker.isFile()) return null;
+        String name = readJson(marker).optString("home");
+        if (name.isBlank()) return null;
+        File home = child(root, name);
+        return home.isDirectory() ? home : null;
+    }
+
+    /** Mark a successful device login before its new credentials are saved. */
+    void markAddLoginCompleting() throws IOException {
+        File marker = child(root, ADD_LOGIN_MARKER);
+        if (!marker.isFile()) return;
+        JSONObject state = readJson(marker);
+        try { state.put("phase", "completing"); }
+        catch (Exception error) { throw new IOException(t("로그인 상태를 저장하지 못했습니다."), error); }
+        writeAtomic(marker, state.toString());
+    }
+
+    /** Save the newly authenticated account and remove the old-login recovery state. */
+    JSONObject finishAddLogin(JSONObject account) throws IOException {
+        File pendingAuth = pendingAuth();
+        if (!pendingAuth.isFile()) throw new IOException(t("새 로그인 정보를 찾지 못했습니다."));
+        copyAtomic(pendingAuth, liveAuth);
+        JSONObject profile = saveCurrent(account, true);
+        removeAddLoginFiles();
+        return profile;
+    }
+
+    boolean hasPendingAddLogin() { return new File(root, ADD_LOGIN_MARKER).isFile(); }
+
+    boolean isAddLoginCompleting() {
+        try { return hasPendingAddLogin() && "completing".equals(readJson(child(root, ADD_LOGIN_MARKER)).optString("phase")); }
+        catch (Exception ignored) { return false; }
+    }
+
+    /** Restore the previous account after cancellation or a failed login. */
+    void restorePreparedAddLogin() throws IOException {
+        restorePreparedAddLogin(false);
+    }
+
+    /**
+     * Restore after a failed login in the current process. A forced restore is
+     * required for a completing marker because the new login was unusable.
+     */
+    void restorePreparedAddLogin(boolean force) throws IOException {
+        File marker = child(root, ADD_LOGIN_MARKER);
+        if (!marker.isFile()) return;
+        JSONObject state = readJson(marker);
+        if (!force && "completing".equals(state.optString("phase"))) return;
+        String key = state.optString("restoreKey");
+        if (validKey(key)) writeAtomic(activeFile, key + "\n");
+        removeAddLoginFiles();
+    }
+
+    /** Stage a target auth file without publishing the target as active. */
+    void stageSwitch(String key) throws IOException {
+        key = requireKey(key);
+        String previous = activeKey();
+        if (key.equals(previous)) return;
+        File source = new File(profileDirectory(key), AUTH);
+        if (!source.isFile()) throw new IOException(t("저장된 계정을 찾지 못했습니다."));
+        File marker = child(root, SWITCH_MARKER), backup = child(root, SWITCH_BACKUP);
+        if (marker.isFile()) throw new IOException(t("다른 계정 전환이 진행 중입니다."));
+        if (liveAuth.isFile()) copyAtomic(liveAuth, backup); else Files.deleteIfExists(backup.toPath());
+        writeAtomic(marker, obj("previousKey", previous, "targetKey", key).toString());
+        try { copyAtomic(source, liveAuth); }
+        catch (Exception error) {
+            if (backup.isFile()) copyAtomic(backup, liveAuth); else Files.deleteIfExists(liveAuth.toPath());
+            Files.deleteIfExists(marker.toPath()); Files.deleteIfExists(backup.toPath());
+            throw error instanceof IOException value ? value : new IOException(t("계정을 전환하지 못했습니다."), error);
+        }
+    }
+
+    void commitStagedSwitch(String key) throws IOException {
+        File marker = child(root, SWITCH_MARKER);
+        if (!marker.isFile()) throw new IOException(t("계정 전환 준비가 없습니다."));
+        JSONObject state = readJson(marker);
+        if (!key.equals(state.optString("targetKey"))) throw new IOException(t("계정 전환 대상이 바뀌었습니다."));
+        try { state.put("phase", "committing"); }
+        catch (Exception error) { throw new IOException(t("계정 전환 상태를 저장하지 못했습니다."), error); }
+        writeAtomic(marker, state.toString());
         writeAtomic(activeFile, key + "\n");
-        return publicProfile(key, metadata, true);
+        Files.deleteIfExists(child(root, SWITCH_BACKUP).toPath());
+        Files.deleteIfExists(marker.toPath());
+    }
+
+    void rollbackStagedSwitch() throws IOException {
+        File marker = child(root, SWITCH_MARKER);
+        if (!marker.isFile()) return;
+        File backup = child(root, SWITCH_BACKUP);
+        if (backup.isFile()) copyAtomic(backup, liveAuth); else Files.deleteIfExists(liveAuth.toPath());
+        Files.deleteIfExists(backup.toPath()); Files.deleteIfExists(marker.toPath());
     }
 
     void switchTo(String key) throws IOException {
@@ -94,6 +256,16 @@ final class AccountProfiles {
         return publicProfile(key, metadata, false);
     }
 
+    void markNeedsLogin(String key) throws IOException {
+        key = requireKey(key);
+        File directory = profileDirectory(key), metadataFile = new File(directory, "profile.json");
+        if (!directory.isDirectory()) return;
+        JSONObject metadata = readMetadata(directory);
+        try { metadata.put("needsLogin", true); }
+        catch (Exception error) { throw new IOException(t("계정 상태를 저장하지 못했습니다."), error); }
+        writeAtomic(metadataFile, metadata.toString());
+    }
+
     void removeActiveProfile() throws IOException {
         String key = activeKey();
         Files.deleteIfExists(activeFile.toPath());
@@ -105,6 +277,56 @@ final class AccountProfiles {
         if (liveAuth.isFile() || key.isEmpty()) return;
         File source = new File(profileDirectory(key), AUTH);
         if (source.isFile()) copyAtomic(source, liveAuth);
+    }
+
+    private void recoverInterruptedSwitch() throws IOException {
+        File marker = child(root, SWITCH_MARKER);
+        if (!marker.isFile()) return;
+        JSONObject state = readJson(marker);
+        File backup = child(root, SWITCH_BACKUP);
+        if ("committing".equals(state.optString("phase")) && state.optString("targetKey").equals(activeKey())) {
+            Files.deleteIfExists(backup.toPath()); Files.deleteIfExists(marker.toPath());
+            return;
+        }
+        if (backup.isFile()) copyAtomic(backup, liveAuth);
+        Files.deleteIfExists(backup.toPath()); Files.deleteIfExists(marker.toPath());
+    }
+
+    private void recoverInterruptedAddLogin() throws IOException {
+        File marker = child(root, ADD_LOGIN_MARKER);
+        if (!marker.isFile()) return;
+        JSONObject state = readJson(marker);
+        File pending = pendingHome(state);
+        File pendingAuth = pending == null ? null : new File(pending, AUTH);
+        // The completing phase is the durable success boundary. Promote a
+        // successful isolated login after a crash; an uncompleted flow is
+        // discarded while the primary auth remains untouched.
+        if ("completing".equals(state.optString("phase")) && pendingAuth != null && pendingAuth.isFile())
+            copyAtomic(pendingAuth, liveAuth);
+        removeAddLoginFiles();
+    }
+
+    private void removeAddLoginFiles() throws IOException {
+        File pending = pendingLoginHome();
+        Files.deleteIfExists(child(root, ADD_LOGIN_MARKER).toPath());
+        if (pending != null) removeTree(pending);
+    }
+
+    private File authSource() throws IOException {
+        File home = pendingLoginHome();
+        File pending = home == null ? null : new File(home, AUTH);
+        return pending != null && pending.isFile() ? pending : liveAuth;
+    }
+
+    private File pendingAuth() throws IOException {
+        File home = pendingLoginHome();
+        return home == null ? new File(root, ".missing-pending-auth") : new File(home, AUTH);
+    }
+
+    private File pendingHome(JSONObject state) throws IOException {
+        String name = state.optString("home");
+        if (name.isBlank()) return null;
+        return child(root, name);
     }
 
     private JSONObject publicProfile(String key, JSONObject metadata, boolean active) {

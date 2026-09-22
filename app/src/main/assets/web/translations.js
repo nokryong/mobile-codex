@@ -835,7 +835,9 @@ window.MobileCodexEnglish = {
   "삭제": "Remove",
   "이 기기에 저장된 계정을 삭제할까요?": "Remove this saved account from the device?",
   "등록된 계정이 없습니다.": "No saved accounts.",
+  "계정 전환 중…": "Switching account…",
   "계정을 전환했습니다.": "Account switched.",
+  "계정 전환에 실패했습니다. ": "Could not switch accounts. ",
   "현재 계정을 이 기기에서 로그아웃할까요?": "Sign out the current account on this device?",
   "현재 로그인 정보를 찾지 못했습니다.": "Current sign-in credentials were not found.",
   "저장된 계정을 찾지 못했습니다.": "The saved account was not found.",
@@ -846,5 +848,7 @@ window.MobileCodexEnglish = {
   "로그인 정보를 읽지 못했습니다.": "Could not read sign-in credentials.",
   "계정을 전환하지 못했습니다.": "Could not switch accounts.",
   "계정 프로필을 준비하지 못했습니다.": "Could not prepare account profiles.",
+  "다시 로그인이 필요합니다": "Sign-in is required again",
+  "다시 로그인": "Sign in again",
   "이전 계정을 복원하지 못했습니다: ": "Could not restore the previous account: "
 };

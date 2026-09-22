@@ -56,6 +56,10 @@ public final class Engine {
     private String status = t("시작할 준비가 됐습니다"), threadId = "", turnId = "", serverThreadId = "";
     private JSONObject account = new JSONObject();
     private JSONObject rateLimits = new JSONObject();
+    /** Do not publish a staged target until account/rate-limit validation passes. */
+    private boolean suppressStatePublish;
+    private boolean stagedSwitchValidation;
+    private String stagedSwitchKey = "";
     private JSONArray models = new JSONArray();
     private JSONArray sessions = new JSONArray();
     private JSONObject active;
@@ -63,6 +67,9 @@ public final class Engine {
     private File stateFile;
     private final File workDir;
     private final CodexHome codexHome;
+    /** CODEX_HOME used by the currently running app-server. Add-login uses an
+     * isolated temporary home until the new credential is durably promoted. */
+    private File processHome;
     private final AccountProfiles accountProfiles;
     private final PersonalInstructions instructions;
     private final DevTools devTools;
@@ -80,6 +87,7 @@ public final class Engine {
         catch (IOException e) { throw new IllegalStateException(t("Codex 홈을 준비하지 못했습니다."), e); }
         try { accountProfiles = new AccountProfiles(codexHome.root(), context.getFilesDir()); }
         catch (IOException e) { throw new IllegalStateException(t("계정 프로필을 준비하지 못했습니다."), e); }
+        processHome = codexHome.root();
         instructions = new PersonalInstructions(codexHome);
         devTools = new DevTools(context);
         changes = new ChangeReview(new File(context.getFilesDir(), "change-backups"), this::git);
@@ -101,6 +109,7 @@ public final class Engine {
     public void unobserve(Ui observer) { observers.remove(observer); }
     void setTestTransport(TestTransport value) { testTransport = value; }
     void setTestAccountValidation(boolean value) { testAccountValidation = value; }
+    File processHomeForTest() { return processHome; }
     private void event(String name, JSONObject data) { Ui current = ui; if (current != null) current.event(name, data); for (Ui observer : observers) if (observer != current) observer.event(name, data); }
     private void taskNotification(String kind, String title, String message, String thread, String approval) {
         Intent intent = new Intent(CodexNotificationReceiver.ACTION).setPackage(context.getPackageName())
@@ -124,7 +133,7 @@ public final class Engine {
             "permissions", permissionMode, "approvalMode", approvalMode, "allFilesAccess", (Build.VERSION.SDK_INT >= 30 ? Environment.isExternalStorageManager() : context.checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE) == android.content.pm.PackageManager.PERMISSION_GRANTED),
             "directWorkspace", documents.directDirectory() != null, "cwd", projectDirectory().getAbsolutePath());
     }
-    private void publish() { event("state", snapshot()); }
+    private void publish() { if (!suppressStatePublish) event("state", snapshot()); }
     private void persist() {
         try { persistSessions(sessions); }
         catch (IOException e) { event("error", obj("message", t("대화 기록을 저장하지 못했습니다."))); }
@@ -228,7 +237,22 @@ public final class Engine {
                         // AGENTS files are read when Codex starts a new execution; force that boundary after a successful write.
                         stopNow(); reply.complete(saved, null);
                     }
-                    case "rpc" -> { start(); reply.complete(call(args.getString("method"), args.optJSONObject("params") == null ? new JSONObject() : args.getJSONObject("params")), null); }
+                    case "rpc" -> {
+                        start();
+                        String method = args.getString("method");
+                        JSONObject result = call(method, args.optJSONObject("params") == null ? new JSONObject() : args.getJSONObject("params"));
+                        // account/rateLimits/read may proactively rotate an
+                        // expired access/refresh token inside app-server.auth.
+                        // Keep the profile copy in sync before the next
+                        // account switch or process restart can restore the
+                        // pre-rotation token.
+                        if (method.equals("account/rateLimits/read") && account.length() > 0) {
+                            accountProfiles.saveCurrentSnapshot(account);
+                            rateLimits = result == null ? new JSONObject() : result;
+                            publish();
+                        }
+                        reply.complete(result, null);
+                    }
                     case "rpc.respond" -> {
                         PendingRequest pending = requests.remove(args.getString("key"));
                         if (pending == null) throw new IOException(t("이미 종료된 요청입니다."));
@@ -342,11 +366,11 @@ public final class Engine {
         if (!binary.isFile() || !binary.canExecute()) throw new IOException(t("실행 엔진이 포함되지 않았습니다. 전체 APK를 다시 설치해 주세요."));
         status = t("Codex를 시작하고 있습니다"); publish();
         // Keep upstream Codex tools/features available; preserve user configuration.
-        File config = new File(codexHome.root(), "config.toml");
+        File config = new File(processHome, "config.toml");
         if (!config.exists()) dev.mobilecodex.app.core.Utf8Files.write(config.toPath(), "cli_auth_credentials_store = \"file\"\napproval_policy = \"on-request\"\n");
         ProcessBuilder builder = new ProcessBuilder(binary.getAbsolutePath(), "app-server", "--listen", "stdio://");
         builder.directory(projectDirectory());
-        devTools.configure(builder, codexHome.root(), runtimeAliases());
+        devTools.configure(builder, processHome, runtimeAliases());
         builder.environment().put("CODEX_SELF_EXE", binary.getAbsolutePath());
         context.startForegroundService(new Intent(context, EngineService.class));
         RuntimeFailure.Tail stderrTail = new RuntimeFailure.Tail();
@@ -412,52 +436,101 @@ public final class Engine {
         return rpc.request(method, params).get(65, TimeUnit.SECONDS);
     }
     private void readAccount() throws Exception {
-        // Ask app-server to rotate an expired access token when possible. The
-        // returned auth.json is then snapshotted by saveCurrent, so switching
-        // profiles does not resurrect an old access token.
-        JSONObject data = call("account/read", obj("refreshToken", true));
+        // Do not force a refresh here. In app-server v0.155.1,
+        // account/read(refreshToken:true) unconditionally consumes and rotates
+        // the refresh token, even when the access token is still fresh. The
+        // normal auth() path refreshes only when needed; profile snapshots are
+        // updated after account/rateLimits/read if that path rotates auth.
+        JSONObject data = call("account/read", obj("refreshToken", false));
         account = data.optJSONObject("account"); if (account == null) account = new JSONObject();
-        if (account.length() > 0) accountProfiles.saveCurrent(account);
+        if (account.length() > 0) {
+            boolean activate = !stagedSwitchValidation && !(addAccountRestoreKey != null
+                && !addAccountRestoreKey.isBlank() && accountProfiles.hasPendingAddLogin());
+            if (activate) {
+                accountProfiles.saveCurrent(account);
+                // If the app restarted after a successful add-login but
+                // before cleanup, the live account is the new one. Persist it
+                // and clear only that completion marker; do not restore old auth.
+                if (accountProfiles.isAddLoginCompleting()) accountProfiles.finishAddLogin(account);
+            } else accountProfiles.saveCurrentSnapshot(account);
+        }
     }
     private void readRateLimits() throws Exception {
         if (account.length() == 0) { rateLimits = new JSONObject(); return; }
-        try { rateLimits = call("account/rateLimits/read", new JSONObject()); }
+        try {
+            rateLimits = call("account/rateLimits/read", new JSONObject());
+            // auth() may have refreshed credentials while fetching limits.
+            // Persist that generation to the currently selected profile.
+            accountProfiles.saveCurrentSnapshot(account);
+        }
         catch (Exception error) {
             rateLimits = new JSONObject();
             String message = unwrap(error).getMessage();
             if (message != null && (message.contains("token_revoked") || message.contains("invalidated oauth token") || message.contains("401")))
-                throw new IOException(t("저장된 계정의 로그인 토큰이 폐기되었습니다. 이 계정은 다시 로그인해야 합니다."), error);
+                {
+                    String invalidKey = stagedSwitchKey.isBlank() ? accountProfiles.activeKey() : stagedSwitchKey;
+                    try { accountProfiles.markNeedsLogin(invalidKey); } catch (Exception ignored) { }
+                    throw new IOException(t("저장된 계정의 로그인 토큰이 폐기되었습니다. 이 계정은 다시 로그인해야 합니다."), error);
+                }
         }
     }
     private JSONObject beginLogin(boolean add) throws Exception {
-        ensureEngineIdle(); start();
-        if (add && account.length() > 0) {
-            JSONObject profile = accountProfiles.saveCurrent(account);
+        ensureEngineIdle();
+        if (add) {
+            // Recovery must not validate the existing account first: a
+            // token_revoked account cannot reach device login otherwise.
+            // Snapshot only while a live server is available, then cross the
+            // process boundary before starting the isolated login home. Never logout.
+            boolean snapshotted = ready && processIsAlive();
+            if (snapshotted) accountProfiles.saveCurrentForAddLogin(account);
+            stopNow();
+            JSONObject profile = accountProfiles.prepareAddLogin(account, snapshotted);
             addAccountRestoreKey = profile.optString("key");
-            call("account/logout", new JSONObject());
             account = new JSONObject(); rateLimits = new JSONObject(); publish();
-        } else addAccountRestoreKey = "";
+            processHome = accountProfiles.pendingLoginHome();
+            if (processHome == null) throw new IOException(t("새 로그인 공간을 준비하지 못했습니다."));
+            start();
+        } else {
+            start();
+            addAccountRestoreKey = "";
+        }
         return call("account/login/start", obj("type", "chatgptDeviceCode"));
     }
+
+    private boolean processIsAlive() {
+        return process != null && process.isAlive() && rpc != null && !rpc.isClosed();
+    }
     private void restoreAccountAfterCancelledLogin() throws Exception {
-        if (addAccountRestoreKey.isBlank()) return;
-        String restore = addAccountRestoreKey; addAccountRestoreKey = "";
-        stopNow(); accountProfiles.switchTo(restore); account = new JSONObject(); rateLimits = new JSONObject(); start();
+        if (addAccountRestoreKey.isBlank() && !accountProfiles.hasPendingAddLogin()) return;
+        addAccountRestoreKey = "";
+        stopNow(); accountProfiles.restorePreparedAddLogin(); processHome = codexHome.root(); account = new JSONObject(); rateLimits = new JSONObject(); start();
     }
     private void switchAccount(String key) throws Exception {
         ensureEngineIdle();
         String previous = accountProfiles.activeKey();
         if (key.equals(previous)) return;
         if (account.length() > 0) accountProfiles.saveCurrent(account);
+        suppressStatePublish = true;
         stopNow();
+        stagedSwitchValidation = true;
+        stagedSwitchKey = key;
         try {
-            accountProfiles.switchTo(key); account = new JSONObject(); rateLimits = new JSONObject(); start();
+            accountProfiles.stageSwitch(key);
+            account = new JSONObject(); rateLimits = new JSONObject(); start();
+            // Only now expose the target as the active account. If validation
+            // fails, the marker and live auth still point to the old account.
+            accountProfiles.commitStagedSwitch(key);
         } catch (Exception error) {
-            if (!previous.isBlank()) {
-                try { accountProfiles.switchTo(previous); account = new JSONObject(); rateLimits = new JSONObject(); start(); }
-                catch (Exception ignored) { }
-            }
+            try { stopNow(); } catch (Exception ignored) { }
+            try { accountProfiles.rollbackStagedSwitch(); } catch (Exception ignored) { }
+            account = new JSONObject(); rateLimits = new JSONObject();
+            try { stagedSwitchValidation = false; start(); } catch (Exception ignored) { }
             throw error;
+        } finally {
+            stagedSwitchValidation = false;
+            stagedSwitchKey = "";
+            suppressStatePublish = false;
+            publish();
         }
     }
     private String resolvedModel(String requested) {
@@ -785,9 +858,40 @@ public final class Engine {
         try {
             if (method.equals("account/login/completed")) {
                 if (p.optBoolean("success")) {
-                    readAccount(); readRateLimits(); addAccountRestoreKey = ""; status = t("연결됨");
-                    try { JSONArray data = call("model/list", obj("limit", 100)).optJSONArray("data"); if (data != null) models = data; } catch (Exception ignored) {}
-                    if (active != null && active.optString("workspaceKey").equals(documents.key()) && documents.workspace().optBoolean("available")) resumeRemote(false);
+                    boolean adding = !addAccountRestoreKey.isBlank() && accountProfiles.hasPendingAddLogin();
+                    try {
+                        if (adding) accountProfiles.markAddLoginCompleting();
+                        readAccount();
+                        readRateLimits();
+                        if (adding) {
+                            // Stop the isolated server before promoting its
+                            // auth.json, so no late refresh write can race the
+                            // promotion into the primary CODEX_HOME.
+                            stopNow();
+                            accountProfiles.finishAddLogin(account);
+                            processHome = codexHome.root();
+                            start();
+                        }
+                        addAccountRestoreKey = ""; status = t("연결됨");
+                        try { JSONArray data = call("model/list", obj("limit", 100)).optJSONArray("data"); if (data != null) models = data; } catch (Exception ignored) {}
+                        if (active != null && active.optString("workspaceKey").equals(documents.key()) && documents.workspace().optBoolean("available")) resumeRemote(false);
+                    } catch (Exception loginError) {
+                        if (adding) {
+                            try {
+                                accountProfiles.restorePreparedAddLogin(true);
+                            } catch (Exception restoreError) {
+                                event("error", obj("message", t("이전 계정을 복원하지 못했습니다: ") + unwrap(restoreError).getMessage()));
+                            }
+                            addAccountRestoreKey = "";
+                            processHome = codexHome.root();
+                            account = new JSONObject(); rateLimits = new JSONObject();
+                            try { start(); } catch (Exception ignored) { }
+                        }
+                        event("error", obj("message", unwrap(loginError).getMessage()));
+                        JSONObject failed = new JSONObject(p.toString()); failed.put("success", false);
+                        failed.put("error", unwrap(loginError).getMessage());
+                        event("login.completed", failed); publish(); return;
+                    }
                 } else {
                     event("error", obj("message", p.optString("error", t("로그인이 취소되었습니다."))));
                     try { restoreAccountAfterCancelledLogin(); } catch (Exception restoreError) { event("error", obj("message", t("이전 계정을 복원하지 못했습니다: ") + unwrap(restoreError).getMessage())); }
@@ -1023,7 +1127,15 @@ public final class Engine {
         PhoneUseService.stopControl();
         if (pendingApproval != null) pendingApproval.decision.complete(false);
         Process old = process; process = null;
-        if (old != null) old.destroyForcibly();
+        if (old != null) {
+            old.destroyForcibly();
+            // Account switching replaces auth.json immediately after this
+            // method returns. Wait briefly for the old app-server to exit so a
+            // pending refresh cannot write its rotated auth after the target
+            // profile has been staged.
+            try { if (!old.waitFor(2, TimeUnit.SECONDS) && old.isAlive()) old.destroyForcibly(); }
+            catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); }
+        }
         if (rpc != null) rpc.close(); rpc = null;
         requests.forEach((key, value) -> event("server.resolved", obj("key", key)));
         requests.clear();

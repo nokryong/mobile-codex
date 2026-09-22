@@ -57,6 +57,41 @@ public class AccountProfilesTest {
         assertTrue(accessToken().endsWith(".secret"));
     }
 
+    @Test public void addLoginPreparationIsolatesAuthWithoutChangingActiveProfile() throws Exception {
+        writeAuth("restore@example.test", "subject", "workspace", "secret");
+        AccountProfiles profiles = new AccountProfiles(codexHome, context.getFilesDir());
+        String key = profiles.saveCurrent(new JSONObject().put("email", "restore@example.test")).getString("key");
+        profiles.prepareAddLogin(new JSONObject().put("email", "restore@example.test"));
+        assertTrue(auth.isFile());
+        assertEquals(key, profiles.activeKey());
+        assertTrue(profiles.hasPendingAddLogin());
+        assertNotNull(profiles.pendingLoginHome());
+        assertFalse(new File(profiles.pendingLoginHome(), "auth.json").isFile());
+        AccountProfiles reopened = new AccountProfiles(codexHome, context.getFilesDir());
+        assertTrue(auth.isFile());
+        assertEquals(key, reopened.activeKey());
+        assertFalse(reopened.hasPendingAddLogin());
+        assertTrue(accessToken().endsWith(".secret"));
+    }
+
+    @Test public void stagedSwitchDoesNotPublishUntilCommitAndRollbackRestoresLiveAuth() throws Exception {
+        writeAuth("one@example.test", "subject-one", "workspace-one", "secret-one");
+        AccountProfiles profiles = new AccountProfiles(codexHome, context.getFilesDir());
+        String first = profiles.saveCurrent(new JSONObject().put("email", "one@example.test")).getString("key");
+        writeAuth("two@example.test", "subject-two", "workspace-two", "secret-two");
+        String second = profiles.saveCurrent(new JSONObject().put("email", "two@example.test")).getString("key");
+        profiles.switchTo(first);
+        profiles.stageSwitch(second);
+        assertEquals(first, profiles.activeKey());
+        assertTrue(accessToken().endsWith(".secret-two"));
+        profiles.rollbackStagedSwitch();
+        assertEquals(first, profiles.activeKey());
+        assertTrue(accessToken().endsWith(".secret-one"));
+        profiles.stageSwitch(second); profiles.commitStagedSwitch(second);
+        assertEquals(second, profiles.activeKey());
+        assertTrue(accessToken().endsWith(".secret-two"));
+    }
+
     @Test public void rejectsTraversalAndCurrentProfileDeletion() throws Exception {
         writeAuth("safe@example.test", "subject", "workspace", "secret");
         AccountProfiles profiles = new AccountProfiles(codexHome, context.getFilesDir());

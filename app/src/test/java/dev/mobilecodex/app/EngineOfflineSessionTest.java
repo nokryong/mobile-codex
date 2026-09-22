@@ -65,7 +65,7 @@ public class EngineOfflineSessionTest {
         assertEquals("never", allow.getString("approvalPolicy")); assertEquals("user", allow.getString("approvalsReviewer"));
         engine.io.shutdownNow();
     }
-    @Test public void accountReadRequestsRefreshAndRateLimitRevocationIsNotSilenced() throws Exception {
+    @Test public void accountReadDoesNotForceRotationAndRateLimitRevocationIsNotSilenced() throws Exception {
         File auth = new File(new File(context.getFilesDir(), ".codex"), "auth.json"); auth.getParentFile().mkdirs();
         Files.write(auth.toPath(), obj("tokens", obj("access_token", "opaque-test-token")).toString().getBytes(StandardCharsets.UTF_8));
         Engine engine = new Engine(context); java.util.ArrayList<JSONObject> calls = new java.util.ArrayList<>();
@@ -76,7 +76,7 @@ public class EngineOfflineSessionTest {
             throw new AssertionError(method);
         });
         Method readAccount = Engine.class.getDeclaredMethod("readAccount"); readAccount.setAccessible(true); readAccount.invoke(engine);
-        assertTrue(calls.get(0).getJSONObject("params").getBoolean("refreshToken"));
+        assertFalse(calls.get(0).getJSONObject("params").getBoolean("refreshToken"));
         Method readRateLimits = Engine.class.getDeclaredMethod("readRateLimits"); readRateLimits.setAccessible(true);
         try { readRateLimits.invoke(engine); fail("revoked credentials must not be treated as a usable account"); }
         catch (java.lang.reflect.InvocationTargetException expected) { assertTrue(expected.getCause().getMessage().contains("다시 로그인")); }
@@ -106,6 +106,91 @@ public class EngineOfflineSessionTest {
         try { switchAccount.invoke(engine, target); fail("a failed target startup must not report a successful switch"); }
         catch (java.lang.reflect.InvocationTargetException expected) { assertTrue(expected.getCause().getMessage().contains("다시 로그인")); }
         assertEquals(previous, profiles.activeKey());
+        engine.io.shutdownNow(); deleteTree(new File(context.getFilesDir(), "account-profiles")); Files.deleteIfExists(auth.toPath());
+    }
+
+    @Test public void revokedActiveAccountCanReachAddLoginWithoutLogoutAndCancelRestoresAuth() throws Exception {
+        File auth = new File(new File(context.getFilesDir(), ".codex"), "auth.json"); auth.getParentFile().mkdirs();
+        Files.write(auth.toPath(), obj("tokens", obj("access_token", "revoked-token")).toString().getBytes(StandardCharsets.UTF_8));
+        byte[] previousAuth = Files.readAllBytes(auth.toPath());
+        Engine engine = new Engine(context);
+        AccountProfiles profiles = (AccountProfiles) field(engine, "accountProfiles");
+        String previous = profiles.saveCurrent(obj("email", "revoked@example.test", "planType", "plus")).getString("key");
+        profiles.markNeedsLogin(previous);
+        java.util.ArrayList<String> calls = new java.util.ArrayList<>();
+        engine.setTestTransport((method, params) -> {
+            calls.add(method);
+            if (method.equals("account/login/start")) {
+                assertTrue("active auth must remain isolated from device login", auth.isFile());
+                File pending = profiles.pendingLoginHome();
+                assertNotNull("device login must use a pending CODEX_HOME", pending);
+                assertEquals(pending.getAbsolutePath(), engine.processHomeForTest().getAbsolutePath());
+                assertFalse("pending home must start without active credentials", new File(pending, "auth.json").isFile());
+                return obj("loginId", "login-test", "userCode", "ABC", "verificationUrl", "https://auth.openai.com/codex/device");
+            }
+            throw new AssertionError(method);
+        });
+        Method beginLogin = Engine.class.getDeclaredMethod("beginLogin", boolean.class); beginLogin.setAccessible(true);
+        beginLogin.invoke(engine, true);
+        assertEquals(java.util.List.of("account/login/start"), calls);
+        assertEquals(previous, profiles.activeKey());
+        Method restore = Engine.class.getDeclaredMethod("restoreAccountAfterCancelledLogin"); restore.setAccessible(true);
+        restore.invoke(engine);
+        assertTrue(auth.isFile());
+        assertEquals(previous, profiles.activeKey());
+        assertArrayEquals(previousAuth, Files.readAllBytes(auth.toPath()));
+        engine.io.shutdownNow(); deleteTree(new File(context.getFilesDir(), "account-profiles")); Files.deleteIfExists(auth.toPath());
+    }
+
+    @Test public void threeSequentialAddLoginsStayUsableAfterRotatingAndReturningToOlderProfiles() throws Exception {
+        File auth = new File(new File(context.getFilesDir(), ".codex"), "auth.json"); auth.getParentFile().mkdirs();
+        writeNamedAuth(auth, "a@example.test", "token-a-0");
+        Engine engine = new Engine(context); AccountProfiles profiles = (AccountProfiles) field(engine, "accountProfiles");
+        Method readAccount = Engine.class.getDeclaredMethod("readAccount"); readAccount.setAccessible(true);
+        Method beginLogin = Engine.class.getDeclaredMethod("beginLogin", boolean.class); beginLogin.setAccessible(true);
+        Method notification = Engine.class.getDeclaredMethod("onNotification", String.class, JSONObject.class); notification.setAccessible(true);
+        final String[] login = {"a"};
+        engine.setTestTransport((method, params) -> {
+            if (method.equals("account/read")) {
+                File currentHome = engine.processHomeForTest();
+                String raw = new String(Files.readAllBytes(new File(currentHome, "auth.json").toPath()), StandardCharsets.UTF_8);
+                String name = raw.contains("token-a") ? "a" : raw.contains("token-b") ? "b" : "c";
+                return accountFor(name);
+            }
+            if (method.equals("account/rateLimits/read")) {
+                File currentHome = engine.processHomeForTest();
+                File currentAuth = new File(currentHome, "auth.json");
+                if (currentAuth.isFile()) {
+                    String raw = new String(Files.readAllBytes(currentAuth.toPath()), StandardCharsets.UTF_8);
+                    String name = raw.contains("token-a") ? "a" : raw.contains("token-b") ? "b" : "c";
+                    writeNamedAuth(currentAuth, name + "@example.test", "token-" + name + "-rotated");
+                }
+                return obj("rateLimits", obj("primary", obj("usedPercent", 1)));
+            }
+            if (method.equals("account/login/start")) return obj("loginId", "login-" + login[0], "userCode", "ABC", "verificationUrl", "https://auth.openai.com/codex/device");
+            if (method.equals("model/list")) return obj("data", new JSONArray());
+            throw new AssertionError(method);
+        });
+        readAccount.invoke(engine);
+        String a = profiles.activeKey();
+        login[0] = "b"; beginLogin.invoke(engine, true);
+        File pendingB = engine.processHomeForTest(); assertNotEquals(auth.getParentFile().getAbsolutePath(), pendingB.getAbsolutePath());
+        writeNamedAuth(new File(pendingB, "auth.json"), "b@example.test", "token-b-0");
+        notification.invoke(engine, "account/login/completed", obj("success", true));
+        String b = profiles.activeKey(); assertNotEquals(a, b);
+        login[0] = "c"; beginLogin.invoke(engine, true);
+        File pendingC = engine.processHomeForTest();
+        writeNamedAuth(new File(pendingC, "auth.json"), "c@example.test", "token-c-0");
+        notification.invoke(engine, "account/login/completed", obj("success", true));
+        String c = profiles.activeKey(); assertNotEquals(b, c);
+
+        engine.setTestAccountValidation(true);
+        for (String key : new String[]{a, b, c, a, b}) {
+            Method switchAccount = Engine.class.getDeclaredMethod("switchAccount", String.class); switchAccount.setAccessible(true);
+            switchAccount.invoke(engine, key);
+            assertEquals(key, profiles.activeKey());
+            assertTrue(auth.isFile());
+        }
         engine.io.shutdownNow(); deleteTree(new File(context.getFilesDir(), "account-profiles")); Files.deleteIfExists(auth.toPath());
     }
     @Test public void sessionsAreSharedAcrossProfilesAndAccountSwitchKeepsTheOpenConversation() throws Exception {
@@ -169,6 +254,11 @@ public class EngineOfflineSessionTest {
     }
     private static Object field(Engine engine, String name) throws Exception { java.lang.reflect.Field value = Engine.class.getDeclaredField(name); value.setAccessible(true); return value.get(engine); }
     private static void setField(Engine engine, String name, Object value) throws Exception { java.lang.reflect.Field field = Engine.class.getDeclaredField(name); field.setAccessible(true); field.set(engine, value); }
+    private static JSONObject accountFor(String name) { return obj("type", "chatgpt", "email", name + "@example.test", "planType", "plus"); }
+    private static void writeNamedAuth(File file, String email, String token) throws Exception {
+        File parent = file.getParentFile(); if (parent != null) parent.mkdirs();
+        Files.write(file.toPath(), obj("tokens", obj("access_token", token)).toString().getBytes(StandardCharsets.UTF_8));
+    }
     private JSONObject handle(Engine engine, String action, JSONObject args) throws Exception {
         CompletableFuture<JSONObject> done = new CompletableFuture<>();
         engine.handle(action, args, (value, error) -> { if (error != null) done.completeExceptionally(error); else done.complete(value); });

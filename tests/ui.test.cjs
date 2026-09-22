@@ -136,6 +136,19 @@ test('account profiles can add, switch and remove without exposing credentials',
  d.getElementById('account-add').click();await tick();assert.ok(calls.some(call=>call.action==='auth.add'));assert.equal(d.getElementById('device-code').textContent,'ABCD');
 });
 
+test('account switch failures remain visible inside the settings dialog',async()=>{
+ const initial={ready:true,busy:false,permissions:'workspace-write',models:[],messages:[],sessions:[],account:{type:'chatgpt',email:'one@example.test'},workspace:{selected:true,name:'Project'},cwd:'/test/project',threadId:'t',status:'연결됨',accounts:[{key:'current',email:'one@example.test',active:true},{key:'other',email:'two@example.test',active:false,needsLogin:false}],rateLimits:{}};
+ const latest={...initial,accounts:[{key:'current',email:'one@example.test',active:true},{key:'other',email:'two@example.test',active:false,needsLogin:true}]};
+ const {w,calls}=setup({'auth.switch':()=>{throw new Error('target unavailable');},state:()=>latest});await tick();
+ w.mobileCodexEvent('state',initial);w.document.getElementById('account-button').click();await tick();
+ [...w.document.querySelectorAll('.account-profile-actions button')].find(button=>button.textContent==='전환').click();await tick();await tick();
+ assert.equal(calls.filter(call=>call.action==='auth.switch').length,1);
+ assert.equal(w.document.getElementById('accounts-status').getAttribute('role'),'status');
+ assert.match(w.document.getElementById('accounts-status').textContent,/계정 전환에 실패했습니다.*target unavailable/);
+ assert.match(w.document.getElementById('accounts-list').textContent,/다시 로그인이 필요합니다/);
+ assert.equal(w.document.getElementById('toast').hidden,true);
+});
+
 test('a different project cannot inherit the previous project tool cache after a failure',async()=>{
  let offline=false;
  const {w,snapshot}=setup({'rpc':m=>{if(offline)throw new Error('offline');return m.args.method==='skills/list'?{data:[{skills:[{name:'project-only-skill',description:'local',path:'/first/SKILL.md'}]}]}:{data:[],marketplaces:[]};}});await tick();
