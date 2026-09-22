@@ -41,7 +41,7 @@ public class AccountProfilesTest {
         JSONArray listed = profiles.list(); assertEquals(2, listed.length());
         assertFalse(listed.toString().contains("secret-one")); assertFalse(listed.toString().contains("secret-two"));
         profiles.switchTo(firstKey);
-        assertTrue(new String(Files.readAllBytes(auth.toPath()), StandardCharsets.UTF_8).contains("one@example.test"));
+        assertTrue(accessToken().endsWith(".rotated-secret"));
         assertEquals(firstKey, profiles.activeKey());
         assertEquals(secondKey, profiles.delete(secondKey).getString("key"));
         assertEquals(1, profiles.list().length());
@@ -54,7 +54,7 @@ public class AccountProfilesTest {
         Files.delete(auth.toPath());
         AccountProfiles reopened = new AccountProfiles(codexHome, context.getFilesDir());
         assertEquals(key, reopened.activeKey()); assertTrue(auth.isFile());
-        assertTrue(new String(Files.readAllBytes(auth.toPath()), StandardCharsets.UTF_8).contains("restore@example.test"));
+        assertTrue(accessToken().endsWith(".secret"));
     }
 
     @Test public void rejectsTraversalAndCurrentProfileDeletion() throws Exception {
@@ -73,6 +73,10 @@ public class AccountProfilesTest {
             .put("access_token", "x." + Base64.getUrlEncoder().withoutPadding().encodeToString("{}".getBytes(StandardCharsets.UTF_8)) + "." + secret)
             .put("account_id", accountId));
         Files.write(auth.toPath(), value.toString().getBytes(StandardCharsets.UTF_8));
+    }
+    private String accessToken() throws Exception {
+        JSONObject value = new JSONObject(new String(Files.readAllBytes(auth.toPath()), StandardCharsets.UTF_8));
+        return value.getJSONObject("tokens").getString("access_token");
     }
     private static void remove(File value) {
         File[] children = value.listFiles(); if (children != null) for (File child : children) remove(child);
