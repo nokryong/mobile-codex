@@ -281,7 +281,7 @@ dialog { max-height:calc(var(--app-height,100dvh) - 32px); overflow-y:auto; padd
 .topbar { border-bottom:0; height:58px; padding:0 20px; }
 #header-project { font-size:14px; }
 .welcome { text-align:center; margin:clamp(36px,15vh,140px) auto 32px; }
-.welcome-mark { display:none; }
+.welcome-mark { display:flex; }
 .welcome h1 { font-size:30px; font-weight:600; letter-spacing:-1px; }
 .welcome>p { margin-top:12px; color:var(--muted); }
 .suggestions { justify-content:center; gap:8px; }
@@ -351,6 +351,12 @@ dialog { max-height:calc(var(--app-height,100dvh) - 32px); overflow-y:auto; padd
 .instructions-editor { width:100%; min-height:170px; resize:vertical; margin-top:10px; padding:12px; border:1px solid var(--border); border-radius:12px; background:var(--bg); line-height:1.6; }
 .instructions-actions { display:flex; gap:10px; justify-content:flex-end; }
 #instructions-path { overflow-wrap:anywhere; font-size:11px; }
+
+/* App identity artwork uses the approved source image in both light and dark themes. */
+.brand img { width:25px; height:25px; object-fit:contain; background:#fff; border-radius:5px; padding:2px; flex:none; }
+.welcome-mark { justify-content:center; }
+.welcome:has(.welcome-character:not([hidden])) .welcome-mark { display:none; }
+.welcome-mark img { display:block; width:35px; height:35px; object-fit:contain; background:#fff; border-radius:7px; padding:3px; }
 
 /* Optional local character stickers, separate from generated image galleries. */
 .chat-character { display:block; width:96px; height:96px; object-fit:contain; flex:none; margin:0 0 10px; }
