@@ -27,16 +27,16 @@ public class CodexNotificationReceiverTest {
         context.getSharedPreferences("notifications", 0).edit().clear().commit();
     }
 
-    @Test public void visibleConversationStillPostsEnabledTaskNotification() {
+    @Test public void explicitTaskBroadcastPostsNotificationForVisibleConversation() {
         context.getSharedPreferences("notifications", 0).edit()
             .putBoolean("enabled", true).putBoolean("foreground", true)
             .putString("visibleThread", "thread-one").commit();
-        Intent intent = new Intent(CodexNotificationReceiver.ACTION)
-            .putExtra("kind", "completed").putExtra("title", "답변 완료")
-            .putExtra("message", "Codex가 작업을 마쳤습니다.")
-            .putExtra("threadId", "thread-one").putExtra("approvalId", "");
+        Intent intent = Engine.taskNotificationIntent(context, "completed", "답변 완료",
+            "Codex가 작업을 마쳤습니다.", "thread-one", "");
 
-        new CodexNotificationReceiver().onReceive(context, intent);
+        assertEquals(CodexNotificationReceiver.class.getName(), intent.getComponent().getClassName());
+        context.sendBroadcast(intent);
+        shadowOf(android.os.Looper.getMainLooper()).idle();
 
         ShadowNotificationManager notifications = shadowOf(manager);
         assertEquals(1, notifications.size());

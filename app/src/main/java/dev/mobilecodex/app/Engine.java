@@ -111,11 +111,13 @@ public final class Engine {
     void setTestAccountValidation(boolean value) { testAccountValidation = value; }
     File processHomeForTest() { return processHome; }
     private void event(String name, JSONObject data) { Ui current = ui; if (current != null) current.event(name, data); for (Ui observer : observers) if (observer != current) observer.event(name, data); }
-    private void taskNotification(String kind, String title, String message, String thread, String approval) {
-        Intent intent = new Intent(CodexNotificationReceiver.ACTION).setPackage(context.getPackageName())
+    static Intent taskNotificationIntent(Context context, String kind, String title, String message, String thread, String approval) {
+        return new Intent(context, CodexNotificationReceiver.class).setAction(CodexNotificationReceiver.ACTION)
             .putExtra("kind", kind).putExtra("title", title).putExtra("message", message)
             .putExtra("threadId", thread == null ? "" : thread).putExtra("approvalId", approval == null ? "" : approval);
-        context.sendBroadcast(intent);
+    }
+    private void taskNotification(String kind, String title, String message, String thread, String approval) {
+        context.sendBroadcast(taskNotificationIntent(context, kind, title, message, thread, approval));
     }
     private JSONObject snapshot() {
         JSONArray summaries = new JSONArray();
