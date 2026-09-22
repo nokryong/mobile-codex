@@ -168,7 +168,7 @@ public class EngineOfflineSessionTest {
                 File currentHome = engine.processHomeForTest();
                 String raw = new String(Files.readAllBytes(new File(currentHome, "auth.json").toPath()), StandardCharsets.UTF_8);
                 String name = raw.contains("token-a") ? "a" : raw.contains("token-b") ? "b" : "c";
-                return accountFor(name);
+                return obj("account", accountFor(name));
             }
             if (method.equals("account/rateLimits/read")) {
                 File currentHome = engine.processHomeForTest();
