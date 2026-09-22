@@ -8,7 +8,7 @@
   let following = true, draftScope = '', sending = null, configOriginal = '', sidebarFocus = null, openedImage = null;
   const imageReads = new Map();
   let viewerImages = [], viewerIndex = 0, viewerGroup = null;
-  let seq = 0, state = {messages: [], sessions: [], projects: [], models: [], account: {}, workspace: {}}, folder = '', openedFile = null, login = null, inputResolve = null, toastTimer, fileSeq = 0, modelKey = '', displayedRequest = null;
+  let seq = 0, state = {messages: [], sessions: [], projects: [], models: [], account: {}, workspace: {}}, folder = '', openedFile = null, login = null, inputResolve = null, toastTimer, fileSeq = 0, modelKey = '', displayedRequest = null, projectMenuFocus = null, projectMenuActionClosing = false;
   let draftContext = {attachments: [], mentions: [], skills: []}, draftOptions = {model:'', effort:''}, autocomplete = {items: [], index: -1, token: '', type: '', version: 0};
   const handledReceipts = new Set(), handledVoiceReceipts = new Set();
   let dictationState = {phase:'idle'}, dictationTimer = null;
@@ -730,12 +730,36 @@
     await call('projects.select', {key:key || ''}); sidebar(false);
   }
   async function newChat(workspaceKey) {
+    if (state.busy) return;
     await call('chat.new', {workspaceKey:workspaceKey || ''}); sidebar(false);
   }
   async function removeProject(project) {
-    if (!confirm('“' + (project.name || t('프로젝트')) + t('”을 프로젝트 목록에서 제거할까요?\n\n폴더와 파일은 삭제되지 않습니다. 이 프로젝트의 기존 대화는 “연결 해제된 프로젝트”에 남아 폴더를 다시 연결할 수 있습니다.'))) return;
+    if (state.busy || !confirm(t('“{name}”을 프로젝트 목록에서 제거할까요?\n\n폴더와 파일은 삭제되지 않습니다. 이 프로젝트의 기존 대화는 “연결 해제된 프로젝트”에 남아 폴더를 다시 연결할 수 있습니다.', {name:project.name || t('프로젝트')}))) return;
     await call('projects.remove', {key:project.key});
     toast(t('프로젝트 목록에서 제거했습니다. 폴더와 파일은 그대로 있습니다.'));
+  }
+  async function renameProject(project) {
+    if (state.busy) return;
+    const name = await input(t('프로젝트 이름 변경'), t('새 프로젝트 표시 이름을 입력하세요.'), project.name || '');
+    if (!name || !name.trim() || name.trim() === project.name) return;
+    const result = await call('projects.rename', {key:project.key, name:name.trim()});
+    const projects = (state.projects || []).map(value => value.key === project.key ? {...value, name:result.name || name.trim()} : value);
+    const workspace = state.workspace?.key === project.key ? {...state.workspace, name:result.name || name.trim()} : state.workspace;
+    render({...state, projects, workspace});
+    toast(t('프로젝트 이름을 변경했습니다.'));
+  }
+  function projectAction(project, trigger) {
+    projectMenuFocus = trigger;
+    $('project-actions-title').textContent = project.name || t('프로젝트');
+    const action = (label, fn, cls) => { const item = button(label, async () => { projectMenuActionClosing = true; close('project-actions-dialog'); await fn(); }, cls); item.disabled = !!state.busy; return item; };
+    const actions = [
+      action(t('새 대화'), () => newChat(project.key)),
+      action(t('이름 변경'), () => renameProject(project))
+    ];
+    if (project.available === false) actions.push(action(t('폴더 다시 연결'), () => pickFolder(project.key)));
+    actions.push(action(t('프로젝트 목록에서 제거'), () => removeProject(project), 'secondary-button danger'));
+    $('project-actions').replaceChildren(...actions);
+    show('project-actions-dialog');
   }
   function sessionAction(session) {
     $('session-actions-title').textContent = session.title || t('대화 관리');
@@ -780,9 +804,8 @@
       const row = node('div', null, 'project-row');
       const toggle = button('', () => { const expandedNow = section.classList.toggle('collapsed') === false; localStorage.setItem(expandedKey, String(expandedNow)); toggle.setAttribute('aria-expanded', String(expandedNow)); }, 'tree-toggle'); toggle.setAttribute('aria-label', project.name + t(' 대화 펼치기')); toggle.setAttribute('aria-expanded', String(expanded)); toggle.append(icon('down'));
       const select = button('', () => selectProject(project.key), 'project-button'); select.append(icon('folder'), node('span', project.name || t('이름 없는 프로젝트'))); select.setAttribute('aria-current', String(!!project.selected));
-      const more = button('', () => newChat(project.key), 'icon-button project-new'); more.setAttribute('aria-label', project.name + t('에서 새 대화')); more.append(icon('plus'));
-      const menu = button('', () => removeProject(project), 'icon-button project-more'); menu.setAttribute('aria-label', project.name + t(' 메뉴')); menu.append(icon('more'));
-      row.append(toggle, select, more, menu); section.append(row);
+       const menu = button('', () => projectAction(project, menu), 'icon-button project-more'); menu.disabled = !!state.busy; menu.setAttribute('aria-label', project.name + t(' 메뉴')); menu.dataset.projectMenuKey = project.key; menu.append(icon('more'));
+       row.append(toggle, select, menu); section.append(row);
       const children = node('div', null, 'project-sessions');
       if (project.available === false) { children.append(node('p', t('폴더 접근을 다시 연결해야 합니다.'), 'sidebar-empty'), button(t('폴더 다시 연결'), () => pickFolder(project.key), 'new-thread')); }
       else children.append(button(t('새 대화'), () => newChat(project.key), 'new-thread'));
@@ -855,6 +878,7 @@
     $('changes-turn-diff').textContent = state.turnDiff || t('이 대화에 기록된 작업 diff가 없습니다.');
     if (selectedChange) $('change-restore').disabled = restoringChange || !selectedChange.data.canRestore || !!state.busy || state.permissions === 'read-only';
     renderProjects();
+    if ($('project-actions-dialog')?.open) $('project-actions').querySelectorAll('button').forEach(button => { button.disabled = !!state.busy; });
     $('sessions').replaceChildren();
     for (const session of (state.sessions || []).filter(s => !(s.workspaceKey || s.workspace))) $('sessions').append(sessionRow(session));
     if (!state.sessions?.length) $('sessions').append(node('p', t('대화를 시작하면 여기에 표시됩니다.'), 'sidebar-empty'));
@@ -1208,7 +1232,18 @@
     saveDraft(); return false;
   };
   document.querySelectorAll('dialog').forEach(d => {
-    d.addEventListener('close', () => { const i = dialogs.indexOf(d.id); if (i !== -1) dialogs.splice(i, 1); });
+    d.addEventListener('close', () => {
+      const i = dialogs.indexOf(d.id); if (i !== -1) dialogs.splice(i, 1);
+      const actionClosing = projectMenuActionClosing;
+      if (d.id === 'project-actions-dialog' && projectMenuFocus && !projectMenuActionClosing) {
+        const trigger = projectMenuFocus;
+        projectMenuFocus = null;
+        if (matchMedia('(max-width:760px)').matches && !document.body.classList.contains('sidebar-open')) sidebar(true);
+        const replacement = trigger.isConnected ? trigger : [...document.querySelectorAll('[data-project-menu-key]')].find(button => button.dataset.projectMenuKey === trigger.dataset.projectMenuKey);
+        replacement?.focus({preventScroll:true});
+      }
+      if (d.id === 'project-actions-dialog') { projectMenuActionClosing = false; if (actionClosing) projectMenuFocus = null; }
+    });
     d.addEventListener('cancel', e => { e.preventDefault(); if (d.id !== 'request-dialog') dismiss(d.id); });
   });
   wireSheetGestures();
@@ -1217,11 +1252,12 @@
   document.querySelectorAll('[data-prompt]').forEach(b => b.addEventListener('click', () => { $('prompt').value = b.dataset.prompt; saveDraft(); sizeComposer(); $('prompt').focus(); }));
   on('scrim', () => sidebar(false)); on('new-chat', async () => newChat(state.workspace?.key || ''));
   ['add-project', 'choose-folder', 'composer-folder'].forEach(id => on(id, () => pickFolder()));
-  ['show-files', 'files-toggle'].forEach(id => on(id, async () => { $('file-panel').hidden = !$('file-panel').hidden; sidebar(false); if (!$('file-panel').hidden) await listFiles(); }));
+   const closeToolMenu = () => { if ($('tool-menu-dialog').open) close('tool-menu-dialog'); };
+   ['show-files', 'files-toggle'].forEach(id => on(id, async () => { closeToolMenu(); $('file-panel').hidden = !$('file-panel').hidden; sidebar(false); if (!$('file-panel').hidden) await listFiles(); }));
   on('file-close', () => $('file-panel').hidden = true); on('file-up', async () => { folder = C.parent(folder); await listFiles(); });
   let searchTimer; on('file-query', () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => listFiles($('file-query').value.trim()).catch(e => toast(e.message)), 300); }, 'input');
   ['file-new', 'folder-new'].forEach(id => on(id, async () => { const name = await input(id === 'file-new' ? t('새 파일') : t('새 폴더'), t('이름을 입력하세요.')); if (name) await mutate(id === 'file-new' ? 'mobile_create' : 'mobile_mkdir', {path: C.join(folder, name), content: ''}); }));
-  on('show-changes', () => loadChanges()); on('changes-refresh', () => loadChanges()); on('changes-history', () => loadChanges(true)); on('change-restore', restoreChange);
+  on('show-changes', () => { closeToolMenu(); return loadChanges(); }); on('changes-refresh', () => loadChanges()); on('changes-history', () => loadChanges(true)); on('change-restore', restoreChange);
   on('editor-save', async () => { const result = await mutate('mobile_write', {path: openedFile.path, expectedSha256: openedFile.sha256, content: $('editor').value}); openedFile = await call('files.read', {path: result.path || openedFile.path}); });
   on('editor-delete', async () => { await mutate('mobile_delete', {path: openedFile.path}); close('editor-dialog'); });
   on('editor-rename', async () => { const name = await input(t('이름 변경'), t('새 파일 이름'), C.basename(openedFile.path)); if (name) { await mutate('mobile_rename', {path: openedFile.path, name}); await openFile(C.join(C.parent(openedFile.path), name)); } });
@@ -1323,9 +1359,9 @@
   on('floating-chat', () => call('ui.floatingChat')); on('phone-settings', () => call('ui.phoneSettings')); on('phone-enable', enablePhone);
   on('phone-disable', stopPhone); on('phone-stop-banner', stopPhone);
   ['edit-config', 'tools-config'].forEach(id => on(id, config)); on('config-save', async () => { await call('config.save', {content: $('config-editor').value}); configOriginal = $('config-editor').value; await call('runtime.start'); close('config-dialog'); toast(t('설정을 적용했습니다.')); });
-  on('show-recovery', recovery); on('show-terminal', () => { show('terminal-dialog'); sidebar(false); }); on('terminal-stop', () => call('terminal.stop'));
+  on('show-recovery', () => { closeToolMenu(); return recovery(); }); on('show-terminal', () => { closeToolMenu(); show('terminal-dialog'); sidebar(false); }); on('terminal-stop', () => call('terminal.stop'));
   on('terminal-form', async e => { e.preventDefault(); const command = $('terminal-command').value; if (command.trim()) { await call('terminal.run', {command}); $('terminal-output').textContent += '$ ' + command + '\n'; $('terminal-command').value = ''; } }, 'submit');
-  on('show-tools', () => loadTools(false)); on('refresh-tools', () => loadTools(true)); on('show-activity', () => show('activity-dialog'));
+  on('show-tools', () => show('tool-menu-dialog')); on('show-tools-panel', () => { closeToolMenu(); return loadTools(false); }); on('refresh-tools', () => loadTools(true)); on('show-activity', () => show('activity-dialog'));
   on('marketplace-add', async () => { const source = await input(t('마켓플레이스 추가'), t('Git URL 또는 기기의 로컬 경로')); if (source) { const result = await rpc('marketplace/add', {source}); toast(result.marketplaceName + t(' 추가 완료')); await loadTools(); } });
   on('skill-import', async () => { const r = await call('skills.import'); if (!r.cancelled) { toast(t('스킬 폴더를 가져왔습니다.')); await loadTools(); } });
   $('request-dialog').addEventListener('cancel', e => e.preventDefault());

@@ -56,10 +56,12 @@ public final class DocumentStore {
             throw new IllegalArgumentException(t("폴더를 선택해 주세요."));
         Node selected = query(documentUri(uri));
         if (!selected.directory()) throw new IOException(t("폴더가 아닙니다."));
-        ProjectRegistry.Project existing = projectKey == null || projectKey.isBlank() ? null : projects.get(projectKey);
-        projects.put(uri.toString(), selected.name, existing == null ? projectKey : existing.key);
+        String stableKey = projectKey == null || projectKey.isBlank() ? WorkspacePath.hash(uri.toString()) : projectKey;
+        ProjectRegistry.Project existing = projects.get(stableKey);
+        String displayName = existing == null ? selected.name : existing.name;
+        projects.put(uri.toString(), displayName, stableKey);
         tree = uri;
-        label = selected.name;
+        label = displayName;
         detachedKey = ""; detachedName = "";
         context.getSharedPreferences("workspace", 0).edit().putString("uri", uri.toString()).apply();
         saveProjects();
@@ -87,6 +89,16 @@ public final class DocumentStore {
         projects = staged;
         if (current) { tree = null; label = ""; detachedKey = ""; detachedName = ""; }
         return obj("key", removed.key, "name", removed.name);
+    }
+    /** Persists a display-name change without renaming the physical folder or changing its key. */
+    public synchronized JSONObject renameProject(String key, String name) throws IOException {
+        ProjectRegistry staged = ProjectRegistry.fromJson(projects.toJson());
+        ProjectRegistry.Project renamed = staged.rename(key, name);
+        if (!context.getSharedPreferences("projects", 0).edit().putString("registry", staged.toJson()).commit())
+            throw new IOException(t("프로젝트 목록 변경을 저장하지 못했습니다."));
+        projects = staged;
+        if (key != null && key.equals(projects.selectedKey())) label = renamed.name;
+        return obj("key", renamed.key, "name", renamed.name);
     }
     public synchronized String restoreProjectKey(String sessionId, String oldKey, String oldName) {
         String before = projects.toJson();

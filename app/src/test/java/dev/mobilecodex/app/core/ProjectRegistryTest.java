@@ -37,4 +37,14 @@ public class ProjectRegistryTest {
         assertFalse(restored.removed("project-a"));
         assertEquals("content://provider/tree/reconnected", restored.get("project-a").uri);
     }
+
+    @Test public void renameChangesOnlyDisplayNameAndSurvivesRestart() {
+        ProjectRegistry registry = new ProjectRegistry();
+        registry.put("content://provider/tree/a", "Folder name", "project-a");
+        registry.rename("project-a", "My project");
+        ProjectRegistry restored = ProjectRegistry.fromJson(registry.toJson());
+        assertEquals("My project", restored.get("project-a").name);
+        assertEquals("content://provider/tree/a", restored.get("project-a").uri);
+        assertEquals("project-a", restored.selectedKey());
+    }
 }

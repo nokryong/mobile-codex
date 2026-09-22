@@ -14,7 +14,7 @@ function setup(overrides = {}, options = {}) {
   if (options.drafts) for (const [key,value] of Object.entries(options.drafts)) w.localStorage.setItem(key,value);
   w.HTMLDialogElement.prototype.showModal = function(){this.setAttribute('open','');};
   w.HTMLDialogElement.prototype.close = function(){this.removeAttribute('open');this.dispatchEvent(new w.Event('close'));};
-  w.confirm = () => true;
+  w.confirm = options.confirm || (() => true);
   const snapshot = {ready:true,busy:false,permissions:'workspace-write',models:[],messages:[],sessions:[],account:{type:'chatgpt',email:'me@example.test'},workspace:{selected:true,name:'Project'},cwd:'/test/project',threadId:'t',status:'연결됨'};
   w.Native = {postMessage(raw){ const m=JSON.parse(raw); calls.push(m); queueMicrotask(async () => {
     if(m.action==='rpc.respond') responses.push(m.args);
@@ -58,7 +58,7 @@ test('question UI preserves stable question ids and answer array',async()=>{
  assert.deepEqual(responses[0].result,{answers:{lang:{answers:['Java']}}});
 });
 test('plugin, skill, MCP screens query real protocol routes',async()=>{
- const {w,calls}=setup();await tick();w.document.getElementById('show-tools').click();await tick();await tick();
+ const {w,calls}=setup();await tick();w.document.getElementById('show-tools').click();await tick();w.document.getElementById('show-tools-panel').click();await tick();await tick();
  const routes=calls.filter(m=>m.action==='rpc').map(m=>m.args.method);
  assert.deepEqual(routes,['plugin/list','skills/list','mcpServerStatus/list']);
 });
@@ -68,11 +68,17 @@ test('tool refresh keeps a prior category list when one protocol request fails',
    if(m.args.method==='plugin/list') { pluginCalls++; if(pluginCalls > 1) throw new Error('transport closed'); return {marketplaces:[{name:'local',plugins:[{name:'Keep me',id:'keep'}]}]}; }
    if(m.args.method==='skills/list') return {data:[]};
    return {data:[]};
- }});await tick();w.document.getElementById('show-tools').click();await tick();await tick();
+ }});await tick();w.document.getElementById('show-tools').click();await tick();w.document.getElementById('show-tools-panel').click();await tick();await tick();
  assert.match(w.document.getElementById('tools-list').textContent,/Keep me/);
  w.document.getElementById('refresh-tools').click();await tick();await tick();
  assert.match(w.document.getElementById('tools-list').textContent,/이전 목록을 표시합니다/);
  assert.match(w.document.getElementById('tools-list').textContent,/Keep me/);
+});
+test('tool recovery action keeps protocol failures handled after menu relocation',async()=>{
+ const {w}=setup({'recovery.list':()=>{throw new Error('recovery offline');}});let unhandled=0;
+ w.addEventListener('unhandledrejection',()=>unhandled++);await tick();
+ w.document.getElementById('show-tools').click();await tick();w.document.getElementById('show-recovery').click();await tick();await tick();
+ assert.match(w.document.getElementById('toast').textContent,/recovery offline/);assert.equal(unhandled,0);
 });
 test('account usage reads the app-server snapshot and prefers multi-bucket limits',async()=>{
  const {w,calls}=setup({'rpc':m=>m.args.method==='account/rateLimits/read'?{rateLimits:{primary:{usedPercent:1}},rateLimitsByLimitId:{codex:{limitName:'Codex',primary:{usedPercent:42,windowDurationMins:300,resetsAt:2000000000}}}}:{data:[]}});await tick();
@@ -98,7 +104,7 @@ test('usage never turns missing limits into zero and drops a response from a pre
 test('a different project cannot inherit the previous project tool cache after a failure',async()=>{
  let offline=false;
  const {w,snapshot}=setup({'rpc':m=>{if(offline)throw new Error('offline');return m.args.method==='skills/list'?{data:[{skills:[{name:'project-only-skill',description:'local',path:'/first/SKILL.md'}]}]}:{data:[],marketplaces:[]};}});await tick();
- w.document.getElementById('show-tools').click();await tick();await tick();
+  w.document.getElementById('show-tools').click();await tick();w.document.getElementById('show-tools-panel').click();await tick();await tick();
  assert.match(w.document.getElementById('tools-list').textContent,/project-only-skill/);
  offline=true;w.mobileCodexEvent('state',{...snapshot,cwd:'/second',threadId:'second'});
  w.document.getElementById('refresh-tools').click();await tick();await tick();
@@ -172,7 +178,7 @@ test('mobile settings expose full model, reasoning and permission controls',asyn
 });
 test('back closes the actual top dialog, then the mobile drawer, then yields to Android',async()=>{
  const {w}=setup({}, {mobile:true});await tick();const d=w.document;
- d.getElementById('show-tools').click();await tick();await tick();d.getElementById('marketplace-add').click();await tick();
+  d.getElementById('show-tools').click();await tick();d.getElementById('show-tools-panel').click();await tick();await tick();d.getElementById('marketplace-add').click();await tick();
  assert.equal(d.getElementById('input-dialog').open,true);assert.equal(w.mobileCodexBack(),true);
  assert.equal(d.getElementById('input-dialog').open,false);assert.equal(d.getElementById('tools-dialog').open,true);
  w.mobileCodexBack();d.querySelector('.topbar .sidebar-toggle').click();assert.equal(d.querySelector('main').inert,true);
@@ -541,11 +547,33 @@ test('removing a project keeps its conversations and draft scope in the detached
  const project={key:'gone',name:'Keep files',selected:true,available:true};
  w.mobileCodexEvent('state',{...snapshot,workspace:{selected:true,key:'gone',name:'Keep files'},projects:[project],sessions:[{id:'old',title:'보존 대화',workspaceKey:'gone'}]});
  const draft='draft:'+C.draftKey('gone','old');w.localStorage.setItem(draft,'첨부와 초안');
- const menu=d.querySelector('.project-more');assert.ok(menu);menu.click();await tick();assert.deepEqual(calls.filter(c=>c.action==='projects.remove').at(-1).args,{key:'gone'});
+  const menu=d.querySelector('.project-more');assert.ok(menu);menu.click();await tick();
+  assert.match(d.getElementById('project-actions').textContent,/새 대화/);
+  [...d.querySelectorAll('#project-actions button')].find(b=>b.textContent==='프로젝트 목록에서 제거').click();await tick();
+  assert.deepEqual(calls.filter(c=>c.action==='projects.remove').at(-1).args,{key:'gone'});
  w.mobileCodexEvent('state',{...snapshot,workspace:{selected:false},projects:[],sessions:[{id:'old',title:'보존 대화',workspaceKey:'gone'}]});
  assert.match(d.querySelector('.detached-projects').textContent,/연결 해제된 프로젝트/);assert.match(d.querySelector('.detached-projects').textContent,/보존 대화/);assert.equal(w.localStorage.getItem(draft),'첨부와 초안');
  d.querySelector('.detached-projects .session').click();await tick();assert.deepEqual(calls.filter(c=>c.action==='chat.resume').at(-1).args,{id:'old'});
-});
+ });
+test('mobile project menu supports new chat, persisted display rename and cancellable removal',async()=>{
+  let confirmResult=true;
+  const {w,calls,snapshot}=setup({
+    'chat.new':()=>({...snapshot}),
+    'projects.rename':m=>({key:m.args.key,name:m.args.name}),
+    'projects.remove':()=>({...snapshot,workspace:{selected:false},projects:[]})
+  },{mobile:true,confirm:()=>confirmResult});
+  await tick();const d=w.document;
+  const project={key:'project-menu',name:'Folder name',selected:true,available:true};
+  w.mobileCodexEvent('state',{...snapshot,workspace:{selected:true,key:project.key,name:project.name},projects:[project]});await tick();
+  const open=()=>{d.querySelector('.project-more').click();};
+  open();await tick();assert.equal(d.getElementById('project-actions-dialog').open,true);assert.match(d.getElementById('project-actions').textContent,/새 대화/);
+  d.querySelector('#project-actions button').click();await tick();assert.deepEqual(calls.filter(c=>c.action==='chat.new').at(-1).args,{workspaceKey:project.key});
+  open();await tick();[...d.querySelectorAll('#project-actions button')].find(b=>b.textContent==='이름 변경').click();await tick();
+  d.getElementById('input-value').value='표시 이름';d.getElementById('input-confirm').click();await tick();await tick();
+  assert.deepEqual(calls.filter(c=>c.action==='projects.rename').at(-1).args,{key:project.key,name:'표시 이름'});assert.equal(d.querySelector('.project-tree .project-button span').textContent,'표시 이름');
+  open();await tick();confirmResult=false;[...d.querySelectorAll('#project-actions button')].find(b=>b.textContent==='프로젝트 목록에서 제거').click();await tick();assert.equal(calls.some(c=>c.action==='projects.remove'),false);
+  open();await tick();confirmResult=true;[...d.querySelectorAll('#project-actions button')].find(b=>b.textContent==='프로젝트 목록에서 제거').click();await tick();assert.deepEqual(calls.filter(c=>c.action==='projects.remove').at(-1).args,{key:project.key});
+ });
 
 test('phone control requires native consent and does not enable on service connection',async()=>{
  const {w,calls,snapshot}=setup({'ui.phoneEnable':()=>({cancelled:true})});await tick();

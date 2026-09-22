@@ -14,7 +14,7 @@ public final class EngineService extends Service {
         PendingIntent open = PendingIntent.getActivity(this, 0, new Intent(this, MainActivity.class), PendingIntent.FLAG_IMMUTABLE);
         PendingIntent stop = PendingIntent.getService(this, 1, new Intent(this, EngineService.class).setAction("stop"), PendingIntent.FLAG_IMMUTABLE);
         Notification notification = new Notification.Builder(this, CHANNEL)
-            .setSmallIcon(R.drawable.ic_launcher).setContentTitle("Mobile Codex")
+            .setSmallIcon(R.drawable.notification_icon).setContentTitle("Mobile Codex")
             .setContentText(t("기기에서 실행 중 · 눌러서 열기")).setContentIntent(open).setOngoing(true)
             .addAction(new Notification.Action.Builder(null, t("종료"), stop).build()).build();
         startForeground(21, notification);

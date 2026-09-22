@@ -196,7 +196,9 @@ dialog { max-height:calc(var(--app-height,100dvh) - 32px); overflow-y:auto; padd
 
 /* Calm Workspace: restrained hierarchy for long sessions and small screens. */
 .projects { display:grid; gap:2px; }
-.general-project,.project-row { display:flex; align-items:center; min-width:0; }
+.projects > * { min-width:0; }
+.general-project,.project-row,.session-row { display:flex; align-items:center; min-width:0; width:100%; }
+.project-tree { min-width:0; width:100%; }
 .general-project .project-button,.project-row .project-button { flex:1; min-width:0; width:auto; }
 .project-tree { border-radius:8px; }
 .project-tree.selected,.general-project.selected { background:rgba(0,0,0,.035); }
@@ -353,10 +355,12 @@ dialog { max-height:calc(var(--app-height,100dvh) - 32px); overflow-y:auto; padd
 #instructions-path { overflow-wrap:anywhere; font-size:11px; }
 
 /* App identity artwork uses the approved source image in both light and dark themes. */
-.brand img { width:25px; height:25px; object-fit:contain; background:#fff; border-radius:5px; padding:2px; flex:none; }
+.brand img { width:25px; height:25px; object-fit:contain; flex:none; }
 .welcome-mark { justify-content:center; }
 .welcome:has(.welcome-character:not([hidden])) .welcome-mark { display:none; }
-.welcome-mark img { display:block; width:35px; height:35px; object-fit:contain; background:#fff; border-radius:7px; padding:3px; }
+.welcome-mark img { display:block; width:35px; height:35px; object-fit:contain; }
+html[data-theme=dark] .brand img,
+html[data-theme=dark] .welcome-mark img { filter:brightness(0) invert(1); }
 
 /* Optional local character stickers, separate from generated image galleries. */
 .chat-character { display:block; width:96px; height:96px; object-fit:contain; flex:none; margin:0 0 10px; }
@@ -537,7 +541,10 @@ html[data-theme=dark] .message.user {
 .devtools-versions { display:flex; flex-wrap:wrap; gap:6px; margin:9px 0; }
 .devtools-version { padding:3px 7px; border-radius:999px; background:var(--pill); font-size:11px; }
 .devtools-output { max-height:180px; margin:10px 0 0; white-space:pre-wrap; overflow:auto; }
-.project-more { width:28px; height:28px; flex:none; }
+.project-more { width:40px; height:40px; flex:none; border-radius:10px; color:var(--muted); }
+.project-more:hover,.project-more:focus-visible { background:var(--hover); color:var(--text); }
+.project-actions { display:grid; gap:7px; }
+.project-actions button { width:100%; min-height:44px; text-align:left; }
 .detached-projects { margin-top:14px; border-top:1px solid var(--border); padding-top:8px; }
 .detached-session { display:flex; align-items:center; gap:4px; }
 .detached-session .session-row { flex:1; min-width:0; }
@@ -597,7 +604,7 @@ html[data-theme=dark] .message.user {
 #avatar { background:var(--pill); color:var(--text); border:1px solid var(--border); }
 .project-tree.selected,.general-project.selected { background:var(--pill); }
 .project-tree,.session-row { border-radius:12px; }
-.session-more { opacity:1; }
+ .session-more { opacity:1; width:44px; min-width:44px; height:44px; }
 .welcome { margin:clamp(30px,8vh,88px) auto 32px; }
 .welcome h1 { letter-spacing:-.8px; line-height:1.35; }
 .welcome>p { max-width:440px; margin:12px auto 24px; }
@@ -688,6 +695,10 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-vis
   .sheet-dragging { transition:none; user-select:none; }
   .sheet-dialog .dialog-head,.settings-dialog .dialog-head { align-items:center; }
   .settings-nav { padding-bottom:10px; gap:6px; }
+  .project-more,.session-more { width:44px; min-width:44px; height:44px; }
+  .project-row .project-button,.session-row .session { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .settings-nav { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); overflow:visible; }
+  .settings-nav button { width:100%; min-width:0; padding-left:5px; padding-right:5px; }
   .settings-content { max-height:calc(var(--app-height,100dvh) - 245px); }
   .options-sheet { padding-bottom:20px; }
   .sheet-dialog[open],.settings-dialog[open] { animation:sheet-enter 200ms var(--ease-out); }
@@ -697,7 +708,12 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-vis
   .chat-scroll { padding-left:14px; padding-right:14px; }
   .composer-wrap { padding-left:8px; padding-right:8px; }
   .context-button { padding:0 6px; gap:4px; }
-  .composer-actions { max-width:60%; }
+  .composer-bottom { display:grid; grid-template-columns:44px minmax(0,1fr); grid-template-areas:'attach folder' 'actions actions'; align-items:center; row-gap:4px; }
+  #add-attachment { grid-area:attach; }
+  #composer-folder { grid-area:folder; min-width:0; width:100%; justify-content:flex-start; }
+  #composer-folder span { max-width:none; }
+  .composer-actions { grid-area:actions; width:100%; max-width:none; min-width:0; justify-content:flex-end; }
+  .composer-actions .options-button { flex:1 1 auto; max-width:none; justify-content:flex-start; }
   .sheet-dialog,.settings-dialog { padding-left:16px; padding-right:16px; }
 }
 @media(max-height:450px) {
@@ -706,6 +722,15 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-vis
   .composer-bottom { margin-top:0; }
   .composer-wrap { padding-top:4px; padding-bottom:4px; }
   .sheet-grip { height:28px; min-height:28px; }
+}
+/* Keep the two-row composer when a phone keyboard leaves a short viewport. */
+@media(max-width:420px) {
+  .composer-bottom { display:grid; grid-template-columns:44px minmax(0,1fr); grid-template-areas:'attach folder' 'actions actions'; align-items:center; row-gap:4px; }
+  #add-attachment { grid-area:attach; }
+  #composer-folder { grid-area:folder; min-width:0; width:100%; justify-content:flex-start; overflow:hidden; }
+  #composer-folder span { max-width:none; min-width:90px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .composer-actions { grid-area:actions; width:100%; max-width:none; min-width:0; justify-content:flex-end; }
+  .composer-actions .options-button { flex:1 1 auto; min-width:100px; max-width:none; justify-content:flex-start; }
 }
 @media(prefers-reduced-motion:reduce) {
   *,*::before,*::after { animation:none!important; transition:none!important; scroll-behavior:auto!important; }

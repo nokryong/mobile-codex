@@ -69,6 +69,18 @@ public final class ProjectRegistry {
         return value;
     }
 
+    /** Changes only the user-facing project label; the stable key and folder URI remain unchanged. */
+    public Project rename(String key, String name) {
+        String normalizedKey = key == null ? "" : key;
+        String normalizedName = name == null ? "" : name.trim();
+        if (normalizedName.isBlank()) throw new IllegalArgumentException(t("프로젝트 이름을 입력해 주세요."));
+        Project value = projects.get(normalizedKey);
+        if (value == null) throw new IllegalArgumentException(t("등록된 프로젝트를 찾을 수 없습니다."));
+        Project renamed = new Project(value.key, normalizedName, value.uri);
+        projects.put(normalizedKey, renamed);
+        return renamed;
+    }
+
     public void select(String key) {
         key = key == null ? "" : key;
         if (!key.isEmpty() && !projects.containsKey(key)) throw new IllegalArgumentException(t("등록된 프로젝트를 찾을 수 없습니다."));

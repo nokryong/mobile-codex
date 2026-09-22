@@ -15,6 +15,8 @@ import java.io.*;
 import java.nio.file.Files;
 import static dev.mobilecodex.app.core.Json.*;
 import static org.junit.Assert.*;
+import dev.mobilecodex.app.core.ProjectRegistry;
+import dev.mobilecodex.app.core.WorkspacePath;
 
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk=29,application=Application.class)
@@ -45,5 +47,17 @@ public class RecoveryRestoreTest {
     }
     @Test public void laterProviderEditsPreventRestore()throws Exception{
         String id=edit();writeText(file.toPath(),"external edit");assertFalse(store.previewRecovery(id).getBoolean("canRestore"));assertThrows(IOException.class,()->store.recoveryMutation(id));assertEquals("external edit",readText(file.toPath()));
+    }
+    @Test public void reconnectKeepsRenamedDisplayNameForStableKeyAndUriHash() throws Exception {
+        Context context=RuntimeEnvironment.getApplication();
+        Uri replacement=Uri.parse("content://test.documents/tree/root");
+        String stableKey=WorkspacePath.hash(replacement.toString());
+        ProjectRegistry registry=new ProjectRegistry();
+        registry.put("content://test.documents/tree/old", "Renamed project", stableKey);
+        context.getSharedPreferences("projects",0).edit().putString("registry", registry.toJson()).commit();
+        DocumentStore reloaded=new DocumentStore(context);
+        assertEquals("Renamed project", reloaded.select(replacement, stableKey).getString("name"));
+        assertEquals("Renamed project", reloaded.select(replacement, "").getString("name"));
+        assertEquals("Renamed project", reloaded.projects().getJSONObject(0).getString("name"));
     }
 }
