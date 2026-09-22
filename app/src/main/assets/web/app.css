@@ -68,6 +68,7 @@ button:active:not(:disabled) { opacity:.72; }
 .send-button { width:44px; height:44px; }
 .send-button svg { width:22px; height:22px; }
 .composer-footnote { margin-top:2px; min-height:32px; font-size:11px; align-items:center; }
+.composer-footnote { display:none !important; }
 .composer-footnote #runtime-status { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; max-width:70%; }
 #show-activity { display:flex; align-items:center; gap:5px; min-height:36px; padding:4px 6px; font-size:11px; }
 #show-activity svg { width:14px; height:14px; }
@@ -210,6 +211,12 @@ dialog { max-height:calc(var(--app-height,100dvh) - 32px); overflow-y:auto; padd
 .project-new svg { width:15px; }
 .project-sessions { margin:1px 5px 5px 35px; display:grid; gap:1px; }
 .project-sessions .session { padding:7px 9px; min-height:32px; font-size:12px; }
+.session { display:flex; align-items:center; gap:7px; text-align:left; }
+.session-title { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.session-progress-indicator { width:13px; height:13px; flex:none; border:2px solid currentColor; border-right-color:transparent; border-radius:50%; animation:session-spin .8s linear infinite; opacity:.7; }
+.session-approval-indicator { display:grid; place-items:center; width:16px; height:16px; flex:none; border-radius:50%; color:var(--bg); background:var(--accent); font-size:11px; font-weight:700; }
+@keyframes session-spin { to { transform:rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .session-progress-indicator { animation:none; border-right-color:currentColor; opacity:.55; } }
 .new-thread { padding:7px 9px; color:var(--muted); text-align:left; font-size:12px; border-radius:6px; }
 .new-thread:hover { background:var(--hover); color:var(--text); }
 .draft-context { display:flex; flex-wrap:wrap; gap:6px; margin:0 0 8px; max-height:94px; overflow:auto; }
@@ -305,6 +312,12 @@ dialog { max-height:calc(var(--app-height,100dvh) - 32px); overflow-y:auto; padd
 .onboarding { text-align:left; max-width:430px; margin:24px auto; }
 .messages,.composer { max-width:780px; }
 .composer { border-radius:26px; padding:12px 14px 8px; position:relative; border-color:var(--border); }
+.composer { border-color:transparent; box-shadow:none; transition:background .16s ease,border-color .16s ease,box-shadow .16s ease; }
+.composer:not(.composer-expanded) { background:transparent; padding:8px 10px; }
+.composer:not(.composer-expanded) #prompt { min-height:36px; height:36px !important; }
+.composer:not(.composer-expanded) .composer-bottom,.composer:not(.composer-expanded) .draft-context { display:none; }
+.composer.composer-expanded { border-color:var(--border); background:var(--bg); box-shadow:0 0 0 1px var(--border); }
+.composer:not(.composer-expanded) #prompt { padding-left:4px; }
 .composer-bottom { gap:4px; justify-content:initial; }
 .composer-actions { margin-left:auto; max-width:58%; }
 .composer-attach { width:40px; height:40px; border-radius:50%; flex:none; }

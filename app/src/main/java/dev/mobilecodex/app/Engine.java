@@ -42,7 +42,14 @@ public final class Engine {
     private Process process;
     private RpcClient rpc;
     private TestTransport testTransport;
+    // Test-only startup validation keeps account-switch rollback tests on the
+    // same account/read + rate-limit path as the real app-server startup.
+    private boolean testAccountValidation;
     private volatile boolean ready, busy;
+    /** Turn ids are scoped to their server thread. The UI may move to another
+     * conversation while an earlier thread continues in the same app-server. */
+    private final Map<String, String> runningTurns = new HashMap<>();
+    private String toolRequestThread = "";
     private String permissionMode, approvalMode;
     private final Map<String, PendingRequest> requests = new LinkedHashMap<>();
     private volatile Process terminalProcess;
@@ -93,14 +100,21 @@ public final class Engine {
     public void observe(Ui observer) { observers.add(observer); io.execute(() -> { if (observers.contains(observer)) { observer.event("state", snapshot()); if (pendingApproval != null && !pendingApproval.decision.isDone()) observer.approval(pendingApproval); requests.forEach((key, request) -> observer.event("server.request", obj("key", key, "method", request.method, "params", request.params))); } }); }
     public void unobserve(Ui observer) { observers.remove(observer); }
     void setTestTransport(TestTransport value) { testTransport = value; }
+    void setTestAccountValidation(boolean value) { testAccountValidation = value; }
     private void event(String name, JSONObject data) { Ui current = ui; if (current != null) current.event(name, data); for (Ui observer : observers) if (observer != current) observer.event(name, data); }
+    private void taskNotification(String kind, String title, String message, String thread, String approval) {
+        Intent intent = new Intent(CodexNotificationReceiver.ACTION).setPackage(context.getPackageName())
+            .putExtra("kind", kind).putExtra("title", title).putExtra("message", message)
+            .putExtra("threadId", thread == null ? "" : thread).putExtra("approvalId", approval == null ? "" : approval);
+        context.sendBroadcast(intent);
+    }
     private JSONObject snapshot() {
         JSONArray summaries = new JSONArray();
-        String accountKey = accountProfiles.activeKey();
         for (int i = sessions.length() - 1; i >= 0; i--) {
             JSONObject s = sessions.optJSONObject(i);
-            if (s != null && !s.optBoolean("deletionPending") && belongsToAccount(s, accountKey)) summaries.put(obj("id", s.optString("id"), "title", s.optString("title"),
-                "workspace", s.optString("workspace"), "workspaceKey", s.optString("workspaceKey")));
+            if (s != null && !s.optBoolean("deletionPending")) summaries.put(obj("id", s.optString("id"), "title", s.optString("title"),
+                "workspace", s.optString("workspace"), "workspaceKey", s.optString("workspaceKey"),
+                "busy", runningTurns.containsKey(s.optString("id")), "approvalPending", s.optBoolean("approvalPending")));
         }
         return obj("ready", ready, "busy", busy, "status", t(status), "account", account,
             "accounts", accountProfiles.list(), "rateLimits", rateLimits, "models", models, "workspace", documents.workspace(), "projects", documents.projects(), "sessions", summaries,
@@ -128,16 +142,11 @@ public final class Engine {
     }
     private int pendingDeletionCount() {
         int count = 0;
-        String accountKey = accountProfiles.activeKey();
         for (int i = 0; i < sessions.length(); i++) {
             JSONObject session = sessions.optJSONObject(i);
-            if (session != null && session.optBoolean("deletionPending") && belongsToAccount(session, accountKey)) count++;
+            if (session != null && session.optBoolean("deletionPending")) count++;
         }
         return count;
-    }
-    private static boolean belongsToAccount(JSONObject session, String accountKey) {
-        String sessionKey = session.optString("accountProfileKey");
-        return sessionKey.isBlank() || accountKey.isBlank() || sessionKey.equals(accountKey);
     }
     /** Test-only state-store seam for durable-write failure coverage. */
     void setStateFileForTest(File file) { stateFile = file; }
@@ -146,7 +155,11 @@ public final class Engine {
         boolean changed = false;
         for (int i = 0; i < sessions.length(); i++) {
             try {
-                JSONObject session = sessions.optJSONObject(i); if (session == null || session.optBoolean("deletionPending")) continue;
+                JSONObject session = sessions.optJSONObject(i); if (session == null) continue;
+                // Conversations belong to this app installation, not to the
+                // credential currently used for the next Codex request.
+                if (session.has("accountProfileKey")) { session.remove("accountProfileKey"); changed = true; }
+                if (session.optBoolean("deletionPending")) continue;
                 if (!session.has("workspaceKey")) {
                     session.put("workspaceKey", documents.restoreProjectKey(session.optString("id"), "", session.optString("workspace")));
                     changed = true;
@@ -160,7 +173,7 @@ public final class Engine {
         if (changed) persist();
     }
     public void updatesChanged(JSONObject data) { event("updates.changed", data); }
-    public boolean canInstallUpdate() { return !busy && !VoiceInput.active() && (terminalProcess == null || !terminalProcess.isAlive()); }
+    public boolean canInstallUpdate() { return runningTurns.isEmpty() && !VoiceInput.active() && (terminalProcess == null || !terminalProcess.isAlive()); }
     public void voiceInputChanged() { event("voice.changed", obj()); }
     public void phoneStateChanged() { io.execute(this::publish); }
     public void handle(String action, JSONObject args, Reply reply) {
@@ -185,11 +198,11 @@ public final class Engine {
                     case "auth.switch" -> { switchAccount(args.getString("key")); reply.complete(snapshot(), null); }
                     case "auth.remove" -> { accountProfiles.delete(args.getString("key")); publish(); reply.complete(snapshot(), null); }
                     case "auth.logout" -> {
-                        ensureIdle(); start(); call("account/logout", new JSONObject()); accountProfiles.removeActiveProfile();
-                        account = new JSONObject(); rateLimits = new JSONObject(); clearActive(); publish(); reply.complete(obj("ok", true), null);
+                        ensureEngineIdle(); start(); call("account/logout", new JSONObject()); accountProfiles.removeActiveProfile();
+                        account = new JSONObject(); rateLimits = new JSONObject(); publish(); reply.complete(obj("ok", true), null);
                     }
                     case "permissions.set" -> {
-                        ensureIdle();
+                        ensureEngineIdle();
                         String mode = args.getString("mode");
                         if (!Set.of("read-only", "workspace-write", "danger-full-access").contains(mode)) throw new IOException(t("잘못된 권한 모드입니다."));
                         permissionMode = mode;
@@ -198,7 +211,7 @@ public final class Engine {
                         publish(); reply.complete(obj("ok", true), null);
                     }
                     case "approvals.set" -> {
-                        ensureIdle(); String mode = args.getString("mode");
+                        ensureEngineIdle(); String mode = args.getString("mode");
                         if (!Set.of("ask", "auto-review", "allow-all").contains(mode)) throw new IOException(t("잘못된 승인 방식입니다."));
                         approvalMode = mode; context.getSharedPreferences("settings", 0).edit().putString("approvalMode", mode).apply();
                         if (active != null && ready) resumeRemote(true);
@@ -206,12 +219,12 @@ public final class Engine {
                     }
                     case "config.read" -> { File config = new File(codexHome.root(), "config.toml"); reply.complete(obj("content", config.exists() ? dev.mobilecodex.app.core.Utf8Files.read(config.toPath()) : ""), null); }
                     case "config.save" -> {
-                        ensureIdle(); dev.mobilecodex.app.core.Utf8Files.write(new File(codexHome.root(), "config.toml").toPath(), args.getString("content"));
+                        ensureEngineIdle(); dev.mobilecodex.app.core.Utf8Files.write(new File(codexHome.root(), "config.toml").toPath(), args.getString("content"));
                         stopNow(); reply.complete(obj("ok", true), null);
                     }
                     case "instructions.read" -> reply.complete(instructions.read(), null);
                     case "instructions.save" -> {
-                        ensureIdle(); JSONObject saved = instructions.save(args.getString("content"));
+                        ensureEngineIdle(); JSONObject saved = instructions.save(args.getString("content"));
                         // AGENTS files are read when Codex starts a new execution; force that boundary after a successful write.
                         stopNow(); reply.complete(saved, null);
                     }
@@ -219,6 +232,10 @@ public final class Engine {
                     case "rpc.respond" -> {
                         PendingRequest pending = requests.remove(args.getString("key"));
                         if (pending == null) throw new IOException(t("이미 종료된 요청입니다."));
+                        if (pending.method.contains("requestApproval")) {
+                            JSONObject approvalSession = session(pending.params.optString("threadId", threadId));
+                            if (approvalSession != null) { approvalSession.put("approvalPending", false); persist(); }
+                        }
                         pending.connection.respond(pending.id, args.getJSONObject("result"));
                         reply.complete(obj("ok", true), null);
                     }
@@ -232,26 +249,25 @@ public final class Engine {
                     case "files.mutate" -> mutate(args.getString("operation"), args.getJSONObject("arguments"), true, reply);
                     case "recovery.list" -> reply.complete(obj("entries", documents.recoveryList()), null);
                     case "recovery.preview" -> { requireScope(args); reply.complete(documents.previewRecovery(args.getString("id")), null); }
-                    case "recovery.restore" -> { ensureIdle(); requireScope(args); JSONObject restore = documents.recoveryMutation(args.getString("id")); mutate(restore.getString("operation"), restore.getJSONObject("arguments"), true, reply); }
+                    case "recovery.restore" -> { ensureEngineIdle(); requireScope(args); JSONObject restore = documents.recoveryMutation(args.getString("id")); mutate(restore.getString("operation"), restore.getJSONObject("arguments"), true, reply); }
                     case "changes.list" -> { requireScope(args); reply.complete(changes.list(reviewDirectory()), null); }
                     case "changes.history" -> { requireScope(args); reply.complete(obj("entries", changes.history(reviewDirectory())), null); }
                     case "changes.preview" -> { requireScope(args); reply.complete(changes.preview(reviewDirectory(), args.getString("path")), null); }
                     case "changes.backupPreview" -> { requireScope(args); reply.complete(changes.previewBackup(reviewDirectory(), args.getString("id")), null); }
                     case "changes.restore" -> {
-                        ensureIdle(); requireScope(args);
+                        ensureEngineIdle(); requireScope(args);
                         if (permissionMode.equals("read-only")) throw new IOException(t("읽기 전용 모드에서는 복원할 수 없습니다."));
                         if (terminalProcess != null && terminalProcess.isAlive()) throw new IOException(t("실행 중인 터미널 명령을 먼저 중지해 주세요."));
                         JSONObject result = changes.restore(reviewDirectory(), args.getString("token")); event("files.changed", result); reply.complete(result, null);
                     }
-                    case "projects.select" -> { ensureIdle(); documents.selectProject(args.optString("key", "")); clearActive(); publish(); reply.complete(snapshot(), null); }
-                    case "projects.remove" -> { ensureIdle(); String key = args.getString("key"); boolean current = key.equals(documents.key()); JSONObject removed = documents.removeProject(key); if (current) clearActive(); publish(); reply.complete(removed, null); }
-                    case "projects.rename" -> { ensureIdle(); JSONObject renamed = documents.renameProject(args.getString("key"), args.getString("name")); publish(); reply.complete(renamed, null); }
+                    case "projects.select" -> { documents.selectProject(args.optString("key", "")); clearActive(); publish(); reply.complete(snapshot(), null); }
+                    case "projects.remove" -> { ensureEngineIdle(); String key = args.getString("key"); boolean current = key.equals(documents.key()); JSONObject removed = documents.removeProject(key); if (current) clearActive(); publish(); reply.complete(removed, null); }
+                    case "projects.rename" -> { ensureEngineIdle(); JSONObject renamed = documents.renameProject(args.getString("key"), args.getString("name")); publish(); reply.complete(renamed, null); }
                     case "documents.projects" -> reply.complete(obj("projects", documents.projects()), null);
                     case "chat.send" -> { requireChatScope(args); send(args.optString("text", ""), args.optString("model", ""), args.optString("effort", ""),
                         args.optJSONArray("attachments"), args.optJSONArray("skills"), args.optJSONArray("mentions")); reply.complete(obj("ok", true), null); }
                     case "chat.steer" -> { steer(args); reply.complete(obj("ok", true), null); }
                     case "chat.new" -> {
-                        ensureIdle();
                         String key = args.has("workspaceKey") ? args.optString("workspaceKey", "") : documents.key();
                         documents.selectProject(key); clearActive(); publish(); reply.complete(snapshot(), null);
                     }
@@ -282,12 +298,28 @@ public final class Engine {
     public void workspaceChanged() {
         io.execute(() -> { clearActive(); publish(); });
     }
-    private void clearActive() { active = null; threadId = ""; turnId = ""; serverThreadId = ""; }
+    private void syncCurrentTurn() {
+        turnId = threadId.isBlank() ? "" : runningTurns.getOrDefault(threadId, "");
+        busy = !turnId.isBlank();
+        status = busy ? t("작업 중") : (ready ? t("연결됨") : status);
+    }
+    private void clearActive() { active = null; threadId = ""; turnId = ""; serverThreadId = ""; busy = false; if (ready) status = t("연결됨"); }
     public boolean isBusy() { return busy; }
-    private void ensureIdle() throws IOException { if (busy) throw new IOException(t("진행 중인 작업을 먼저 중지해 주세요.")); }
+    private boolean hasRunningTurns() { return !runningTurns.isEmpty(); }
+    private void ensureIdle() throws IOException { if (busy) throw new IOException(t("현재 대화의 작업을 먼저 중지해 주세요.")); }
+    private void ensureEngineIdle() throws IOException { if (hasRunningTurns()) throw new IOException(t("진행 중인 작업을 먼저 중지해 주세요.")); }
+    private void clearRunningState() {
+        runningTurns.clear();
+        for (int i = 0; i < sessions.length(); i++) {
+            JSONObject value = sessions.optJSONObject(i);
+            if (value != null) try { value.put("approvalPending", false); } catch (Exception ignored) {}
+        }
+        busy = false; turnId = "";
+    }
     private void start() throws Exception {
         if (testTransport != null) {
             ready = true;
+            if (testAccountValidation) { readAccount(); readRateLimits(); }
             retryPendingDeletions();
             if (active != null && active.optString("workspaceKey").equals(documents.key()) && documents.workspace().optBoolean("available")) resumeRemote(false);
             return;
@@ -339,7 +371,7 @@ public final class Engine {
                         process = null; rpc = null;
                         requests.forEach((key, value) -> event("server.resolved", obj("key", key)));
                         requests.clear();
-                        ready = false; busy = false; turnId = ""; serverThreadId = "";
+                        ready = false; clearRunningState(); serverThreadId = "";
                         String detail = error == null ? t("Codex 연결이 종료되었습니다.") : error.getMessage();
                         String diagnosis = stderrTail.diagnosis();
                         status = t("실행 엔진 연결이 종료되었습니다") + (exitCode >= 0 ? t(" (종료 코드 ") + exitCode + ")" : "") + ". " + detail
@@ -380,25 +412,30 @@ public final class Engine {
         return rpc.request(method, params).get(65, TimeUnit.SECONDS);
     }
     private void readAccount() throws Exception {
-        JSONObject data = call("account/read", obj("refreshToken", false));
+        // Ask app-server to rotate an expired access token when possible. The
+        // returned auth.json is then snapshotted by saveCurrent, so switching
+        // profiles does not resurrect an old access token.
+        JSONObject data = call("account/read", obj("refreshToken", true));
         account = data.optJSONObject("account"); if (account == null) account = new JSONObject();
-        if (account.length() > 0) {
-            JSONObject profile = accountProfiles.saveCurrent(account);
-            claimLegacySessions(profile.optString("key"));
-        }
+        if (account.length() > 0) accountProfiles.saveCurrent(account);
     }
-    private void readRateLimits() {
+    private void readRateLimits() throws Exception {
         if (account.length() == 0) { rateLimits = new JSONObject(); return; }
         try { rateLimits = call("account/rateLimits/read", new JSONObject()); }
-        catch (Exception ignored) { rateLimits = new JSONObject(); }
+        catch (Exception error) {
+            rateLimits = new JSONObject();
+            String message = unwrap(error).getMessage();
+            if (message != null && (message.contains("token_revoked") || message.contains("invalidated oauth token") || message.contains("401")))
+                throw new IOException(t("저장된 계정의 로그인 토큰이 폐기되었습니다. 이 계정은 다시 로그인해야 합니다."), error);
+        }
     }
     private JSONObject beginLogin(boolean add) throws Exception {
-        ensureIdle(); start();
+        ensureEngineIdle(); start();
         if (add && account.length() > 0) {
             JSONObject profile = accountProfiles.saveCurrent(account);
             addAccountRestoreKey = profile.optString("key");
             call("account/logout", new JSONObject());
-            account = new JSONObject(); rateLimits = new JSONObject(); clearActive(); publish();
+            account = new JSONObject(); rateLimits = new JSONObject(); publish();
         } else addAccountRestoreKey = "";
         return call("account/login/start", obj("type", "chatgptDeviceCode"));
     }
@@ -408,13 +445,13 @@ public final class Engine {
         stopNow(); accountProfiles.switchTo(restore); account = new JSONObject(); rateLimits = new JSONObject(); start();
     }
     private void switchAccount(String key) throws Exception {
-        ensureIdle();
+        ensureEngineIdle();
         String previous = accountProfiles.activeKey();
         if (key.equals(previous)) return;
         if (account.length() > 0) accountProfiles.saveCurrent(account);
         stopNow();
         try {
-            accountProfiles.switchTo(key); account = new JSONObject(); rateLimits = new JSONObject(); clearActive(); start();
+            accountProfiles.switchTo(key); account = new JSONObject(); rateLimits = new JSONObject(); start();
         } catch (Exception error) {
             if (!previous.isBlank()) {
                 try { accountProfiles.switchTo(previous); account = new JSONObject(); rateLimits = new JSONObject(); start(); }
@@ -422,15 +459,6 @@ public final class Engine {
             }
             throw error;
         }
-    }
-    private void claimLegacySessions(String key) throws Exception {
-        if (key == null || key.isBlank()) return;
-        boolean changed = false;
-        for (int i = 0; i < sessions.length(); i++) {
-            JSONObject session = sessions.optJSONObject(i);
-            if (session != null && !session.has("accountProfileKey")) { session.put("accountProfileKey", key); changed = true; }
-        }
-        if (changed) persist();
     }
     private String resolvedModel(String requested) {
         if (requested != null && !requested.isBlank()) return requested;
@@ -590,7 +618,6 @@ public final class Engine {
         return ProcessOutput.run(builder, 16 * 1024 * 1024, 15);
     }
     private void send(String text, String model, String effort, JSONArray attachmentIds, JSONArray skills, JSONArray mentions) throws Exception {
-        ensureIdle();
         if (text.length() > 50000) throw new IOException(t("메시지는 최대 50,000자까지 입력할 수 있습니다."));
         documents.requireWorkspaceAvailable();
         JSONArray input = input(text, attachmentIds, skills, mentions);
@@ -605,7 +632,7 @@ public final class Engine {
             JSONObject thread = call("thread/start", params).getJSONObject("thread");
             candidateThreadId = thread.getString("id");
             candidate = obj("id", candidateThreadId, "title", titleFor(text, attachmentIds), "workspace", documents.workspace().optString("name"),
-                "workspaceKey", documents.key(), "accountProfileKey", accountProfiles.activeKey(), "model", actualModel,
+                "workspaceKey", documents.key(), "model", actualModel,
                 "messages", new JSONArray(), "imageHistoryVersion", 1, "phoneToolsVersion", 1);
         } else {
             if (!active.optString("workspaceKey").equals(documents.key())) throw new IOException(t("이 대화의 원래 작업 폴더를 다시 연결해 주세요."));
@@ -621,20 +648,22 @@ public final class Engine {
             if (candidate != null) { active = candidate; threadId = candidateThreadId; serverThreadId = candidateThreadId; sessions.put(active); }
             else active.put("model", actualModel);
             active.getJSONArray("messages").put(userMessage(text, attachmentIds, skills, mentions));
-            if (turn != null) turnId = turn.optString("id", "");
+            if (turn != null) {
+                String startedTurn = turn.optString("id", "");
+                if (!startedTurn.isBlank()) runningTurns.put(targetThread, startedTurn);
+            }
+            syncCurrentTurn();
             persist(); publish();
-        } catch (Exception e) { busy = false; status = t("요청 실패"); publish(); throw e; }
+        } catch (Exception e) { syncCurrentTurn(); status = t("요청 실패"); publish(); throw e; }
     }
     private void resume(String id) throws Exception {
-        ensureIdle();
-        String accountKey = accountProfiles.activeKey();
         for (int i = 0; i < sessions.length(); i++) {
             JSONObject session = sessions.getJSONObject(i);
-            if (!session.optBoolean("deletionPending") && belongsToAccount(session, accountKey) && session.optString("id").equals(id)) {
+            if (!session.optBoolean("deletionPending") && session.optString("id").equals(id)) {
                 String key = session.optString("workspaceKey");
                 try { documents.selectProject(key); }
                 catch (Exception ignored) { documents.selectProject(""); }
-                threadId = id; serverThreadId = ""; active = session;
+                threadId = id; serverThreadId = ""; active = session; syncCurrentTurn();
                 publish(); return;
             }
         }
@@ -646,11 +675,10 @@ public final class Engine {
         String trimmed = title.trim();
         if (trimmed.isEmpty()) throw new IOException(t("대화 제목을 입력해 주세요."));
         JSONArray replacement = new JSONArray(sessions.toString());
-        String accountKey = accountProfiles.activeKey();
         boolean found = false;
         for (int i = 0; i < replacement.length(); i++) {
             JSONObject session = replacement.getJSONObject(i);
-            if (!session.optBoolean("deletionPending") && belongsToAccount(session, accountKey) && session.optString("id").equals(id)) {
+            if (!session.optBoolean("deletionPending") && session.optString("id").equals(id)) {
                 session.put("title", trimmed);
                 found = true;
                 break;
@@ -668,11 +696,10 @@ public final class Engine {
     private boolean deleteSession(String id) throws Exception {
         ensureIdle();
         boolean found = false;
-        String accountKey = accountProfiles.activeKey();
         JSONArray marked = new JSONArray(sessions.toString());
         for (int i = 0; i < marked.length(); i++) {
             JSONObject session = marked.getJSONObject(i);
-            if (!session.optBoolean("deletionPending") && belongsToAccount(session, accountKey) && session.optString("id").equals(id)) {
+            if (!session.optBoolean("deletionPending") && session.optString("id").equals(id)) {
                 session.put("deletionPending", true);
                 found = true;
                 break;
@@ -737,11 +764,10 @@ public final class Engine {
     }
     private void retryPendingDeletions() {
         if (!ready) return;
-        String accountKey = accountProfiles.activeKey();
         ArrayList<String> completed = new ArrayList<>();
         for (int i = 0; i < sessions.length(); i++) {
             JSONObject session = sessions.optJSONObject(i);
-            if (session != null && session.optBoolean("deletionPending") && belongsToAccount(session, accountKey) && deleteRemote(session.optString("id"), true))
+            if (session != null && session.optBoolean("deletionPending") && deleteRemote(session.optString("id"), true))
                 completed.add(session.optString("id"));
         }
         for (String id : completed) {
@@ -759,8 +785,9 @@ public final class Engine {
         try {
             if (method.equals("account/login/completed")) {
                 if (p.optBoolean("success")) {
-                    readAccount(); readRateLimits(); addAccountRestoreKey = ""; clearActive(); status = t("연결됨");
+                    readAccount(); readRateLimits(); addAccountRestoreKey = ""; status = t("연결됨");
                     try { JSONArray data = call("model/list", obj("limit", 100)).optJSONArray("data"); if (data != null) models = data; } catch (Exception ignored) {}
+                    if (active != null && active.optString("workspaceKey").equals(documents.key()) && documents.workspace().optBoolean("available")) resumeRemote(false);
                 } else {
                     event("error", obj("message", p.optString("error", t("로그인이 취소되었습니다."))));
                     try { restoreAccountAfterCancelledLogin(); } catch (Exception restoreError) { event("error", obj("message", t("이전 계정을 복원하지 못했습니다: ") + unwrap(restoreError).getMessage())); }
@@ -773,52 +800,80 @@ public final class Engine {
                 Object id = p.opt("requestId");
                 requests.entrySet().removeIf(entry -> {
                     if (String.valueOf(entry.getValue().id).equals(String.valueOf(id))) {
+                        PendingRequest request = entry.getValue();
+                        if (request.method.contains("requestApproval")) {
+                            try { JSONObject approvalSession = session(request.params.optString("threadId", threadId)); if (approvalSession != null) { approvalSession.put("approvalPending", false); persist(); } } catch (Exception ignored) {}
+                        }
                         event("server.resolved", obj("key", entry.getKey())); return true;
                     }
                     return false;
                 });
                 return;
             }
-            if (p.has("threadId") && !p.optString("threadId").equals(threadId)) return;
-            if (method.equals("item/agentMessage/delta") && active != null) {
+            String eventThreadId = p.optString("threadId");
+            if (eventThreadId.isBlank()) eventThreadId = threadId;
+            JSONObject target = eventThreadId.isBlank() ? active : session(eventThreadId);
+            boolean currentThread = eventThreadId.isBlank() || eventThreadId.equals(threadId);
+            if (method.equals("item/agentMessage/delta") && target != null) {
                 String id = p.optString("itemId");
-                JSONObject message = message(id);
-                message.put("text", message.optString("text") + p.optString("delta"));
-                event("message.delta", obj("id", id, "delta", p.optString("delta")));
-            } else if ((method.equals("item/completed") || method.equals("item/started")) && active != null) {
+                JSONObject previous = active;
+                try { active = target; JSONObject message = message(id); message.put("text", message.optString("text") + p.optString("delta")); }
+                finally { active = previous; }
+                if (currentThread) event("message.delta", obj("threadId", eventThreadId, "id", id, "delta", p.optString("delta")));
+                else publish();
+            } else if ((method.equals("item/completed") || method.equals("item/started")) && target != null) {
                 JSONObject item = p.optJSONObject("item");
                 boolean completed = method.equals("item/completed");
-                if (item != null && recordImages(item, completed, p.optString("turnId", turnId))) {
-                    if (completed) persist(); publish();
-                } else if (completed && item != null && "agentMessage".equals(item.optString("type"))) {
-                    message(item.getString("id")).put("text", item.optString("text")); persist(); publish();
-                } else event("agent.event", obj("method", method, "params", p));
-            } else if (method.equals("turn/diff/updated") && active != null) {
-                active.put("turnDiff", p.optString("diff")); persist(); publish();
-            } else if (method.equals("turn/started")) {
-                JSONObject turn = p.optJSONObject("turn"); if (turn != null) turnId = turn.optString("id");
-                busy = true; status = t("작업 중"); publish();
-            } else if (method.equals("turn/completed")) {
-                busy = false; turnId = ""; status = t("연결됨");
-                JSONObject turn = p.optJSONObject("turn");
-                if (turn != null && turn.optJSONObject("error") != null) event("error", obj("message", turn.getJSONObject("error").optString("message", t("작업 실패"))));
-                if (pendingApproval != null) pendingApproval.decision.complete(false);
-                if (active != null) {
-                    JSONArray messages = active.getJSONArray("messages");
-                    for (int i = 0; i < messages.length(); i++) {
-                        JSONObject message = messages.getJSONObject(i);
-                        if (message.optString("imageStatus").equals("generating")) message.put("imageStatus", "failed")
-                            .put("imageError", t("이미지 생성이 완료되지 않았습니다. 다시 시도해 주세요."));
+                boolean imageHandled = false, messageHandled = false;
+                JSONObject previous = active;
+                try {
+                    active = target;
+                    if (item != null) imageHandled = withWorkspace(target.optString("workspaceKey"), () -> recordImages(item, completed, p.optString("turnId", turnId)));
+                    if (!imageHandled && completed && item != null && "agentMessage".equals(item.optString("type"))) {
+                        message(item.getString("id")).put("text", item.optString("text"));
+                        messageHandled = true;
                     }
+                } finally { active = previous; }
+                if (imageHandled || messageHandled) { persist(); publish(); }
+                else if (currentThread) event("agent.event", obj("threadId", eventThreadId, "method", method, "params", p));
+            } else if (method.equals("turn/diff/updated") && target != null) {
+                target.put("turnDiff", p.optString("diff")); persist(); publish();
+            } else if (method.equals("turn/started")) {
+                JSONObject turn = p.optJSONObject("turn"); String started = turn == null ? "" : turn.optString("id");
+                if (!eventThreadId.isBlank() && !started.isBlank()) runningTurns.put(eventThreadId, started);
+                syncCurrentTurn(); publish();
+            } else if (method.equals("turn/completed")) {
+                if (!eventThreadId.isBlank()) runningTurns.remove(eventThreadId);
+                if (target != null) target.put("approvalPending", false);
+                syncCurrentTurn();
+                JSONObject turn = p.optJSONObject("turn");
+                boolean failed = turn != null && turn.optJSONObject("error") != null;
+                if (failed) event("error", obj("threadId", eventThreadId, "message", turn.getJSONObject("error").optString("message", t("작업 실패"))));
+                taskNotification(failed ? "failed" : "completed", failed ? t("작업 실패") : t("답변 완료"), failed ? t("Codex 작업이 실패했습니다.") : t("Codex가 작업을 마쳤습니다."), eventThreadId, "");
+                if (currentThread && pendingApproval != null) pendingApproval.decision.complete(false);
+                if (target != null) {
+                    JSONObject previous = active;
+                    try {
+                        active = target;
+                        JSONArray messages = active.getJSONArray("messages");
+                        for (int i = 0; i < messages.length(); i++) {
+                            JSONObject message = messages.getJSONObject(i);
+                            if (message.optString("imageStatus").equals("generating")) message.put("imageStatus", "failed")
+                                .put("imageError", t("이미지 생성이 완료되지 않았습니다. 다시 시도해 주세요."));
+                        }
+                    } finally { active = previous; }
                 }
                 persist(); publish();
             } else if (method.equals("error")) {
                 JSONObject error = p.optJSONObject("error");
-                event("error", obj("message", error == null ? t("Codex 요청 오류") : error.optString("message", t("Codex 요청 오류"))));
+                event("error", obj("threadId", eventThreadId, "message", error == null ? t("Codex 요청 오류") : error.optString("message", t("Codex 요청 오류"))));
             } else {
                 event("agent.event", obj("method", method, "params", p));
             }
-        } catch (Exception e) { event("error", obj("message", unwrap(e).getMessage())); }
+        } catch (Exception e) {
+            String failedThread = p.optString("threadId", threadId);
+            event("error", obj("threadId", failedThread, "message", unwrap(e).getMessage()));
+        }
     }
     private JSONObject readImage(String path) throws Exception {
         if (path.startsWith("sandbox:")) path = path.substring("sandbox:".length());
@@ -885,31 +940,44 @@ public final class Engine {
             if (!method.equals("item/tool/call")) {
                 String key = UUID.randomUUID().toString();
                 requests.put(key, new PendingRequest(connection, id, method, p));
+                if (method.contains("requestApproval")) {
+                    String approvalThread = p.optString("threadId", threadId);
+                    JSONObject approvalSession = session(approvalThread);
+                    if (approvalSession != null) { approvalSession.put("approvalPending", true); persist(); publish(); }
+                    taskNotification("approval", t("승인 필요"), p.optString("reason", t("Codex 작업의 승인이 필요합니다.")), approvalThread, key);
+                }
                 event("server.request", obj("key", key, "method", method, "params", p));
                 return;
             }
-            if (!p.optString("threadId").equals(threadId) || active == null || !active.optString("workspaceKey").equals(documents.key()))
-                throw new IOException(t("대화의 작업 폴더가 일치하지 않습니다."));
+            String requestThreadId = p.optString("threadId");
+            JSONObject requestSession = session(requestThreadId);
+            if (requestSession == null) throw new IOException(t("대화 작업을 찾을 수 없습니다."));
+            String requestWorkspaceKey = requestSession.optString("workspaceKey");
             String tool = p.getString("tool"); JSONObject args = p.getJSONObject("arguments");
-            event("tool", obj("name", tool, "path", args.optString("path", args.optString("query", ""))));
-            if (PhoneToolCatalog.NAMES.contains(tool)) {
-                if (tool.equals("mobile_phone_action") && permissionMode.equals("read-only"))
-                    throw new IOException(t("읽기 전용 모드에서는 화면 조회만 가능합니다. 조작하려면 작업 권한을 변경해 주세요."));
-                connection.respond(id, PhoneUseService.execute(context, tool, args));
-            } else if (ToolCatalog.WRITE.contains(tool)) {
-                mutate(tool, args, false, (result, error) -> {
-                    try { connection.respond(id, ToolCatalog.result(error == null, error == null ? result.toString() : error.getMessage())); }
-                    catch (IOException ignored) {}
-                });
-            } else {
-                JSONObject result = switch (tool) {
-                    case "mobile_list" -> documents.list(args.optString("path", ""));
-                    case "mobile_search" -> documents.search(args.getString("query"));
-                    case "mobile_read" -> documents.read(args.getString("path"));
-                    default -> throw new IOException(t("알 수 없는 파일 도구입니다."));
-                };
-                connection.respond(id, ToolCatalog.result(true, result.toString()));
-            }
+            event("tool", obj("threadId", requestThreadId, "name", tool, "path", args.optString("path", args.optString("query", ""))));
+            String previousToolThread = toolRequestThread;
+            toolRequestThread = requestThreadId;
+            try { withWorkspace(requestWorkspaceKey, () -> {
+                if (PhoneToolCatalog.NAMES.contains(tool)) {
+                    if (tool.equals("mobile_phone_action") && permissionMode.equals("read-only"))
+                        throw new IOException(t("읽기 전용 모드에서는 화면 조회만 가능합니다. 조작하려면 작업 권한을 변경해 주세요."));
+                    connection.respond(id, PhoneUseService.execute(context, tool, args));
+                } else if (ToolCatalog.WRITE.contains(tool)) {
+                    mutate(tool, args, false, (result, error) -> {
+                        try { connection.respond(id, ToolCatalog.result(error == null, error == null ? result.toString() : error.getMessage())); }
+                        catch (IOException ignored) {}
+                    });
+                } else {
+                    JSONObject result = switch (tool) {
+                        case "mobile_list" -> documents.list(args.optString("path", ""));
+                        case "mobile_search" -> documents.search(args.getString("query"));
+                        case "mobile_read" -> documents.read(args.getString("path"));
+                        default -> throw new IOException(t("알 수 없는 파일 도구입니다."));
+                    };
+                    connection.respond(id, ToolCatalog.result(true, result.toString()));
+                }
+                return null;
+            }); } finally { toolRequestThread = previousToolThread; }
         } catch (Exception e) {
             try { connection.respond(id, ToolCatalog.result(false, unwrap(e).getMessage())); } catch (IOException ignored) {}
         }
@@ -920,21 +988,27 @@ public final class Engine {
         if (pendingApproval != null && !pendingApproval.decision.isDone()) throw new IOException(t("다른 변경 사항을 확인 중입니다. 한 번에 하나씩 요청해 주세요."));
         DocumentStore.Mutation mutation = documents.prepare(operation, args);
         if (!interactive) {
-            JSONObject result = documents.commit(mutation); event("files.changed", result); reply.complete(result, null); return;
+            JSONObject result = documents.commit(mutation); filesChanged(result); reply.complete(result, null); return;
         }
         Approval approval = new Approval(mutation.title, mutation.preview);
         pendingApproval = approval;
+        String approvalThread = threadId;
+        JSONObject approvalSession = session(approvalThread);
+        if (approvalSession != null) { approvalSession.put("approvalPending", true); persist(); publish(); }
         ScheduledFuture<?> timeout = approvalTimer.schedule(() -> approval.decision.complete(false), 10, TimeUnit.MINUTES);
         approval.decision.whenCompleteAsync((approved, error) -> {
             timeout.cancel(false);
             if (pendingApproval == approval) pendingApproval = null;
             try {
+                JSONObject finishedApprovalSession = session(approvalThread);
+                if (finishedApprovalSession != null) { finishedApprovalSession.put("approvalPending", false); persist(); publish(); }
                 if (error != null || !Boolean.TRUE.equals(approved)) throw new IOException(t("사용자가 변경을 취소했습니다."));
                 JSONObject result = documents.commit(mutation);
-                event("files.changed", result); reply.complete(result, null);
+                filesChanged(result); reply.complete(result, null);
             } catch (Throwable e) { reply.complete(null, unwrap(e)); }
         }, io);
         Ui current = ui;
+        taskNotification("approval", t("승인 필요"), approval.title, threadId, approval.id);
         if (current != null) current.approval(approval);
         for (Ui observer : observers) if (observer != current) observer.approval(approval);
         if (current == null && observers.isEmpty()) approval.decision.complete(false);
@@ -954,11 +1028,32 @@ public final class Engine {
         requests.forEach((key, value) -> event("server.resolved", obj("key", key)));
         requests.clear();
         if (terminalProcess != null) terminalProcess.destroyForcibly();
-        ready = false; busy = false; turnId = ""; serverThreadId = ""; status = t("연결 종료");
+        clearRunningState();
+        ready = false; serverThreadId = ""; status = t("연결 종료");
         persist(); publish();
         context.stopService(new Intent(context, EngineService.class));
     }
     private File projectDirectory() { File dir = documents.directDirectory(); return dir == null ? workDir : dir; }
+    /**
+     * DocumentStore intentionally has one selected tree. Background turns must
+     * nevertheless use their own project without changing the visible project.
+     * Engine work is serialized on io, so a scoped switch is safe as long as it
+     * is restored in finally before any state is published.
+     */
+    private <T> T withWorkspace(String workspaceKey, Callable<T> work) throws Exception {
+        String previous = documents.key();
+        boolean switched = !Objects.equals(previous, workspaceKey);
+        if (switched) documents.selectProject(workspaceKey == null ? "" : workspaceKey);
+        try { return work.call(); }
+        finally { if (switched) documents.selectProject(previous); }
+    }
+    private void filesChanged(JSONObject result) {
+        try {
+            JSONObject payload = new JSONObject(result.toString());
+            payload.put("threadId", toolRequestThread.isBlank() ? threadId : toolRequestThread);
+            event("files.changed", payload);
+        } catch (Exception ignored) { event("files.changed", result); }
+    }
     private File runtimeAliases() throws Exception {
         File bin = new File(context.getFilesDir(), "runtime-bin");
         if (!bin.isDirectory() && !bin.mkdirs()) throw new IOException(t("명령 경로를 만들 수 없습니다."));

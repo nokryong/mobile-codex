@@ -33,6 +33,31 @@
   function button(text, fn, cls = 'secondary-button') { const b = node('button', text, cls); b.type = 'button'; b.addEventListener('click', () => { b.disabled = true; Promise.resolve().then(fn).catch(e => toast(e.message)).finally(() => { b.disabled = false; if (b.dataset.restoreFocus === 'true') b.focus(); }); }); return b; }
   function icon(name) { const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); const use = document.createElementNS(svg.namespaceURI, 'use'); use.setAttribute('href', '#i-' + name); svg.append(use); return svg; }
   function toast(message) { $('toast').textContent = message || t('오류가 발생했습니다.'); $('toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => $('toast').hidden = true, 5500); }
+  function ensureNotificationSettings() {
+    const toggle = $('chat-icons-toggle')?.closest('.settings-row');
+    if (!toggle) return;
+    const make = (id, title, description) => { const row = node('div', null, 'settings-row'), copy = node('span'), strong = node('strong', title), small = node('small', description), label = node('label', null, 'toggle-switch'), input = node('input'); input.id = id; input.type = 'checkbox'; input.setAttribute('role', 'switch'); input.checked = localStorage.getItem(id) !== 'off'; input.addEventListener('change', () => { try { localStorage.setItem(id, input.checked ? 'on' : 'off'); } catch {} call('notifications.configure', {enabled: $('notifications-toggle')?.checked !== false, vibration: $('notification-vibration-toggle')?.checked !== false}).catch(error => toast(error.message)); }); label.append(input, node('span', null, 'toggle-track')); copy.append(strong, small); row.append(copy, label); return row; };
+    const parent = toggle.parentElement;
+    if (!$('notifications-toggle')) {
+      const notifications = make('notifications-toggle', t('작업 알림'), t('답변 완료와 승인 요청을 Android 상단 알림으로 알려줍니다.'));
+      const vibration = make('notification-vibration-toggle', t('알림 진동'), t('작업 알림이 도착할 때 진동합니다.'));
+      const permission = node('div', null, 'settings-row notification-permission-row');
+      const copy = node('span'), title = node('strong', t('Android 알림 권한')), help = node('small', t('시스템 권한이 꺼져 있으면 상단 알림을 받을 수 없습니다.'));
+      const open = button(t('Android 알림 설정'), async () => { await call('notifications.openSettings'); setTimeout(refreshNotificationSettings, 250); }, 'secondary-button');
+      open.id = 'notification-settings-button'; copy.append(title, help); permission.append(copy, open);
+      parent.insertBefore(permission, toggle); parent.insertBefore(vibration, permission); parent.insertBefore(notifications, vibration);
+    }
+    function apply(value) {
+      if (!value) return;
+      $('notifications-toggle').checked = value.enabled !== false;
+      $('notification-vibration-toggle').checked = value.vibration !== false;
+      const permission = document.querySelector('.notification-permission-row');
+      if (permission) permission.hidden = value.permission !== false;
+    }
+    function refreshNotificationSettings() { return call('notifications.state').then(apply).catch(() => {}); }
+    window.refreshNotificationSettings = refreshNotificationSettings;
+    refreshNotificationSettings();
+  }
   function characterPack(value) { const packs = Array.isArray(value?.packs) ? value.packs : characterState.packs; return packs.find(pack => pack.id === (value?.selectedPackId || characterState.selectedPackId)) || packs.find(pack => pack.id === 'builtin') || packs[0]; }
   function characterVisualKey() { const pack = characterPack(); return characterState.selectedPackId + ':' + JSON.stringify(pack?.icons || {}); }
   function characterErrorText(error) { const text = String(error || ''); for (const prefix of ['아이콘이 없습니다: ', '지원하지 않는 이미지입니다: ']) if (text.startsWith(prefix)) return t(prefix) + text.slice(prefix.length); return t(text); }
@@ -791,7 +816,6 @@
     await call('projects.select', {key:key || ''}); sidebar(false);
   }
   async function newChat(workspaceKey) {
-    if (state.busy) return;
     await call('chat.new', {workspaceKey:workspaceKey || ''}); sidebar(false);
   }
   async function removeProject(project) {
@@ -845,7 +869,10 @@
   function sessionRow(session) {
     const active = session.id === state.threadId;
     const row = node('div', null, 'session-row' + (active ? ' active' : ''));
-    const b = button(session.title || t('제목 없는 대화'), async () => { await call('chat.resume', {id:session.id}); sidebar(false); }, 'session' + (active ? ' active' : ''));
+    const b = button('', async () => { await call('chat.resume', {id:session.id}); sidebar(false); nextRequest(); }, 'session' + (active ? ' active' : ''));
+    b.append(node('span', session.title || t('제목 없는 대화'), 'session-title'));
+    if (session.approvalPending) b.append(node('span', '!', 'session-approval-indicator'));
+    else if (session.busy) b.append(node('span', '', 'session-progress-indicator'));
     b.title = session.workspace || t('일반 대화');
     const menu = button('', () => sessionAction(session), 'icon-button session-more');
     menu.setAttribute('aria-label', (session.title || t('대화')) + t(' 관리'));
@@ -858,7 +885,7 @@
     const projects = state.projects || [];
     const general = node('div', null, 'general-project' + (!state.workspace.selected ? ' selected' : ''));
     const generalButton = button('', () => selectProject(''), 'project-button'); generalButton.append(icon('code'), node('span', t('일반 대화'))); generalButton.setAttribute('aria-current', String(!state.workspace.selected));
-    const generalNew = button('', () => newChat(''), 'icon-button project-new'); generalNew.setAttribute('aria-label', t('일반 새 대화')); generalNew.append(icon('plus')); general.append(generalButton, generalNew); target.append(general);
+    general.append(generalButton); target.append(general);
     for (const project of projects) {
       const expandedKey = 'project-expanded:' + project.key, expanded = localStorage.getItem(expandedKey) !== 'false';
       const section = node('section', null, 'project-tree' + (project.selected ? ' selected' : ''));
@@ -866,10 +893,10 @@
       const toggle = button('', () => { const expandedNow = section.classList.toggle('collapsed') === false; localStorage.setItem(expandedKey, String(expandedNow)); toggle.setAttribute('aria-expanded', String(expandedNow)); }, 'tree-toggle'); toggle.setAttribute('aria-label', project.name + t(' 대화 펼치기')); toggle.setAttribute('aria-expanded', String(expanded)); toggle.append(icon('down'));
       const select = button('', () => selectProject(project.key), 'project-button'); select.append(icon('folder'), node('span', project.name || t('이름 없는 프로젝트'))); select.setAttribute('aria-current', String(!!project.selected));
        const menu = button('', () => projectAction(project, menu), 'icon-button project-more'); menu.disabled = !!state.busy; menu.setAttribute('aria-label', project.name + t(' 메뉴')); menu.dataset.projectMenuKey = project.key; menu.append(icon('more'));
-       row.append(toggle, select, menu); section.append(row);
+       const projectNew = button('', () => newChat(project.key), 'icon-button project-new'); projectNew.setAttribute('aria-label', project.name + t(' 새 대화')); projectNew.append(icon('plus'));
+       row.append(toggle, select, projectNew, menu); section.append(row);
       const children = node('div', null, 'project-sessions');
       if (project.available === false) { children.append(node('p', t('폴더 접근을 다시 연결해야 합니다.'), 'sidebar-empty'), button(t('폴더 다시 연결'), () => pickFolder(project.key), 'new-thread')); }
-      else children.append(button(t('새 대화'), () => newChat(project.key), 'new-thread'));
       for (const session of (state.sessions || []).filter(s => s.workspaceKey === project.key)) children.append(sessionRow(session));
       section.append(children); if (!expanded) section.classList.add('collapsed'); target.append(section);
     }
@@ -918,7 +945,7 @@
     $('login-step').textContent = logged ? '✓' : '1'; $('login-step').classList.toggle('done', logged);
     $('folder-step').textContent = selected ? '✓' : '2'; $('folder-step').classList.toggle('done', !!selected);
     renderQuota(); renderAccounts();
-    $('runtime-status').textContent = state.status; $('settings-status').textContent = state.status; $('settings-indicator').textContent = state.ready ? t('연결됨') : t('연결 안 됨'); $('settings-indicator').classList.toggle('online', !!state.ready);
+    $('settings-status').textContent = state.status; $('settings-indicator').textContent = state.ready ? t('연결됨') : t('연결 안 됨'); $('settings-indicator').classList.toggle('online', !!state.ready);
     const pendingDeletes = Number(state.pendingDeletionCount) || 0;
     $('pending-deletions').hidden = pendingDeletes === 0;
     $('pending-deletions').textContent = pendingDeletes ? t('원본 삭제 대기 {count}건. 아래 ‘Codex 시작 / 다시 연결’을 누르면 다시 시도합니다.', {count:pendingDeletes}) : '';
@@ -946,6 +973,9 @@
     if (changedThread) { following = true; $('event-log').replaceChildren(); $('messages').replaceChildren(); }
     updateSend(); optionsSummary(); drawUpdates(updateState);
     drawMessages();
+    // A request can arrive while another conversation is visible. Once the
+    // selected session is restored, show only that session's pending request.
+    nextRequest();
     if (logged && $('login-dialog').open) { login = null; close('login-dialog'); }
   }
   function logEvent(title, data) {
@@ -1274,9 +1304,25 @@
       return Object.fromEntries(entries);
     };
   }
+  function requestThread(req) { return String(req?.params?.threadId || ''); }
+  function closeBackgroundRequest() {
+    if (!displayedRequest) return;
+    const req = requestQueue.get(displayedRequest), thread = requestThread(req);
+    if (thread && thread !== state.threadId) {
+      displayedRequest = null;
+      if ($('request-dialog').open) close('request-dialog');
+    }
+  }
   function nextRequest() {
+    closeBackgroundRequest();
     if (displayedRequest || !requestQueue.size) return;
-    const [key, req] = requestQueue.entries().next().value; displayedRequest = key;
+    let entry;
+    for (const candidate of requestQueue.entries()) {
+      const thread = requestThread(candidate[1]);
+      if (!thread || thread === state.threadId) { entry = candidate; break; }
+    }
+    if (!entry) return;
+    const [key, req] = entry; displayedRequest = key;
     $('request-title').textContent = req.method.includes('requestUserInput') ? t('Codex 질문') : req.method.includes('requestApproval') ? t('작업 승인') : t('Codex 요청');
     $('request-reason').textContent = req.params.reason || req.params.message || req.method;
     $('request-detail').textContent = JSON.stringify(req.params, null, 2); $('request-fields').replaceChildren(); $('request-actions').replaceChildren();
@@ -1312,11 +1358,12 @@
   window.mobileCodexEvent = (name, data) => {
     if (name === 'response') { const p = pending.get(data.id); if (p) { clearTimeout(p.timer); pending.delete(data.id); data.error ? p.reject(new Error(data.error)) : p.resolve(data.result || {}); } return; }
     if (name === 'state') render(data);
-    else if (name === 'error' || name === 'notice') toast(data.message);
-    else if (name === 'message.delta') { C.appendDelta(state.messages, data.id, data.delta); drawMessages(); }
-    else if (name === 'tool') { activityIcon = /read|list|search/.test(data.name) ? 'inspecting' : 'working'; drawStatusIcons(); $('activity-text').textContent = data.name.replace('mobile_', '') + ' · ' + data.path; logEvent(data.name, data); }
-    else if (name === 'agent.event') { if (!data.method.endsWith('/delta')) logEvent(data.method, data.params); if (data.method === 'turn/diff/updated') logEvent(t('변경 사항'), data.params.diff); }
-    else if (name === 'files.changed' && !$('file-panel').hidden) listFiles().catch(e => toast(e.message));
+    else if (name === 'error') { if (!data.threadId || data.threadId === state.threadId) toast(data.message); }
+    else if (name === 'notice') toast(data.message);
+    else if (name === 'message.delta') { if (data.threadId && data.threadId !== state.threadId) return; C.appendDelta(state.messages, data.id, data.delta); drawMessages(); }
+    else if (name === 'tool') { if (data.threadId && data.threadId !== state.threadId) return; activityIcon = /read|list|search/.test(data.name) ? 'inspecting' : 'working'; drawStatusIcons(); $('activity-text').textContent = data.name.replace('mobile_', '') + ' · ' + data.path; logEvent(data.name, data); }
+    else if (name === 'agent.event') { if (data.threadId && data.threadId !== state.threadId) return; if (!data.method.endsWith('/delta')) logEvent(data.method, data.params); if (data.method === 'turn/diff/updated') logEvent(t('변경 사항'), data.params.diff); }
+    else if (name === 'files.changed' && (!data.threadId || data.threadId === state.threadId) && !$('file-panel').hidden) listFiles().catch(e => toast(e.message));
     else if (name === 'updates.changed') drawUpdates(data);
     else if (name === 'voice.state') drawDictation(data);
     else if (name === 'voice.changed') recoverVoiceInput();
@@ -1328,6 +1375,8 @@
     else if (name === 'server.resolved') { requestQueue.delete(data.key); if (displayedRequest === data.key) { displayedRequest = null; close('request-dialog'); } nextRequest(); }
     else if (name === 'viewport') { document.body.classList.toggle('keyboard-open', !!data.keyboardVisible); viewportChanged(); }
     else if (name === 'theme') document.documentElement.dataset.theme = data.theme === 'dark' ? 'dark' : 'light';
+    else if (name === 'notification.open') { const resume = data.threadId ? call('chat.resume', {id:data.threadId}) : Promise.resolve(); resume.then(() => nextRequest()).catch(error => toast(error.message)); }
+    else if (name === 'notifications.changed') { window.refreshNotificationSettings?.(); }
     else if (name === 'back') window.mobileCodexBack();
   };
   window.mobileCodexBack = () => {
@@ -1408,6 +1457,9 @@
   });
   let autocompleteTimer; $('prompt').addEventListener('input', () => { saveDraft(); sizeComposer(); clearTimeout(autocompleteTimer); hideAutocomplete(); if (/[@$]$/.test($('prompt').value.slice(0, $('prompt').selectionStart))) queryAutocomplete(); else autocompleteTimer = setTimeout(queryAutocomplete, 120); });
   $('prompt').addEventListener('focus', () => { if (following) frame(scrollLatest); });
+  $('composer').addEventListener('focusin', () => $('composer').classList.add('composer-expanded'));
+  $('composer').addEventListener('focusout', () => frame(() => { if (! $('composer').contains(document.activeElement)) $('composer').classList.remove('composer-expanded'); }));
+  $('composer').addEventListener('click', e => { if (! $('composer').classList.contains('composer-expanded') && e.target === $('composer')) $('prompt').focus(); });
   $('prompt').addEventListener('click', () => queryAutocomplete());
   $('chat-scroll').addEventListener('scroll', () => {
     const area = $('chat-scroll'); following = area.scrollHeight - area.scrollTop - area.clientHeight < 80;
@@ -1434,8 +1486,8 @@
   on('permissions', () => setPermissionMode($('permissions').value), 'change');
   on('approval-mode', () => setApprovalMode($('approval-mode').value), 'change');
   document.querySelectorAll('input[name="permission"]').forEach(r => r.addEventListener('change', () => setPermissionMode(r.value).catch(error => toast(error.message))));
-  ensureCharacterPackUi();
-  on('connect', () => startLogin(false)); on('account-button', openAccountSettings); on('settings', () => { ensureCharacterPackUi(); show('settings-dialog'); sidebar(false); if (!characterState.folderConfigured && characterState.packs.length <= 1) loadCharacterPacks(); });
+  ensureCharacterPackUi(); ensureNotificationSettings();
+  on('connect', () => startLogin(false)); on('account-button', openAccountSettings); on('settings', () => { ensureCharacterPackUi(); ensureNotificationSettings(); show('settings-dialog'); sidebar(false); if (!characterState.folderConfigured && characterState.packs.length <= 1) loadCharacterPacks(); });
   document.querySelectorAll('[data-settings-tab]').forEach(tab => tab.addEventListener('click', () => {
     const selected = tab.dataset.settingsTab; selectSettingsTab(selected);
     if (selected === 'personal' && !instructionsLoaded) loadInstructions();
@@ -1470,7 +1522,7 @@
   ['edit-config', 'tools-config'].forEach(id => on(id, config)); on('config-save', async () => { await call('config.save', {content: $('config-editor').value}); configOriginal = $('config-editor').value; await call('runtime.start'); close('config-dialog'); toast(t('설정을 적용했습니다.')); });
   on('show-recovery', () => { closeToolMenu(); return recovery(); }); on('show-terminal', () => { closeToolMenu(); show('terminal-dialog'); sidebar(false); }); on('terminal-stop', () => call('terminal.stop'));
   on('terminal-form', async e => { e.preventDefault(); const command = $('terminal-command').value; if (command.trim()) { await call('terminal.run', {command}); $('terminal-output').textContent += '$ ' + command + '\n'; $('terminal-command').value = ''; } }, 'submit');
-  on('show-tools', () => show('tool-menu-dialog')); on('show-tools-panel', () => { closeToolMenu(); return loadTools(false); }); on('refresh-tools', () => loadTools(true)); on('show-activity', () => show('activity-dialog'));
+  on('show-tools', () => show('tool-menu-dialog')); on('show-tools-panel', () => { closeToolMenu(); return loadTools(false); }); on('refresh-tools', () => loadTools(true));
   on('marketplace-add', async () => { const source = await input(t('마켓플레이스 추가'), t('Git URL 또는 기기의 로컬 경로')); if (source) { const result = await rpc('marketplace/add', {source}); toast(result.marketplaceName + t(' 추가 완료')); await loadTools(); } });
   on('skill-import', async () => { const r = await call('skills.import'); if (!r.cancelled) { toast(t('스킬 폴더를 가져왔습니다.')); await loadTools(); } });
   $('request-dialog').addEventListener('cancel', e => e.preventDefault());

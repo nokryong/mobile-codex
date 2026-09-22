@@ -33,12 +33,20 @@ public class EngineOfflineSessionTest {
         context.getSharedPreferences("projects", 0).edit().clear().commit();
         context.getSharedPreferences("workspace", 0).edit().clear().commit();
         context.getSharedPreferences("settings", 0).edit().clear().commit();
+        deleteTree(new File(context.getFilesDir(), "account-profiles"));
     }
     @After public void after() {
         new File(context.getFilesDir(), "sessions.json").delete();
         context.getSharedPreferences("projects", 0).edit().clear().commit();
         context.getSharedPreferences("workspace", 0).edit().clear().commit();
         context.getSharedPreferences("settings", 0).edit().clear().commit();
+        deleteTree(new File(context.getFilesDir(), "account-profiles"));
+    }
+    private static void deleteTree(File file) {
+        if (!file.exists()) return;
+        File[] children = file.listFiles();
+        if (children != null) for (File child : children) deleteTree(child);
+        file.delete();
     }
     @Test public void approvalReviewModesStaySeparateFromFileAccess() throws Exception {
         Engine engine = new Engine(context);
@@ -57,6 +65,110 @@ public class EngineOfflineSessionTest {
         assertEquals("never", allow.getString("approvalPolicy")); assertEquals("user", allow.getString("approvalsReviewer"));
         engine.io.shutdownNow();
     }
+    @Test public void accountReadRequestsRefreshAndRateLimitRevocationIsNotSilenced() throws Exception {
+        File auth = new File(new File(context.getFilesDir(), ".codex"), "auth.json"); auth.getParentFile().mkdirs();
+        Files.write(auth.toPath(), obj("tokens", obj("access_token", "opaque-test-token")).toString().getBytes(StandardCharsets.UTF_8));
+        Engine engine = new Engine(context); java.util.ArrayList<JSONObject> calls = new java.util.ArrayList<>();
+        engine.setTestTransport((method, params) -> {
+            calls.add(obj("method", method, "params", new JSONObject(params.toString())));
+            if (method.equals("account/read")) return obj("account", obj("type", "chatgpt", "email", "test@example.test", "planType", "plus"));
+            if (method.equals("account/rateLimits/read")) throw new java.io.IOException("401 token_revoked");
+            throw new AssertionError(method);
+        });
+        Method readAccount = Engine.class.getDeclaredMethod("readAccount"); readAccount.setAccessible(true); readAccount.invoke(engine);
+        assertTrue(calls.get(0).getJSONObject("params").getBoolean("refreshToken"));
+        Method readRateLimits = Engine.class.getDeclaredMethod("readRateLimits"); readRateLimits.setAccessible(true);
+        try { readRateLimits.invoke(engine); fail("revoked credentials must not be treated as a usable account"); }
+        catch (java.lang.reflect.InvocationTargetException expected) { assertTrue(expected.getCause().getMessage().contains("다시 로그인")); }
+        engine.io.shutdownNow(); deleteTree(new File(context.getFilesDir(), "account-profiles")); Files.deleteIfExists(auth.toPath());
+    }
+    @Test public void revokedAccountSwitchRestoresThePreviousActiveProfile() throws Exception {
+        File auth = new File(new File(context.getFilesDir(), ".codex"), "auth.json"); auth.getParentFile().mkdirs();
+        Files.write(auth.toPath(), obj("tokens", obj("access_token", "opaque-one")).toString().getBytes(StandardCharsets.UTF_8));
+        Engine engine = new Engine(context);
+        engine.setTestTransport((method, params) -> obj("account", obj("type", "chatgpt", "email", "one@example.test", "planType", "plus")));
+        Method readAccount = Engine.class.getDeclaredMethod("readAccount"); readAccount.setAccessible(true); readAccount.invoke(engine);
+        AccountProfiles profiles = (AccountProfiles) field(engine, "accountProfiles"); String previous = profiles.activeKey();
+        Files.write(auth.toPath(), obj("tokens", obj("access_token", "opaque-two")).toString().getBytes(StandardCharsets.UTF_8));
+        engine.setTestTransport((method, params) -> obj("account", obj("type", "chatgpt", "email", "two@example.test", "planType", "pro")));
+        readAccount.invoke(engine); String target = profiles.activeKey(); assertNotEquals(previous, target);
+        profiles.switchTo(previous);
+        engine.setTestTransport((method, params) -> {
+            if (method.equals("account/read")) return obj("account", profiles.activeKey().equals(target)
+                ? obj("type", "chatgpt", "email", "two@example.test", "planType", "pro")
+                : obj("type", "chatgpt", "email", "one@example.test", "planType", "plus"));
+            if (method.equals("account/rateLimits/read") && profiles.activeKey().equals(target)) throw new java.io.IOException("401 token_revoked");
+            if (method.equals("account/rateLimits/read")) return obj("rateLimits", obj("primary", obj("usedPercent", 1)));
+            throw new AssertionError(method);
+        });
+        engine.setTestAccountValidation(true); setField(engine, "account", obj("type", "chatgpt", "email", "one@example.test"));
+        Method switchAccount = Engine.class.getDeclaredMethod("switchAccount", String.class); switchAccount.setAccessible(true);
+        try { switchAccount.invoke(engine, target); fail("a failed target startup must not report a successful switch"); }
+        catch (java.lang.reflect.InvocationTargetException expected) { assertTrue(expected.getCause().getMessage().contains("다시 로그인")); }
+        assertEquals(previous, profiles.activeKey());
+        engine.io.shutdownNow(); deleteTree(new File(context.getFilesDir(), "account-profiles")); Files.deleteIfExists(auth.toPath());
+    }
+    @Test public void sessionsAreSharedAcrossProfilesAndAccountSwitchKeepsTheOpenConversation() throws Exception {
+        File auth = new File(new File(context.getFilesDir(), ".codex"), "auth.json"); auth.getParentFile().mkdirs();
+        Files.write(auth.toPath(), obj("tokens", obj("access_token", "opaque-one")).toString().getBytes(StandardCharsets.UTF_8));
+        Engine engine = new Engine(context);
+        Method readAccount = Engine.class.getDeclaredMethod("readAccount"); readAccount.setAccessible(true);
+        engine.setTestTransport((method, params) -> obj("account", obj("type", "chatgpt", "email", "one@example.test", "planType", "plus")));
+        readAccount.invoke(engine);
+        AccountProfiles profiles = (AccountProfiles) field(engine, "accountProfiles"); String first = profiles.activeKey();
+        Files.write(auth.toPath(), obj("tokens", obj("access_token", "opaque-two")).toString().getBytes(StandardCharsets.UTF_8));
+        engine.setTestTransport((method, params) -> obj("account", obj("type", "chatgpt", "email", "two@example.test", "planType", "pro")));
+        readAccount.invoke(engine); String second = profiles.activeKey(); assertNotEquals(first, second);
+        profiles.switchTo(first);
+
+        setField(engine, "sessions", array(obj("id", "shared-thread", "title", "Shared", "workspace", "", "workspaceKey", "",
+            "accountProfileKey", first, "messages", array(obj("id", "m1", "role", "user", "text", "keep me")),
+            "imageHistoryVersion", 1, "phoneToolsVersion", 1)));
+        JSONObject before = handle(engine, "chat.resume", obj("id", "shared-thread"));
+        assertEquals("shared-thread", before.getString("threadId"));
+        assertEquals(1, before.getJSONArray("sessions").length());
+
+        java.util.ArrayList<String> calls = new java.util.ArrayList<>();
+        engine.setTestTransport((method, params) -> {
+            calls.add(method);
+            if (method.equals("account/read")) return obj("account", obj("type", "chatgpt", "email", "two@example.test", "planType", "pro"));
+            if (method.equals("account/rateLimits/read")) return obj("rateLimits", new JSONObject());
+            if (method.equals("thread/resume")) return new JSONObject();
+            throw new AssertionError(method);
+        });
+        engine.setTestAccountValidation(true); setField(engine, "account", obj("type", "chatgpt", "email", "one@example.test"));
+        Method switchAccount = Engine.class.getDeclaredMethod("switchAccount", String.class); switchAccount.setAccessible(true);
+        switchAccount.invoke(engine, second);
+
+        JSONObject after = handle(engine, "state", new JSONObject());
+        assertEquals(second, profiles.activeKey());
+        assertEquals("shared-thread", after.getString("threadId"));
+        assertEquals("keep me", after.getJSONArray("messages").getJSONObject(0).getString("text"));
+        assertEquals(1, after.getJSONArray("sessions").length());
+        assertTrue(calls.contains("thread/resume"));
+        engine.io.shutdownNow(); deleteTree(new File(context.getFilesDir(), "account-profiles")); Files.deleteIfExists(auth.toPath());
+    }
+    @Test public void legacySessionOwnershipIsRemovedAndNeverHidesConversations() throws Exception {
+        JSONArray initial = array(
+            obj("id", "one", "title", "One", "workspace", "", "workspaceKey", "", "accountProfileKey", "account-old", "messages", new JSONArray()),
+            obj("id", "two", "title", "Two", "workspace", "", "workspaceKey", "", "accountProfileKey", "account-other", "messages", new JSONArray()));
+        dev.mobilecodex.app.core.Utf8Files.write(new File(context.getFilesDir(), "sessions.json").toPath(), initial.toString());
+        File profileRoot = new File(context.getFilesDir(), "account-profiles"); profileRoot.mkdirs();
+        Files.write(new File(profileRoot, "active").toPath(), "account-current\n".getBytes(StandardCharsets.UTF_8));
+
+        Engine engine = new Engine(context);
+        JSONObject state = handle(engine, "state", new JSONObject());
+        assertEquals(2, state.getJSONArray("sessions").length());
+        assertEquals("one", handle(engine, "chat.resume", obj("id", "one")).getString("threadId"));
+        JSONObject renamed = handle(engine, "chat.rename", obj("id", "one", "title", "Renamed"));
+        assertEquals("Renamed", session(renamed.getJSONArray("sessions"), "one").getString("title"));
+        JSONArray stored = new JSONArray(dev.mobilecodex.app.core.Utf8Files.read(new File(context.getFilesDir(), "sessions.json").toPath()));
+        assertFalse(stored.getJSONObject(0).has("accountProfileKey"));
+        assertFalse(stored.getJSONObject(1).has("accountProfileKey"));
+        engine.io.shutdownNow();
+    }
+    private static Object field(Engine engine, String name) throws Exception { java.lang.reflect.Field value = Engine.class.getDeclaredField(name); value.setAccessible(true); return value.get(engine); }
+    private static void setField(Engine engine, String name, Object value) throws Exception { java.lang.reflect.Field field = Engine.class.getDeclaredField(name); field.setAccessible(true); field.set(engine, value); }
     private JSONObject handle(Engine engine, String action, JSONObject args) throws Exception {
         CompletableFuture<JSONObject> done = new CompletableFuture<>();
         engine.handle(action, args, (value, error) -> { if (error != null) done.completeExceptionally(error); else done.complete(value); });

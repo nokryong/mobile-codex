@@ -801,3 +801,50 @@ test('dragging content or a desktop dialog never dismisses it and approvals have
   assert.equal(sheet.open,true);assert.equal(d.querySelector('#request-dialog .sheet-grip'),null);
  }
 });
+test('composer stays compact until focus and expands without losing the draft',async()=>{
+ const {w}=setup();await tick();const d=w.document,composer=d.getElementById('composer'),prompt=d.getElementById('prompt');
+ assert.equal(composer.classList.contains('composer-expanded'),false);prompt.value='보존할 초안';prompt.focus();assert.equal(composer.classList.contains('composer-expanded'),true);
+ prompt.blur();await tick();assert.equal(prompt.value,'보존할 초안');assert.equal(composer.classList.contains('composer-expanded'),false);
+});
+test('project tree has one project plus and no duplicate new-chat row',async()=>{
+ const {w,snapshot}=setup();await tick();w.mobileCodexEvent('state',{...snapshot,projects:[{key:'p',name:'Project',selected:true,available:true}],sessions:[{id:'s',title:'Existing',workspaceKey:'p'}]});
+ const d=w.document;assert.equal(d.querySelectorAll('.general-project .project-new').length,0);assert.equal(d.querySelectorAll('.project-tree .project-new').length,1);assert.equal(d.querySelectorAll('.project-tree .project-sessions .new-thread').length,0);
+});
+test('session list marks background work and approval separately',async()=>{
+ const {w,snapshot}=setup();await tick();w.mobileCodexEvent('state',{...snapshot,sessions:[{id:'busy',title:'Working',workspaceKey:'p',busy:true},{id:'approval',title:'Needs approval',workspaceKey:'p',approvalPending:true}]});
+ assert.equal(w.document.querySelectorAll('.session-progress-indicator').length,1);assert.equal(w.document.querySelectorAll('.session-approval-indicator').length,1);
+});
+test('notification settings are persisted through the native bridge',async()=>{
+ const {w,calls}=setup({'notifications.state':()=>({enabled:true,vibration:true}),'notifications.configure':m=>m.args});await tick();w.document.getElementById('settings').click();await tick();
+ const toggle=w.document.getElementById('notifications-toggle');assert.ok(toggle);toggle.checked=false;toggle.dispatchEvent(new w.Event('change'));await tick();
+ assert.deepEqual(calls.find(c=>c.action==='notifications.configure').args,{enabled:false,vibration:true});
+});
+test('background message deltas cannot alter the visible conversation',async()=>{
+ const {w,snapshot}=setup();await tick();w.mobileCodexEvent('state',{...snapshot,threadId:'current',messages:[{id:'m',role:'assistant',text:'현재'}]});
+ w.mobileCodexEvent('message.delta',{threadId:'background',id:'m',delta:' 침범'});assert.match(w.document.getElementById('messages').textContent,/현재/);assert.doesNotMatch(w.document.getElementById('messages').textContent,/침범/);
+});
+test('background errors do not become a toast for the visible conversation',async()=>{
+ const {w,snapshot}=setup();await tick();w.mobileCodexEvent('state',{...snapshot,threadId:'current'});w.mobileCodexEvent('error',{threadId:'background',message:'다른 대화 실패'});
+ assert.equal(w.document.getElementById('toast').hidden,true);w.mobileCodexEvent('error',{threadId:'current',message:'현재 대화 실패'});assert.equal(w.document.getElementById('toast').hidden,false);
+});
+test('request queue keeps background approvals hidden and opens them after switching sessions',async()=>{
+ const {w,snapshot}=setup();await tick();
+ w.mobileCodexEvent('server.request',{key:'background',method:'item/commandExecution/requestApproval',params:{threadId:'other',command:'background'}});
+ assert.equal(w.document.getElementById('request-dialog').open,false);
+ w.mobileCodexEvent('server.request',{key:'current',method:'item/commandExecution/requestApproval',params:{threadId:'t',command:'current'}});
+ assert.equal(w.document.getElementById('request-dialog').open,true);assert.match(w.document.getElementById('request-detail').textContent,/current/);
+ w.mobileCodexEvent('server.resolved',{key:'current'});assert.equal(w.document.getElementById('request-dialog').open,false);
+ w.mobileCodexEvent('state',{...snapshot,threadId:'other',sessions:[{id:'other',title:'다른 대화',workspaceKey:'',approvalPending:true}]});
+ assert.equal(w.document.getElementById('request-dialog').open,true);assert.match(w.document.getElementById('request-detail').textContent,/background/);
+});
+test('session title grows before the fixed activity indicator at the row end',async()=>{
+ const {w,snapshot}=setup();await tick();w.mobileCodexEvent('state',{...snapshot,sessions:[{id:'t',title:'아주 긴 대화 제목이 잘려야 하는 항목',workspaceKey:'',busy:true}]});
+ const row=w.document.querySelector('#sessions .session'),title=row.querySelector('.session-title'),indicator=row.querySelector('.session-progress-indicator');
+ assert.ok(title&&indicator);assert.equal(title.nextElementSibling,indicator);assert.match(fs.readFileSync(root+'app.css','utf8'),/\.session-title\s*\{[^}]*flex:1/);
+});
+test('notification permission guidance follows the Android permission state',async()=>{
+ let permission=false;const {w,calls}=setup({'notifications.state':()=>({enabled:true,vibration:true,permission}),'notifications.openSettings':()=>({ok:true})});await tick();
+ w.document.getElementById('settings').click();await tick();await tick();const row=w.document.querySelector('.notification-permission-row');
+ assert.equal(row.hidden,false);assert.equal(w.document.getElementById('notification-settings-button').textContent,'Android 알림 설정');w.document.getElementById('notification-settings-button').click();await tick();
+ assert.ok(calls.some(call=>call.action==='notifications.openSettings'));permission=true;w.mobileCodexEvent('notifications.changed',{});await tick();await tick();assert.equal(row.hidden,true);
+});

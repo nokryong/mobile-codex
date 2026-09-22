@@ -28,6 +28,7 @@
             <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/update_paths" />
         </provider>
         <activity android:name=".MainActivity" android:exported="true"
+            android:launchMode="singleTop"
             android:enableOnBackInvokedCallback="true" tools:targetApi="33"
             android:configChanges="orientation|screenSize|keyboardHidden|smallestScreenSize|screenLayout|uiMode"
             android:windowSoftInputMode="adjustResize">
@@ -36,6 +37,7 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <receiver android:name=".CodexNotificationReceiver" android:exported="false" />
         <activity android:name=".VoiceInputActivity" android:exported="false"
             android:excludeFromRecents="true" android:taskAffinity="" android:enableOnBackInvokedCallback="true" tools:targetApi="33" android:theme="@android:style/Theme.Material.Light.Dialog.NoActionBar" />
         <service android:name=".PhoneUseService" android:exported="true"
