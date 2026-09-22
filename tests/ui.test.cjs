@@ -46,6 +46,16 @@ test('submit is cancelled synchronously and calls native with chosen model and e
  assert.equal(e.defaultPrevented,true);await tick();
  assert.equal(calls.find(m=>m.action==='chat.send').args.text,'실제 파일 수정');
 });
+test('composer exposes task permissions beside the model and full access is applied directly',async()=>{
+ const {w,calls,snapshot}=setup({'permissions.set':()=>({ok:true})});await tick();
+ const select=w.document.getElementById('composer-permissions');assert.equal(select.value,'workspace-write');
+ select.value='danger-full-access';select.dispatchEvent(new w.Event('change'));await tick();
+ assert.equal(calls.filter(m=>m.action==='permissions.set').at(-1).args.mode,'danger-full-access');
+ assert.equal(w.document.getElementById('permissions').value,'danger-full-access');
+ assert.match(select.title,/전체 접근/);
+ w.mobileCodexEvent('state',{...snapshot,busy:true,permissions:'danger-full-access'});
+ assert.equal(select.disabled,true);
+});
 test('approval UI returns original key and acceptance, never silently auto-approves',async()=>{
  const {w,responses}=setup();await tick();w.mobileCodexEvent('server.request',{key:'k',method:'item/commandExecution/requestApproval',params:{command:'pwd'}});
  assert.equal(responses.length,0);

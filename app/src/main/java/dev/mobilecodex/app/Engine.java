@@ -415,7 +415,7 @@ public final class Engine {
             throw error;
         }
     }
-    private void claimLegacySessions(String key) {
+    private void claimLegacySessions(String key) throws Exception {
         if (key == null || key.isBlank()) return;
         boolean changed = false;
         for (int i = 0; i < sessions.length(); i++) {
@@ -440,9 +440,10 @@ public final class Engine {
             + (model == null || model.isBlank() ? "not available from the runtime" : model)
             + ". When the user asks which model you are, report that exact requested model id.";
     }
+    private String approvalPolicy() { return "danger-full-access".equals(permissionMode) ? "never" : "on-request"; }
     private JSONObject threadStartParams(String model) throws Exception {
         model = resolvedModel(model);
-        JSONObject params = obj("cwd", projectDirectory().getAbsolutePath(), "sandbox", permissionMode, "approvalPolicy", "on-request",
+        JSONObject params = obj("cwd", projectDirectory().getAbsolutePath(), "sandbox", permissionMode, "approvalPolicy", approvalPolicy(),
             "developerInstructions", workspaceInstructions(model), "dynamicTools", ToolCatalog.all());
         if (!model.isEmpty()) params.put("model", model);
         return params;
@@ -455,7 +456,7 @@ public final class Engine {
             throw new IOException(t("이 대화의 원래 작업 폴더를 다시 연결해 주세요."));
         documents.requireWorkspaceAvailable();
         call("thread/resume", obj("threadId", threadId, "excludeTurns", true, "cwd", projectDirectory().getAbsolutePath(),
-            "sandbox", permissionMode, "approvalPolicy", "on-request", "developerInstructions", workspaceInstructions(resolvedModel(model))));
+            "sandbox", permissionMode, "approvalPolicy", approvalPolicy(), "developerInstructions", workspaceInstructions(resolvedModel(model))));
         serverThreadId = threadId;
         restoreImageHistory();
     }
@@ -604,7 +605,7 @@ public final class Engine {
         String targetThread = candidate == null ? threadId : candidateThreadId;
         busy = true; status = t("작업 중"); publish();
         try {
-            JSONObject params = obj("threadId", targetThread, "input", input, "cwd", projectDirectory().getAbsolutePath(), "approvalPolicy", "on-request");
+            JSONObject params = obj("threadId", targetThread, "input", input, "cwd", projectDirectory().getAbsolutePath(), "approvalPolicy", approvalPolicy());
             if (!actualModel.isEmpty()) params.put("model", actualModel);
             if (!effort.isEmpty()) params.put("effort", effort);
             JSONObject turn = call("turn/start", params).optJSONObject("turn");

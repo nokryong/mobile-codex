@@ -642,6 +642,8 @@ html[data-theme=dark] .message.user {
 .context-button { min-height:44px; border-radius:999px; padding:0 8px; gap:6px; font-size:12px; }
 .options-button { min-width:44px; max-width:220px; background:var(--pill); }
 .options-button span { max-width:180px; }
+.composer-permission { flex:0 1 118px; min-width:86px; }
+.composer-permission select { width:100%; height:44px; min-width:0; border:0; border-radius:999px; padding:0 8px; background:var(--pill); color:var(--text); font-size:12px; text-overflow:ellipsis; }
 .send-button { box-shadow:0 1px 3px rgba(0,0,0,.1); }
 .send-button:disabled { opacity:1; background:var(--disabled-bg); color:var(--disabled-icon); box-shadow:none; }
 .composer-footnote { color:var(--muted); padding:0 6px; margin-top:5px; }
@@ -693,6 +695,7 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-vis
   .composer-wrap { padding:8px 10px 4px; }
   .composer { border-radius:26px; padding:12px 10px 8px; }
   .composer-actions { max-width:62%; gap:4px; }
+  .composer-permission { flex-basis:105px; }
   #composer-folder span { max-width:100%; }
   .options-button { max-width:170px; }
   .composer-footnote { margin-top:4px; }
@@ -745,6 +748,7 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-vis
   #composer-folder span { max-width:none; min-width:90px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .composer-actions { grid-area:actions; width:100%; max-width:none; min-width:0; justify-content:flex-end; }
   .composer-actions .options-button { flex:1 1 auto; min-width:100px; max-width:none; justify-content:flex-start; }
+  .composer-permission { flex:0 1 108px; }
 }
 
 /* Account quota and local profile switching */

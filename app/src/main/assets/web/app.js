@@ -221,12 +221,27 @@
   function optionsSummary() {
     const model = $('model').selectedOptions[0]?.textContent || t('기본 모델');
     const effort = $('effort').selectedOptions[0]?.textContent || t('기본');
+    const permission = $('composer-permissions').selectedOptions[0]?.textContent || t('프로젝트 쓰기');
     $('model-summary').textContent = model;
-    $('composer-options').setAttribute('aria-label', t('작업 설정: ') + model + t(', 추론 ') + effort);
+    $('composer-options').setAttribute('aria-label', t('작업 설정: ') + model + t(', 추론 ') + effort + t(', 권한 ') + permission);
     $('composer-options').title = model + ' · ' + effort;
-    $('permission-help').textContent = state.busy ? t('작업이 끝나면 권한을 변경할 수 있습니다.') : ({'read-only':t('파일을 읽고 검토합니다.'), 'workspace-write':t('선택한 프로젝트의 파일을 수정할 수 있습니다.'), 'danger-full-access':t('앱에 허용된 기기 파일과 명령에 접근할 수 있습니다.')}[$('permissions').value] || '');
+    $('composer-permissions').title = t('작업 권한') + ': ' + permission;
+    $('permission-help').textContent = state.busy ? t('작업이 끝나면 권한을 변경할 수 있습니다.') : ({'read-only':t('파일을 읽고 검토합니다.'), 'workspace-write':t('선택한 프로젝트의 파일을 수정할 수 있습니다.'), 'danger-full-access':t('앱에 허용된 기기 파일과 명령을 확인창 없이 사용합니다.')}[$('permissions').value] || '');
     const current = state.models.find(m => (m.model || m.id) === $('model').value) || state.models.find(m => m.isDefault);
     $('model-help').textContent = current?.description || (current ? t('연결된 계정에서 사용할 수 있는 모델입니다.') : t('기본 모델을 사용합니다.'));
+  }
+  function syncPermissionControls(mode, disabled = !!state.busy) {
+    const value = ['read-only','workspace-write','danger-full-access'].includes(mode) ? mode : 'workspace-write';
+    $('permissions').value = value; $('permissions').disabled = disabled;
+    $('composer-permissions').value = value; $('composer-permissions').disabled = disabled;
+    document.querySelectorAll('input[name="permission"]').forEach(r => { r.checked = r.value === value; r.disabled = disabled; });
+  }
+  async function setPermissionMode(mode) {
+    const previous = state.permissions || 'workspace-write';
+    syncPermissionControls(mode, true); optionsSummary();
+    try { await call('permissions.set', {mode}); state.permissions = mode; }
+    catch (error) { syncPermissionControls(previous, !!state.busy); throw error; }
+    finally { syncPermissionControls(state.permissions, !!state.busy); optionsSummary(); }
   }
   async function insertToken(token, item) {
     const scope = draftScope, field = $('prompt'), start = field.selectionStart, end = field.selectionEnd, original = field.value, selectedToken = (item.kind === 'skill' ? '$' : '@') + item.name, before = original.slice(0, start).replace(/(?:^|\s)[@$][^\s@#$]*$/, m => m.slice(0, m.lastIndexOf(token)) + selectedToken);
@@ -904,8 +919,7 @@
     $('send').hidden = false; $('stop').hidden = !state.busy; $('activity').hidden = !state.busy;
     if (!state.busy) activityIcon = 'thinking';
     drawStatusIcons();
-    $('permissions').value = state.permissions || 'workspace-write'; $('permissions').disabled = !!state.busy;
-    document.querySelectorAll('input[name="permission"]').forEach(r => { r.checked = r.value === $('permissions').value; r.disabled = !!state.busy; });
+    syncPermissionControls(state.permissions, !!state.busy);
     $('terminal-cwd').textContent = state.cwd || '';
     $('storage-status').textContent = state.directWorkspace ? t('선택한 폴더에서 셸 명령을 실행합니다.') : t('폴더의 셸 접근은 기기 파일 권한이 필요합니다. 문서 제공자 폴더는 파일 도구로 접근합니다.');
     $('storage-access').textContent = state.allFilesAccess ? t('기기 파일 접근 설정') : t('기기 파일 접근 허용');
@@ -1410,8 +1424,9 @@
   }, {passive:true});
   $('image-stage').addEventListener('touchcancel', () => imageTouch = null, {passive:true});
   on('stop', () => call('chat.stop')); on('model', () => { efforts(); saveOptions(); }, 'change'); on('effort', () => { optionsSummary(); saveOptions(); }, 'change'); on('add-attachment', chooseAttachment);
-  on('permissions', async () => { try { await call('permissions.set', {mode:$('permissions').value}); } catch (e) { $('permissions').value = state.permissions; throw e; } finally { optionsSummary(); } }, 'change');
-  document.querySelectorAll('input[name="permission"]').forEach(r => r.addEventListener('change', () => { $('permissions').value = r.value; $('permissions').dispatchEvent(new Event('change')); }));
+  on('permissions', () => setPermissionMode($('permissions').value), 'change');
+  on('composer-permissions', () => setPermissionMode($('composer-permissions').value), 'change');
+  document.querySelectorAll('input[name="permission"]').forEach(r => r.addEventListener('change', () => setPermissionMode(r.value).catch(error => toast(error.message))));
   ensureCharacterPackUi();
   on('connect', () => startLogin(false)); on('account-button', openAccountSettings); on('settings', () => { ensureCharacterPackUi(); show('settings-dialog'); sidebar(false); if (!characterState.folderConfigured && characterState.packs.length <= 1) loadCharacterPacks(); });
   document.querySelectorAll('[data-settings-tab]').forEach(tab => tab.addEventListener('click', () => {

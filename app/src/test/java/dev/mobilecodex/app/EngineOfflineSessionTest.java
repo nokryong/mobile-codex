@@ -32,11 +32,24 @@ public class EngineOfflineSessionTest {
         new File(context.getFilesDir(), "sessions.json.tmp").delete();
         context.getSharedPreferences("projects", 0).edit().clear().commit();
         context.getSharedPreferences("workspace", 0).edit().clear().commit();
+        context.getSharedPreferences("settings", 0).edit().clear().commit();
     }
     @After public void after() {
         new File(context.getFilesDir(), "sessions.json").delete();
         context.getSharedPreferences("projects", 0).edit().clear().commit();
         context.getSharedPreferences("workspace", 0).edit().clear().commit();
+        context.getSharedPreferences("settings", 0).edit().clear().commit();
+    }
+    @Test public void fullAccessDisablesRepeatedApprovalsWhileOtherModesKeepOnRequest() throws Exception {
+        Engine engine = new Engine(context);
+        Method method = Engine.class.getDeclaredMethod("threadStartParams", String.class); method.setAccessible(true);
+        handle(engine, "permissions.set", obj("mode", "danger-full-access"));
+        JSONObject full = (JSONObject) method.invoke(engine, "");
+        assertEquals("danger-full-access", full.getString("sandbox"));
+        assertEquals("never", full.getString("approvalPolicy"));
+        handle(engine, "permissions.set", obj("mode", "workspace-write"));
+        assertEquals("on-request", ((JSONObject) method.invoke(engine, "")).getString("approvalPolicy"));
+        engine.io.shutdownNow();
     }
     private JSONObject handle(Engine engine, String action, JSONObject args) throws Exception {
         CompletableFuture<JSONObject> done = new CompletableFuture<>();
