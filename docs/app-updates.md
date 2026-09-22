@@ -33,6 +33,31 @@ python3 tools/prepare_update_release.py --build-tools "$ANDROID_HOME/build-tools
 
 CI의 **mobile-codex-update-assets**에는 같은 파일이 들어 있습니다. 공개 배포할 때는 검토한 APK와 체크섬·메타데이터를 선택한 저장소의 GitHub Release에 업로드하고, 기존 **mobile-codex-arm64-debug** 묶음에 포함되는 대응 소스·라이선스 자료도 함께 배포하세요. 준비 스크립트와 CI는 공개 업로드를 자동 실행하지 않습니다.
 
+## Actions signing
+
+`main`의 push 및 수동 실행은 저장소 Secret **`MOBILE_CODEX_SIGNING_JSON`**을 사용합니다. 테스트 후 APK를 기존 키로 다시 서명하고, 아래의 고정 인증서 SHA-256과 일치하는지 확인한 뒤 APK와 업데이트 메타데이터를 생성합니다.
+
+```text
+f9a8d59abf5ab33b44879ade1b9500c385b2cf03e1cb17f94936eadb85337bd7
+```
+
+Secret 값은 다음 필드가 있는 JSON입니다. `keystoreBase64`는 기존 키스토어 파일 바이트를 Base64로 인코딩한 값이며, 나머지는 해당 키의 자격증명입니다. 예시 자리표시자를 실제 값으로 바꿔 저장소의 **Settings → Secrets and variables → Actions → New repository secret**에 등록합니다.
+
+```json
+{
+  "keystoreBase64": "<base64-encoded existing keystore>",
+  "keyAlias": "<existing alias>",
+  "storePassword": "<existing store password>",
+  "keyPassword": "<existing key password>"
+}
+```
+
+키와 이 JSON은 Git·Actions 캐시·Artifacts에 넣지 않습니다. 서명 단계에서만 Secret을 전달하며, 키 파일은 checkout 밖의 임시 디렉터리에 권한 0600으로 생성하고 성공·실패 시 모두 정리합니다. 비밀번호는 명령줄 인수가 아닌 환경 변수로 전달합니다. 공개 로그에는 인증서 지문만 출력합니다.
+
+Secret 누락·형식 오류·서명 오류·인증서 불일치는 빌드 실패로 처리하며 다른 키로 자동 대체하지 않습니다. `pull_request` 실행은 Secret을 전달받지 않고 빌드·테스트만 수행하며 설치용 APK를 업로드하지 않습니다. 기존 키를 사용하는 배포는 검토 후 `main`에 반영한 코드에 한정합니다.
+
+키가 맞아도 설치된 앱의 패키지명·버전 조건이 맞아야 합니다. 이 설정은 초기 버전의 다른 패키지명을 되돌리거나 과거 임시 debug 키로 설치한 앱을 자동 이전하지 않습니다.
+
 ## Tests and physical-device limits
 
 자동 검사: 숫자/시험판 버전 정렬, 다른 저장소 URL·잘못된 해시·초안 제외, 스트림 크기·해시·취소, 패키지·버전·서명 정책, 모의 PackageManager의 APK 검사, 변조 후 설치 거부, 설치 중 파일 변경 방지, 다운로드 복구, FileProvider 경로 범위, 설정 변경 중 결과 경합, 명시적 설치 클릭, 진행 상태·오류 텍스트 표시. CI에서 실제 산출 APK에 `apksigner verify`를 실행합니다.

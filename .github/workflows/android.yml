@@ -15,6 +15,11 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Require the original signing key for update builds
+        if: github.event_name != 'pull_request'
+        env:
+          MOBILE_CODEX_SIGNING_JSON: ${{ secrets.MOBILE_CODEX_SIGNING_JSON }}
+        run: python3 tools/sign_ci_apk.py --check-config
       - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
         with:
           distribution: temurin
@@ -46,11 +51,19 @@ jobs:
           python3 -m unittest discover -s tests -p 'test_*.py'
       - name: Build and check Android app
         run: ./gradlew --no-daemon assembleDebug testDebugUnitTest lintDebug assembleDebugAndroidTest
+      - name: Sign APK with the original installation key
+        if: github.event_name != 'pull_request'
+        env:
+          MOBILE_CODEX_SIGNING_JSON: ${{ secrets.MOBILE_CODEX_SIGNING_JSON }}
+        run: python3 tools/sign_ci_apk.py --build-tools "$ANDROID_HOME/build-tools/35.0.0"
       - name: Prepare verified update assets
+        if: github.event_name != 'pull_request'
         run: python3 tools/prepare_update_release.py --build-tools "$ANDROID_HOME/build-tools/35.0.0"
       - name: Collect corresponding tool sources
+        if: github.event_name != 'pull_request'
         run: python3 tools/prepare_devtools_sources.py
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: github.event_name != 'pull_request'
         with:
           name: mobile-codex-arm64-debug
           path: |
@@ -61,6 +74,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: github.event_name != 'pull_request'
         with:
           name: mobile-codex-update-assets
           path: artifacts/update/
