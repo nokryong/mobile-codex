@@ -46,14 +46,14 @@ test('submit is cancelled synchronously and calls native with chosen model and e
  assert.equal(e.defaultPrevented,true);await tick();
  assert.equal(calls.find(m=>m.action==='chat.send').args.text,'실제 파일 수정');
 });
-test('composer exposes task permissions beside the model and full access is applied directly',async()=>{
- const {w,calls,snapshot}=setup({'permissions.set':()=>({ok:true})});await tick();
- const select=w.document.getElementById('composer-permissions');assert.equal(select.value,'workspace-write');
- select.value='danger-full-access';select.dispatchEvent(new w.Event('change'));await tick();
- assert.equal(calls.filter(m=>m.action==='permissions.set').at(-1).args.mode,'danger-full-access');
- assert.equal(w.document.getElementById('permissions').value,'danger-full-access');
- assert.match(select.title,/전체 접근/);
- w.mobileCodexEvent('state',{...snapshot,busy:true,permissions:'danger-full-access'});
+test('composer exposes approval review beside the model without changing file access',async()=>{
+ const {w,calls,snapshot}=setup({'approvals.set':()=>({ok:true})});await tick();
+ const select=w.document.getElementById('approval-mode');assert.equal(select.value,'auto-review');
+ select.value='allow-all';select.dispatchEvent(new w.Event('change'));await tick();
+ assert.equal(calls.filter(m=>m.action==='approvals.set').at(-1).args.mode,'allow-all');
+ assert.equal(w.document.getElementById('permissions').value,'workspace-write');
+ assert.match(select.title,/모두 허용/);
+ w.mobileCodexEvent('state',{...snapshot,busy:true,approvalMode:'allow-all'});
  assert.equal(select.disabled,true);
 });
 test('approval UI returns original key and acceptance, never silently auto-approves',async()=>{

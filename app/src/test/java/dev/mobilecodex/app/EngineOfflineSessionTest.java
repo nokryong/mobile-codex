@@ -40,15 +40,21 @@ public class EngineOfflineSessionTest {
         context.getSharedPreferences("workspace", 0).edit().clear().commit();
         context.getSharedPreferences("settings", 0).edit().clear().commit();
     }
-    @Test public void fullAccessDisablesRepeatedApprovalsWhileOtherModesKeepOnRequest() throws Exception {
+    @Test public void approvalReviewModesStaySeparateFromFileAccess() throws Exception {
         Engine engine = new Engine(context);
         Method method = Engine.class.getDeclaredMethod("threadStartParams", String.class); method.setAccessible(true);
-        handle(engine, "permissions.set", obj("mode", "danger-full-access"));
-        JSONObject full = (JSONObject) method.invoke(engine, "");
-        assertEquals("danger-full-access", full.getString("sandbox"));
-        assertEquals("never", full.getString("approvalPolicy"));
-        handle(engine, "permissions.set", obj("mode", "workspace-write"));
-        assertEquals("on-request", ((JSONObject) method.invoke(engine, "")).getString("approvalPolicy"));
+        JSONObject automatic = (JSONObject) method.invoke(engine, "");
+        assertEquals("workspace-write", automatic.getString("sandbox"));
+        assertEquals("on-request", automatic.getString("approvalPolicy"));
+        assertEquals("auto_review", automatic.getString("approvalsReviewer"));
+        handle(engine, "approvals.set", obj("mode", "ask"));
+        JSONObject ask = (JSONObject) method.invoke(engine, "");
+        assertEquals("on-request", ask.getString("approvalPolicy")); assertEquals("user", ask.getString("approvalsReviewer"));
+        handle(engine, "permissions.set", obj("mode", "read-only"));
+        handle(engine, "approvals.set", obj("mode", "allow-all"));
+        JSONObject allow = (JSONObject) method.invoke(engine, "");
+        assertEquals("read-only", allow.getString("sandbox"));
+        assertEquals("never", allow.getString("approvalPolicy")); assertEquals("user", allow.getString("approvalsReviewer"));
         engine.io.shutdownNow();
     }
     private JSONObject handle(Engine engine, String action, JSONObject args) throws Exception {

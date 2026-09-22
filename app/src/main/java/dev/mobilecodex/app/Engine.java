@@ -43,7 +43,7 @@ public final class Engine {
     private RpcClient rpc;
     private TestTransport testTransport;
     private volatile boolean ready, busy;
-    private String permissionMode;
+    private String permissionMode, approvalMode;
     private final Map<String, PendingRequest> requests = new LinkedHashMap<>();
     private volatile Process terminalProcess;
     private String status = t("시작할 준비가 됐습니다"), threadId = "", turnId = "", serverThreadId = "";
@@ -65,6 +65,7 @@ public final class Engine {
     public Engine(Context context) {
         this.context = context;
         permissionMode = context.getSharedPreferences("settings", 0).getString("permissions", "workspace-write");
+        approvalMode = context.getSharedPreferences("settings", 0).getString("approvalMode", "auto-review");
         documents = new DocumentStore(context);
         images = new ImageStore(context);
         attachments = new AttachmentStore(context, images);
@@ -106,7 +107,7 @@ public final class Engine {
             "threadId", threadId, "turnId", turnId, "turnDiff", active == null ? "" : active.optString("turnDiff"), "messages", active == null ? new JSONArray() : active.optJSONArray("messages"),
             "pendingDeletionCount", pendingDeletionCount(), "devtools", devTools.status(),
             "phone", PhoneUseService.status(context), "phoneToolsAvailable", active == null || active.optInt("phoneToolsVersion") >= 1,
-            "permissions", permissionMode, "allFilesAccess", (Build.VERSION.SDK_INT >= 30 ? Environment.isExternalStorageManager() : context.checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE) == android.content.pm.PackageManager.PERMISSION_GRANTED),
+            "permissions", permissionMode, "approvalMode", approvalMode, "allFilesAccess", (Build.VERSION.SDK_INT >= 30 ? Environment.isExternalStorageManager() : context.checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE) == android.content.pm.PackageManager.PERMISSION_GRANTED),
             "directWorkspace", documents.directDirectory() != null, "cwd", projectDirectory().getAbsolutePath());
     }
     private void publish() { event("state", snapshot()); }
@@ -193,6 +194,13 @@ public final class Engine {
                         if (!Set.of("read-only", "workspace-write", "danger-full-access").contains(mode)) throw new IOException(t("잘못된 권한 모드입니다."));
                         permissionMode = mode;
                         context.getSharedPreferences("settings", 0).edit().putString("permissions", mode).apply();
+                        if (active != null && ready) resumeRemote(true);
+                        publish(); reply.complete(obj("ok", true), null);
+                    }
+                    case "approvals.set" -> {
+                        ensureIdle(); String mode = args.getString("mode");
+                        if (!Set.of("ask", "auto-review", "allow-all").contains(mode)) throw new IOException(t("잘못된 승인 방식입니다."));
+                        approvalMode = mode; context.getSharedPreferences("settings", 0).edit().putString("approvalMode", mode).apply();
                         if (active != null && ready) resumeRemote(true);
                         publish(); reply.complete(obj("ok", true), null);
                     }
@@ -440,10 +448,11 @@ public final class Engine {
             + (model == null || model.isBlank() ? "not available from the runtime" : model)
             + ". When the user asks which model you are, report that exact requested model id.";
     }
-    private String approvalPolicy() { return "danger-full-access".equals(permissionMode) ? "never" : "on-request"; }
+    private String approvalPolicy() { return "allow-all".equals(approvalMode) ? "never" : "on-request"; }
+    private String approvalsReviewer() { return "auto-review".equals(approvalMode) ? "auto_review" : "user"; }
     private JSONObject threadStartParams(String model) throws Exception {
         model = resolvedModel(model);
-        JSONObject params = obj("cwd", projectDirectory().getAbsolutePath(), "sandbox", permissionMode, "approvalPolicy", approvalPolicy(),
+        JSONObject params = obj("cwd", projectDirectory().getAbsolutePath(), "sandbox", permissionMode, "approvalPolicy", approvalPolicy(), "approvalsReviewer", approvalsReviewer(),
             "developerInstructions", workspaceInstructions(model), "dynamicTools", ToolCatalog.all());
         if (!model.isEmpty()) params.put("model", model);
         return params;
@@ -456,7 +465,7 @@ public final class Engine {
             throw new IOException(t("이 대화의 원래 작업 폴더를 다시 연결해 주세요."));
         documents.requireWorkspaceAvailable();
         call("thread/resume", obj("threadId", threadId, "excludeTurns", true, "cwd", projectDirectory().getAbsolutePath(),
-            "sandbox", permissionMode, "approvalPolicy", approvalPolicy(), "developerInstructions", workspaceInstructions(resolvedModel(model))));
+            "sandbox", permissionMode, "approvalPolicy", approvalPolicy(), "approvalsReviewer", approvalsReviewer(), "developerInstructions", workspaceInstructions(resolvedModel(model))));
         serverThreadId = threadId;
         restoreImageHistory();
     }
@@ -605,7 +614,7 @@ public final class Engine {
         String targetThread = candidate == null ? threadId : candidateThreadId;
         busy = true; status = t("작업 중"); publish();
         try {
-            JSONObject params = obj("threadId", targetThread, "input", input, "cwd", projectDirectory().getAbsolutePath(), "approvalPolicy", approvalPolicy());
+            JSONObject params = obj("threadId", targetThread, "input", input, "cwd", projectDirectory().getAbsolutePath(), "approvalPolicy", approvalPolicy(), "approvalsReviewer", approvalsReviewer());
             if (!actualModel.isEmpty()) params.put("model", actualModel);
             if (!effort.isEmpty()) params.put("effort", effort);
             JSONObject turn = call("turn/start", params).optJSONObject("turn");

@@ -114,7 +114,8 @@ Recognition uses the device’s configured speech service, which may use externa
 This is alpha software. Core workflows have user reports of successful use on physical devices, but new behavior still needs device testing. See [verification](docs/verification.md) and the [device checklist](docs/device-validation.md).
 
 - **File access:** Android permissions apply. Full file access is not root and cannot access other apps’ private data or protected system areas. Cloud document providers use document tools rather than ordinary shell paths.
-- **Task permissions:** Choose the mode beside the model in the chat composer. Full access runs without per-command approval prompts. The Android port does not provide the desktop command sandbox; the OS boundary for shell commands is the Android app’s permissions.
+- **Approvals:** Choose **Ask**, **Auto review**, or **Allow all** beside the model in the chat composer. Auto review routes approval requests to Codex's risk reviewer; task file access remains a separate setting.
+- **Task permissions:** The Android port does not provide the desktop command sandbox; the OS boundary for shell commands is the Android app’s permissions.
 - **Command compatibility:** Python, JavaScript, and Android-compatible packages are supported. A compiler, JDK, Perl, and SSH client are not bundled. Arbitrary Linux/Windows executables and native extensions may not work.
 - **Storage:** Shared storage can restrict execution and symbolic links. App-internal paths work better for npm installations and Git operations. General chats use an internal working folder.
 - **Editing and recovery:** The built-in editor supports UTF-8 text up to 1 MiB. Document tools copy files before modification and deleted files up to 32 MiB, but cannot recover every shell change or entire deleted directory. These editor limits do not restrict ordinary Codex tools or shell commands.
