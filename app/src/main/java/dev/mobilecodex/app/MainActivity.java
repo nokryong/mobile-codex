@@ -46,13 +46,14 @@ public final class MainActivity extends Activity implements Engine.Ui {
         return ("https".equals(uri.getScheme()) || (allowHttp && "http".equals(uri.getScheme())))
             && uri.getHost() != null && !uri.getHost().isEmpty() && uri.getUserInfo() == null;
     }
-    private static final String HOST = "appassets.androidplatform.net";
-    private static final int PICK_FOLDER = 31, EXPORT_RECOVERY = 32, IMPORT_SKILL = 33, EXPORT_IMAGE = 34, PICK_ATTACHMENTS = 35, EXPORT_ATTACHMENT = 36, INSTALL_UPDATE = 37;
+    static final String HOST = "appassets.androidplatform.net";
+    private static final int PICK_FOLDER = 31, EXPORT_RECOVERY = 32, IMPORT_SKILL = 33, EXPORT_IMAGE = 34, PICK_ATTACHMENTS = 35, EXPORT_ATTACHMENT = 36, INSTALL_UPDATE = 37, PICK_CHARACTERS = 38;
     private WebView web;
     private SafeWebViewLayout root;
     private boolean keyboardVisible;
     private String theme = "system";
     private Engine engine;
+    private CharacterPacks characterPacks;
     private InlineDictation dictation;
     private static final int MICROPHONE_PERMISSION = 82;
     private boolean loaded, foreground;
@@ -72,6 +73,7 @@ public final class MainActivity extends Activity implements Engine.Ui {
         getWindow().setNavigationBarColor(Color.TRANSPARENT);
         getWindow().setNavigationBarContrastEnforced(false);
         engine = ((MobileCodexApp) getApplication()).engine();
+        characterPacks = new CharacterPacks(this);
         updates = ((MobileCodexApp) getApplication()).updates();
         if (savedInstanceState != null) { exportId = savedInstanceState.getString("exportId", ""); pendingPickerId = savedInstanceState.getString("pickerId"); pendingSkillId = savedInstanceState.getString("skillId"); }
         if (savedInstanceState != null) pendingImageId = savedInstanceState.getString("imageId");
@@ -97,6 +99,7 @@ public final class MainActivity extends Activity implements Engine.Ui {
                 Uri uri = request.getUrl();
                 if (!"https".equals(uri.getScheme()) || !HOST.equals(uri.getHost())) return denied();
                 String path = uri.getPath();
+                if (path != null && path.startsWith("/character-packs/")) return characterPacks.route(uri);
                 if (path != null && path.startsWith("/images/")) {
                     try {
                         String id = path.substring("/images/".length());
@@ -246,6 +249,14 @@ public final class MainActivity extends Activity implements Engine.Ui {
         try { startActivityForResult(pick, PICK_FOLDER); }
         catch (Exception e) { pendingPickerId = null; reconnectProjectKey = ""; respond(id, null, e); }
     }
+    private void chooseCharacters(String id) {
+        if (pendingPickerId != null) { respond(id, null, new IllegalStateException(t("폴더 선택이 진행 중입니다."))); return; }
+        pendingPickerId = id;
+        Intent pick = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+        try { startActivityForResult(pick, PICK_CHARACTERS); }
+        catch (Exception e) { pendingPickerId = null; respond(id, null, e); }
+    }
     @SuppressLint("WrongConstant") // URI grant flags are explicitly masked to the two accepted constants.
     @Override protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);
@@ -306,6 +317,15 @@ public final class MainActivity extends Activity implements Engine.Ui {
                 try { respond(id, obj("path", SkillImporter.install(this, uri)), null); }
                 catch (Exception e) { respond(id, null, e); }
             });
+        } else if (request == PICK_CHARACTERS) {
+            String id = pendingPickerId; pendingPickerId = null;
+            if (result != RESULT_OK || data == null || data.getData() == null) { respond(id, obj("cancelled", true), null); return; }
+            Uri uri = data.getData();
+            try {
+                int flags = data.getFlags() & Intent.FLAG_GRANT_READ_URI_PERMISSION;
+                getContentResolver().takePersistableUriPermission(uri, flags);
+                engine.io.execute(() -> { try { characterPacks.setTree(uri); respond(id, characterPacks.refresh(), null); } catch (Exception e) { respond(id, null, e); } });
+            } catch (Exception e) { respond(id, null, e); }
         } else if (request == PICK_FOLDER) {
             String id = pendingPickerId; pendingPickerId = null;
             String projectKey = reconnectProjectKey; reconnectProjectKey = "";
@@ -414,6 +434,10 @@ public final class MainActivity extends Activity implements Engine.Ui {
                 if (action.equals("updates.cancel")) { updates.cancel(); respond(id, updates.snapshot(), null); return; }
                 if (action.equals("updates.clear")) { updates.clear(); respond(id, updates.snapshot(), null); return; }
                 if (action.equals("updates.install")) { runOnUiThread(() -> installUpdate(id, parameters.optString("sha256"))); return; }
+                if (action.equals("characters.list")) { engine.io.execute(() -> { try { respond(id, characterPacks.refresh(), null); } catch (Exception e) { respond(id, null, e); } }); return; }
+                if (action.equals("characters.refresh")) { engine.io.execute(() -> { try { respond(id, characterPacks.refresh(), null); } catch (Exception e) { respond(id, null, e); } }); return; }
+                if (action.equals("characters.select")) { String packId = args.getString("id"); engine.io.execute(() -> { try { characterPacks.select(packId); respond(id, characterPacks.list(), null); } catch (Exception e) { respond(id, null, e); } }); return; }
+                if (action.equals("characters.chooseFolder")) { runOnUiThread(() -> chooseCharacters(id)); return; }
                 if (action.equals("updates.permission")) {
                     runOnUiThread(() -> { try { PhoneUseService.stopControl(); PhoneUseService.closeFloatingForUpdate(); startActivity(new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + getPackageName()))); respond(id, obj("ok", true), null); } catch (Exception e) { respond(id, null, e); } }); return;
                 }

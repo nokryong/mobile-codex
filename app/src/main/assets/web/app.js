@@ -14,6 +14,7 @@
   let dictationState = {phase:'idle'}, dictationTimer = null;
   let voiceStarting = false, voiceActive = false, voiceRecoveryGeneration = 0;
   let chatIconsEnabled = localStorage.getItem('chat-icons') !== 'off', activityIcon = 'thinking';
+  let characterState = {folderName:'', folderConfigured:false, selectedPackId:'builtin', packs:[{id:'builtin',name:'Builtin',valid:true,icons:{}}]};
   let instructionsOriginal = '', instructionsLoaded = false, instructionsSaving = false, devtoolsCheckResult = null, devtoolsCheckSummary = '', devtoolsChecking = false, usageLoading = false;
   const toolCache = [null, null, null];
   let updateState = {}, updateSourceDirty = false, updateRequestPending = false;
@@ -29,9 +30,53 @@
   const rpc = (method, params = {}) => call('rpc', {method, params});
   const on = (id, fn, event = 'click') => $(id).addEventListener(event, e => { if (event === 'submit') e.preventDefault(); Promise.resolve().then(() => fn(e)).catch(error => toast(error.message)); });
   function node(tag, text, cls) { const n = document.createElement(tag); if (text != null) n.textContent = text; if (cls) n.className = cls; return n; }
-  function button(text, fn, cls = 'secondary-button') { const b = node('button', text, cls); b.type = 'button'; b.addEventListener('click', () => { b.disabled = true; Promise.resolve().then(fn).catch(e => toast(e.message)).finally(() => b.disabled = false); }); return b; }
+  function button(text, fn, cls = 'secondary-button') { const b = node('button', text, cls); b.type = 'button'; b.addEventListener('click', () => { b.disabled = true; Promise.resolve().then(fn).catch(e => toast(e.message)).finally(() => { b.disabled = false; if (b.dataset.restoreFocus === 'true') b.focus(); }); }); return b; }
   function icon(name) { const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); const use = document.createElementNS(svg.namespaceURI, 'use'); use.setAttribute('href', '#i-' + name); svg.append(use); return svg; }
   function toast(message) { $('toast').textContent = message || t('오류가 발생했습니다.'); $('toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => $('toast').hidden = true, 5500); }
+  function characterPack(value) { const packs = Array.isArray(value?.packs) ? value.packs : characterState.packs; return packs.find(pack => pack.id === (value?.selectedPackId || characterState.selectedPackId)) || packs.find(pack => pack.id === 'builtin') || packs[0]; }
+  function characterVisualKey() { const pack = characterPack(); return characterState.selectedPackId + ':' + JSON.stringify(pack?.icons || {}); }
+  function characterErrorText(error) { const text = String(error || ''); for (const prefix of ['아이콘이 없습니다: ', '지원하지 않는 이미지입니다: ']) if (text.startsWith(prefix)) return t(prefix) + text.slice(prefix.length); return t(text); }
+  function characterPackName(pack) { return pack?.id === 'builtin' ? t('기본 캐릭터') : (pack?.name || pack?.id || ''); }
+  function characterIconUrl(name, pack = characterPack()) { return pack?.icons?.[name] || C.chatIconUrl(name) || C.chatIconUrl('explaining'); }
+  function setCharacterState(value) { const next = value?.characters || value; if (!next || !Array.isArray(next.packs)) return; characterState = {...characterState, ...next}; renderCharacterPacks(); }
+  function characterIcon(name, cls = '', pack = null) {
+    const img = node('img', null, 'chat-character ' + cls); img.src = characterIconUrl(name, pack || undefined); img.alt = ''; img.setAttribute('aria-hidden', 'true'); img.width = 96; img.height = 96; img.loading = 'lazy'; img.decoding = 'async';
+    img.addEventListener('error', () => { if (img.dataset.fallback) { img.hidden = true; return; } img.dataset.fallback = 'builtin'; img.src = C.chatIconUrl(name) || C.chatIconUrl('explaining'); });
+    return img;
+  }
+  function ensureCharacterPackUi() {
+    if ($('character-pack-card')) return;
+    const toggle = $('chat-icons-toggle')?.closest('.settings-row'); if (!toggle) return;
+    const card = node('section', null, 'character-pack-card'); card.id = 'character-pack-card';
+    const head = node('div', null, 'settings-row'), copy = node('span'), folderLabel = node('small', '', 'character-pack-folder'); folderLabel.id = 'character-pack-folder'; copy.append(node('strong', t('캐릭터 팩')), folderLabel); const refresh = button(t('새로고침'), refreshCharacterPacks, 'secondary-button'); refresh.id = 'character-pack-refresh'; refresh.dataset.restoreFocus = 'true'; refresh.setAttribute('aria-label', t('캐릭터 팩 새로고침')); head.append(copy, refresh);
+    const actions = node('div', null, 'character-pack-actions'); const choose = button(t('폴더 선택'), chooseCharacterPackFolder, 'secondary-button'); choose.id = 'character-pack-folder-button'; const change = button(t('폴더 변경'), chooseCharacterPackFolder, 'secondary-button'); change.id = 'character-pack-change'; actions.append(choose, change);
+    const status = node('p', '', 'muted'); status.id = 'character-pack-status'; status.setAttribute('role','status'); const list = node('div', null, 'character-pack-list'); list.id = 'character-pack-list'; card.append(head, actions, status, list); toggle.after(card);
+  }
+  function renderCharacterPacks() {
+    ensureCharacterPackUi(); const card = $('character-pack-card'); if (!card) return;
+    const folder = $('character-pack-folder'), status = $('character-pack-status'), list = $('character-pack-list'); folder.textContent = characterState.folderName || t('기본 캐릭터'); status.textContent = characterErrorText(characterState.error) || (characterState.loading ? t('캐릭터 팩을 불러오는 중…') : (characterState.folderConfigured ? t('캐릭터 팩 폴더가 연결되었습니다.') : '')); $('character-pack-change').hidden = !characterState.folderConfigured; $('character-pack-folder-button').hidden = characterState.folderConfigured; $('character-pack-folder-button').disabled = !!characterState.loading; $('character-pack-refresh').disabled = !!characterState.loading; $('character-pack-change').disabled = !!characterState.loading;
+    list.replaceChildren(); const packs = characterState.packs || []; if (characterState.folderConfigured && packs.length <= 1) { list.append(node('p', t('폴더 안에 팩 폴더와 mapping.json, 32개 PNG를 넣어 주세요.'), 'empty-note')); }
+    for (const pack of packs) { const row = button('', () => selectCharacterPack(pack.id), 'character-pack-option'); row.dataset.packId = pack.id; row.disabled = !pack.valid || !!characterState.loading; const displayName = characterPackName(pack); row.setAttribute('aria-label', t('캐릭터 팩 선택') + ': ' + displayName); row.setAttribute('aria-pressed', String(pack.id === characterState.selectedPackId)); const preview = node('span', null, 'character-pack-preview'); for (const name of C.chatIconNames().slice(0, 3)) { const image = characterIcon(name, 'character-pack-icon', pack); image.classList.remove('chat-character'); preview.append(image); } const info = node('span', null, 'character-pack-info'); info.append(node('strong', displayName), node('small', pack.valid ? t('32개 상태') : (characterErrorText(pack.error) || t('사용할 수 없음')))); row.append(preview, info, node('span', pack.id === characterState.selectedPackId ? '✓' : '', 'character-pack-check')); list.append(row); }
+  }
+  let characterListRequest = null;
+  async function loadCharacterPacks() {
+    if (characterListRequest || characterState.loading) return characterListRequest;
+    characterListRequest = characterRequest('characters.list').finally(() => { characterListRequest = null; });
+    return characterListRequest;
+  }
+  async function characterRequest(action, args) {
+    if (characterState.loading) return;
+    const focusedPack = document.activeElement?.dataset?.packId || '';
+    characterState = {...characterState, loading:true, error:''}; renderCharacterPacks();
+    try {
+      const result = await call(action, args);
+      if (!result?.cancelled) { setCharacterState(result); renderDraftContext(); drawStatusIcons(); drawMessages(); }
+    } catch (error) { characterState = {...characterState, error:error.message}; }
+    finally { characterState = {...characterState, loading:false}; renderCharacterPacks(); const row = focusedPack && document.querySelector(`[data-pack-id="${CSS.escape(focusedPack)}"]`); if (row) row.focus(); }
+  }
+  async function chooseCharacterPackFolder() { return characterRequest('characters.chooseFolder'); }
+  async function refreshCharacterPacks() { return characterRequest('characters.refresh'); }
+  async function selectCharacterPack(id) { return characterRequest('characters.select', {id}); }
   function show(id) {
     sidebar(false);
     if (!$(id).open) { dialogs.push(id); $(id).showModal(); }
@@ -617,16 +662,11 @@
       else renderProseLines(target, block.content);
     }
   }
-  function characterIcon(name, cls = '') {
-    const img = node('img', null, 'chat-character ' + cls); img.src = C.chatIconUrl(name) || C.chatIconUrl('explaining');
-    img.alt = ''; img.setAttribute('aria-hidden', 'true'); img.width = 96; img.height = 96; img.loading = 'lazy'; img.decoding = 'async';
-    return img;
-  }
   function drawStatusIcons() {
     for (const [id, name] of [['welcome-character','greeting'], ['activity-character',activityIcon]]) {
       const host = $(id); host.hidden = !chatIconsEnabled;
       if (!chatIconsEnabled) host.replaceChildren();
-      else if (host.dataset.icon !== name || !host.firstChild) { host.replaceChildren(characterIcon(name)); host.dataset.icon = name; }
+      else if (host.dataset.icon !== name || host.dataset.pack !== characterVisualKey() || !host.firstChild) { host.replaceChildren(characterIcon(name)); host.dataset.icon = name; host.dataset.pack = characterVisualKey(); }
     }
   }
   function setChatIcons() {
@@ -641,14 +681,14 @@
       keep.add(m.id); let el = elements.get(m.id);
       if (!el) { el = node('article', null, 'message ' + (m.role === 'user' ? 'user' : 'assistant')); el.dataset.id = m.id; $('messages').append(el); }
       const iconName = m.imageStatus === 'generating' ? 'working' : state.busy && m.id === state.messages[state.messages.length - 1]?.id ? 'thinking' : C.messageIcon(m);
-      const signature = JSON.stringify([m.text, m.images, m.attachments, m.imageStatus, m.imageError, L.language(), chatIconsEnabled, iconName]);
+      const signature = JSON.stringify([m.text, m.images, m.attachments, m.imageStatus, m.imageError, L.language(), chatIconsEnabled, iconName, characterVisualKey()]);
       if (el.dataset.signature !== signature) {
         el.dataset.signature = signature;
         if (m.role === 'user') { el.textContent = m.text; if (m.attachments?.length) el.append(sentAttachments(m.attachments)); }
         else {
           const previousIcon = el.querySelector('.chat-character');
           prose(el, m.text || '');
-          if (chatIconsEnabled) el.prepend(previousIcon?.getAttribute('src') === C.chatIconUrl(iconName) ? previousIcon : characterIcon(iconName));
+           if (chatIconsEnabled) el.prepend(previousIcon?.getAttribute('src') === characterIconUrl(iconName) ? previousIcon : characterIcon(iconName));
           if (m.images?.length) el.append(imageGallery(m.images, m.id));
           if (m.imageStatus === 'generating') el.append(node('p', t('이미지 생성 중…'), 'image-placeholder'));
           if (m.imageError) el.append(node('p', m.imageError, 'image-error'));
@@ -846,7 +886,7 @@
   function render(next) {
     const changedThread = state.threadId !== next.threadId;
     setDraftScope(next); state = next;
-    state.models ||= []; state.messages ||= []; state.projects ||= []; state.workspace ||= {}; state.account ||= {};
+    state.models ||= []; state.messages ||= []; state.projects ||= []; state.workspace ||= {}; state.account ||= {}; setCharacterState(state.characters);
     const logged = C.isLoggedIn(state.account), selected = state.workspace.selected;
     const name = selected ? state.workspace.name : t('일반 대화');
     $('project-label').textContent = name; $('context-folder').textContent = name; $('header-project').textContent = name;
@@ -1326,7 +1366,8 @@
   on('stop', () => call('chat.stop')); on('model', () => { efforts(); saveOptions(); }, 'change'); on('effort', () => { optionsSummary(); saveOptions(); }, 'change'); on('add-attachment', chooseAttachment);
   on('permissions', async () => { try { await call('permissions.set', {mode:$('permissions').value}); } catch (e) { $('permissions').value = state.permissions; throw e; } finally { optionsSummary(); } }, 'change');
   document.querySelectorAll('input[name="permission"]').forEach(r => r.addEventListener('change', () => { $('permissions').value = r.value; $('permissions').dispatchEvent(new Event('change')); }));
-  on('connect', startLogin); on('account-button', startLogin); on('settings', () => { show('settings-dialog'); sidebar(false); });
+  ensureCharacterPackUi();
+  on('connect', startLogin); on('account-button', startLogin); on('settings', () => { ensureCharacterPackUi(); show('settings-dialog'); sidebar(false); if (!characterState.folderConfigured && characterState.packs.length <= 1) loadCharacterPacks(); });
   document.querySelectorAll('[data-settings-tab]').forEach(tab => tab.addEventListener('click', () => {
     const selected = tab.dataset.settingsTab; document.querySelectorAll('[data-settings-tab]').forEach(b => b.classList.toggle('active', b === tab));
     document.querySelectorAll('[data-settings-panel]').forEach(panel => panel.hidden = panel.dataset.settingsPanel !== selected);
@@ -1379,5 +1420,5 @@
     else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
   });
   viewportChanged();
-  call('state').then(async initial => { render(initial); recoverVoiceInput(); loadUpdates(); try { acceptPickedAttachments(await call('attachments.recover'), ''); } catch {} }).catch(e => toast(e.message));
+  call('state').then(async initial => { render(initial); loadCharacterPacks(); recoverVoiceInput(); loadUpdates(); try { acceptPickedAttachments(await call('attachments.recover'), ''); } catch {} }).catch(e => toast(e.message));
 })();

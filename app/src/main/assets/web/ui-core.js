@@ -2,6 +2,7 @@
   'use strict';
   const chatIcons = ['idle','acknowledged','thinking','working','question','done','blocked','smug','greeting','inspecting','explaining','discovery','caution','sorry','happy','skeptical','eohu','uhehe','insult','punch','uncertain','disagree','not-allowed','file-request','reviewed','source','fixed','lol','good-grief','wink','heart','sleep'];
   const core={
+    chatIconNames(){return chatIcons.slice();},
     chatIconUrl(name){const i=chatIcons.indexOf(name);return i<0 ? null : '/chat-icons/'+String(i+1).padStart(2,'0')+'-'+name+'.png';},
     messageIcon(message){
       if(message.imageError || message.imageStatus==='failed')return 'blocked';
