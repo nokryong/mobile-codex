@@ -2,7 +2,7 @@
 
 In the main chat, the microphone starts **inline dictation**. The composer displays microphone permission/preparation, listening, and transcription states. It shows actual microphone level and interim text when supplied by the device service. Choose **Done** to stop recording and wait for final transcription, or **Cancel** to discard it. Final text goes into the draft and is never sent automatically.
 
-The first use requests Android microphone permission. Backgrounding/locking the main activity cancels an active recording; returning does not automatically restart it. A permission dialog is allowed to complete without being treated as a recording interruption. Provider silence detection may finish recognition before Done is pressed. Listening is bounded to two minutes, and startup/final-result waits have timeouts. Late results after cancellation cannot be inserted into a new session.
+The first use requests Android microphone permission. Backgrounding/locking the main activity cancels an active recording; returning does not automatically restart it. A permission dialog is allowed to complete without being treated as a recording interruption. Provider silence detection may finish recognition before Done is pressed. Startup and final-result waits have timeouts; the app does not impose its own listening-duration limit. Late results after cancellation cannot be inserted into a new session.
 
 Floating chat currently retains Android’s separate recognition screen. Both paths use the same durable result receipts:
 

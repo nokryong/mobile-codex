@@ -11,7 +11,10 @@ final class AppLanguage {
     private static Map<String, String> english = Map.of();
     static void initialize(Context context) {
         try (var stream = context.getAssets().open("translations-en.json")) {
-            JSONObject json = new JSONObject(new String(stream.readAllBytes(), StandardCharsets.UTF_8));
+            var bytes = new java.io.ByteArrayOutputStream();
+            byte[] buffer = new byte[8192]; int count;
+            while ((count = stream.read(buffer)) != -1) bytes.write(buffer, 0, count);
+            JSONObject json = new JSONObject(bytes.toString(StandardCharsets.UTF_8.name()));
             var values = new HashMap<String, String>();
             for (var keys = json.keys(); keys.hasNext();) { String key = keys.next(); values.put(key, json.getString(key)); }
             english = Map.copyOf(values);

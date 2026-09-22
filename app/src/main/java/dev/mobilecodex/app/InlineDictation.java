@@ -39,7 +39,7 @@ final class InlineDictation {
             recognizer = SpeechRecognizer.createSpeechRecognizer(context);
             recognizer.setRecognitionListener(new RecognitionListener() {
                 private boolean current() { return request == session; }
-                public void onReadyForSpeech(Bundle params) { if (current() && phase.equals("starting")) { phase = "listening"; started = SystemClock.elapsedRealtime(); emit(); timeout(120000); } }
+                public void onReadyForSpeech(Bundle params) { if (current() && phase.equals("starting")) { phase = "listening"; started = SystemClock.elapsedRealtime(); emit(); if (deadline != null) handler.removeCallbacks(deadline); } }
                 public void onBeginningOfSpeech() { }
                 public void onRmsChanged(float rms) { if (current() && phase.equals("listening")) { level = Math.max(0, Math.min(1, (rms + 2) / 12)); emit(); } }
                 public void onBufferReceived(byte[] buffer) { }
