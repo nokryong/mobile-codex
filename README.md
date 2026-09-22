@@ -6,7 +6,7 @@
 
 Mobile Codex is an independent Android client built around the Codex app-server. It bundles an Android port of Codex, Python, Node.js, and Git, so you do not need to install Termux or keep a separate PC server running.
 
-**0.1.12 alpha** · **ARM64 / Android 10+** · Created by [nokryong](https://github.com/nokryong)
+**0.1.13 alpha** · **ARM64 / Android 10+** · Created by [nokryong](https://github.com/nokryong)
 
 [Download APK](https://github.com/nokryong/mobile-codex/releases) · [Builds](https://github.com/nokryong/mobile-codex/actions/workflows/android.yml) · [Report an issue](https://github.com/nokryong/mobile-codex/issues)
 
@@ -27,7 +27,7 @@ Mobile Codex is an independent Android client built around the Codex app-server.
 | Preferences | System/English/Korean interface, model and reasoning effort, task permissions, custom instructions, themes, and optional chat icons |
 | Updates | Check public GitHub releases, verify APK integrity and signing compatibility, and open Android’s installation prompt |
 
-The interface uses drawers and sheets on phones and multiple panels on larger screens. Features depend on the runtime, account, Android permissions, and installed commands. A feature without a dedicated screen may still be accessible through Codex tools or configuration.
+The interface uses drawers and sheets on phones and multiple panels on larger screens. Light and dark themes include a translucent header, a floating composer, and draggable mobile sheets. Motion follows the device’s reduced-motion preference. Features depend on the runtime, account, Android permissions, and installed commands. A feature without a dedicated screen may still be accessible through Codex tools or configuration.
 
 ## Install
 
@@ -35,7 +35,7 @@ You need an **ARM64 device running Android 10 or later**, an up-to-date Android 
 
 ### Download the APK
 
-Open [Releases](https://github.com/nokryong/mobile-codex/releases) and download **`mobile-codex-0.1.12-alpha-arm64.apk`** from the release assets. Open the APK and follow Android’s installation prompts. If requested, allow installation from the app you used to download/open it.
+Open [Releases](https://github.com/nokryong/mobile-codex/releases) and download **`mobile-codex-0.1.13-alpha-arm64.apk`** from the release assets. Open the APK and follow Android’s installation prompts. If requested, allow installation from the app you used to download/open it.
 
 New app versions are published automatically after the `main` workflow passes its tests, builds, and original-key signature verification. Alpha versions are marked as prereleases. A published version is never silently replaced; maintainers must increment both `versionName` and `versionCode` for the next release.
 
@@ -45,7 +45,7 @@ You can also open a successful [Actions run](https://github.com/nokryong/mobile-
 | --- | --- |
 | **`mobile-codex-update-assets`** | **The small installation bundle.** Extract the ZIP to get the `.apk`, checksum, and update manifest. |
 | `mobile-codex-arm64-debug` | A larger bundle with the APK, runtime metadata, and corresponding developer-tool sources. |
-| `check-reports` | Test and lint reports; no APK. |
+| `check-reports` | Test and lint reports, browser layout checks, and UI screenshots; no APK. |
 
 Actions artifact downloads require GitHub sign-in and expire after 14 days. Public release assets remain available without that artifact sign-in requirement. An unsuccessful build does not publish a new release.
 
@@ -117,6 +117,8 @@ python3 tools/build_native.py --ndk "$ANDROID_HOME/ndk/28.2.13676358"
 python3 tools/prepare_devtools.py
 npm ci --ignore-scripts
 npm test
+npx playwright install --with-deps chromium
+npm run test:layout
 python3 -m unittest discover -s tests -p 'test_*.py'
 ./gradlew assembleDebug testDebugUnitTest lintDebug assembleDebugAndroidTest
 ```

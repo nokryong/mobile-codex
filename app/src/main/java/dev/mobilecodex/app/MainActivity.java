@@ -177,7 +177,7 @@ public final class MainActivity extends Activity implements Engine.Ui {
         boolean dark = "dark".equals(choice) || ("system".equals(choice)
             && (getResources().getConfiguration().uiMode & android.content.res.Configuration.UI_MODE_NIGHT_MASK)
             == android.content.res.Configuration.UI_MODE_NIGHT_YES);
-        int background = Color.parseColor(dark ? "#212121" : "#ffffff");
+        int background = Color.parseColor(dark ? "#101012" : "#fafafa");
         root.setBackgroundColor(background); web.setBackgroundColor(background);
         var controller = WindowCompat.getInsetsController(getWindow(), web);
         controller.setAppearanceLightStatusBars(!dark);

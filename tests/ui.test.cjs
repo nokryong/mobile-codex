@@ -694,3 +694,36 @@ test('inline dictation displays partial text, supports done and cancel, and cann
  d.getElementById('dictation-cancel').click();await tick();assert.equal(calls.some(x=>x.action==='voice.cancel'),true);
  w.mobileCodexEvent('voice.state',{phase:'idle'});assert.equal(d.getElementById('dictation').hidden,true);assert.equal(d.getElementById('prompt').readOnly,false);assert.equal(d.getElementById('prompt').value,'Existing draft');
 });
+
+function sheetPointer(w, grip, type, x, y) {
+ const event=new w.Event(type,{bubbles:true,cancelable:true});
+ for(const [key,value] of Object.entries({pointerId:1,isPrimary:true,button:0,clientX:x,clientY:y})) Object.defineProperty(event,key,{value});
+ grip.dispatchEvent(event);
+}
+test('mobile sheet drag closes through the existing unsaved-instructions guard',async()=>{
+ const {w}=setup({'instructions.read':()=>({content:'Saved instructions',activePath:'/private/AGENTS.md'})},{mobile:true});await tick();const d=w.document;
+ d.getElementById('settings').click();await tick();d.querySelector('[data-settings-tab="personal"]').click();await tick();
+ d.getElementById('instructions-editor').value='Unsaved edit';w.confirm=()=>false;
+ const sheet=d.getElementById('settings-dialog'),grip=sheet.querySelector('.sheet-grip');
+ const drag=()=>{sheetPointer(w,grip,'pointerdown',100,20);sheetPointer(w,grip,'pointermove',105,170);sheetPointer(w,grip,'pointerup',105,170);};
+ drag();assert.equal(sheet.open,true);assert.equal(d.getElementById('instructions-editor').value,'Unsaved edit');assert.equal(sheet.style.getPropertyValue('--sheet-offset'),'');
+ w.confirm=()=>true;drag();assert.equal(sheet.open,false);
+});
+test('short or cancelled sheet drags stay open and do not turn into close clicks',async()=>{
+ const {w}=setup({}, {mobile:true});await tick();const d=w.document;d.getElementById('composer-options').click();await tick();
+ const sheet=d.getElementById('options-dialog'),grip=sheet.querySelector('.sheet-grip');
+ sheetPointer(w,grip,'pointerdown',100,20);sheetPointer(w,grip,'pointermove',100,48);sheetPointer(w,grip,'pointerup',100,48);
+ grip.dispatchEvent(new w.MouseEvent('click',{bubbles:true,cancelable:true,detail:1}));assert.equal(sheet.open,true);
+ sheetPointer(w,grip,'pointerdown',100,20);sheetPointer(w,grip,'pointermove',100,180);sheetPointer(w,grip,'pointercancel',100,180);
+ assert.equal(sheet.open,true);assert.equal(sheet.style.getPropertyValue('--sheet-offset'),'');
+ // Keyboard activation remains available even immediately after a cancelled pointer gesture.
+ grip.click();assert.equal(sheet.open,false);
+});
+test('dragging content or a desktop dialog never dismisses it and approvals have no grip',async()=>{
+ for(const mobile of [true,false]){
+  const {w}=setup({}, {mobile});await tick();const d=w.document;d.getElementById('composer-options').click();await tick();
+  const sheet=d.getElementById('options-dialog'),target=mobile?sheet.querySelector('.dialog-head'):sheet.querySelector('.sheet-grip');
+  sheetPointer(w,target,'pointerdown',100,20);sheetPointer(w,target,'pointermove',100,200);sheetPointer(w,target,'pointerup',100,200);
+  assert.equal(sheet.open,true);assert.equal(d.querySelector('#request-dialog .sheet-grip'),null);
+ }
+});

@@ -44,6 +44,50 @@
     if (dirty && !confirm(t('저장하지 않은 변경 사항을 닫을까요?'))) return;
     close(id);
   }
+  function wireSheetGestures() {
+    const mobile = matchMedia('(max-width:760px)');
+    document.querySelectorAll('dialog .sheet-grip').forEach(grip => {
+      const sheet = grip.closest('dialog');
+      let drag = null, suppressClickUntil = 0;
+      function reset() {
+        const previous = drag; drag = null;
+        sheet.classList.remove('sheet-dragging'); sheet.style.removeProperty('--sheet-offset');
+        if (previous && grip.hasPointerCapture?.(previous.id)) grip.releasePointerCapture(previous.id);
+      }
+      grip.addEventListener('pointerdown', e => {
+        if (!mobile.matches || !sheet.open || e.isPrimary === false || e.button !== 0) return;
+        suppressClickUntil = 0;
+        sheet.getAnimations?.().forEach(animation => animation.finish());
+        drag = {id:e.pointerId, x:e.clientX, y:e.clientY, dx:0, dy:0};
+        grip.setPointerCapture?.(e.pointerId); sheet.classList.add('sheet-dragging');
+      });
+      grip.addEventListener('pointermove', e => {
+        if (!drag || drag.id !== e.pointerId) return;
+        drag.dx = e.clientX - drag.x; drag.dy = Math.max(0, e.clientY - drag.y);
+        const offset = Math.abs(drag.dx) > drag.dy ? 0 : drag.dy;
+        sheet.style.setProperty('--sheet-offset', Math.min(offset, sheet.clientHeight * .85 || offset) + 'px');
+      });
+      grip.addEventListener('pointerup', e => {
+        if (!drag || drag.id !== e.pointerId) return;
+        const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+        const threshold = Math.min(112, Math.max(72, sheet.clientHeight * .22));
+        const moved = Math.hypot(dx, dy) > 8;
+        if (moved) suppressClickUntil = performance.now() + 500;
+        reset();
+        // Reuse the close path so unsaved instructions still require confirmation.
+        if (mobile.matches && sheet.open && dy >= threshold && dy > Math.abs(dx) * 1.25) dismiss(sheet.id);
+      });
+      grip.addEventListener('pointercancel', () => { suppressClickUntil = performance.now() + 500; reset(); });
+      grip.addEventListener('lostpointercapture', reset);
+      grip.addEventListener('click', e => {
+        // A drag is followed by a synthetic click on some WebViews; keep a short drag open.
+        if (e.detail > 0 && performance.now() < suppressClickUntil) { e.preventDefault(); e.stopImmediatePropagation(); }
+      }, true);
+      sheet.addEventListener('close', reset);
+      window.addEventListener('resize', reset);
+      window.addEventListener('blur', reset);
+    });
+  }
   function sidebar(open) {
     const wasOpen = document.body.classList.contains('sidebar-open');
     document.body.classList.toggle('sidebar-open', open); $('scrim').hidden = !open;
@@ -1167,6 +1211,7 @@
     d.addEventListener('close', () => { const i = dialogs.indexOf(d.id); if (i !== -1) dialogs.splice(i, 1); });
     d.addEventListener('cancel', e => { e.preventDefault(); if (d.id !== 'request-dialog') dismiss(d.id); });
   });
+  wireSheetGestures();
   document.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', () => dismiss(b.dataset.close)));
   document.querySelectorAll('.sidebar-toggle').forEach(b => b.addEventListener('click', () => { if (matchMedia('(max-width:760px)').matches) sidebar(!document.body.classList.contains('sidebar-open')); else document.body.classList.toggle('sidebar-collapsed'); }));
   document.querySelectorAll('[data-prompt]').forEach(b => b.addEventListener('click', () => { $('prompt').value = b.dataset.prompt; saveDraft(); sizeComposer(); $('prompt').focus(); }));

@@ -767,5 +767,6 @@
   "다른 앱이 음성 인식 서비스를 사용 중입니다. 잠시 뒤 다시 시도해 주세요.": "Another app is using speech recognition. Try again shortly.",
   "음성 인식이 중단되었습니다. 다시 시도해 주세요.": "Speech recognition stopped. Please try again.",
   "음성 인식 시간이 초과되었습니다. 다시 시도해 주세요.": "Speech recognition timed out. Please try again.",
-  "원본 삭제 대기 {count}건. 아래 ‘Codex 시작 / 다시 연결’을 누르면 다시 시도합니다.": "{count} original chats pending deletion. Use ‘Start / reconnect Codex’ below to retry."
+  "원본 삭제 대기 {count}건. 아래 ‘Codex 시작 / 다시 연결’을 누르면 다시 시도합니다.": "{count} original chats pending deletion. Use ‘Start / reconnect Codex’ below to retry.",
+  "아래로 끌거나 눌러서 닫기": "Drag down or press to close"
 }

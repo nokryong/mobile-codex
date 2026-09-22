@@ -6,7 +6,7 @@
 
 Codex 데스크톱의 작업 방식을 모바일로 옮기는 개인용 클라이언트입니다. Codex 실행 엔진과 Python·Node.js·Git을 APK에 포함해, Termux 설치나 별도 PC 서버 없이 기기에서 바로 작업할 수 있습니다.
 
-**0.1.12 alpha** · **ARM64 / Android 10 이상** · 제작 [nokryong](https://github.com/nokryong)
+**0.1.13 alpha** · **ARM64 / Android 10 이상** · 제작 [nokryong](https://github.com/nokryong)
 
 [APK 다운로드](https://github.com/nokryong/mobile-codex/releases) · [개발 빌드](https://github.com/nokryong/mobile-codex/actions/workflows/android.yml) · [문제 제보](https://github.com/nokryong/mobile-codex/issues)
 
@@ -27,7 +27,7 @@ Codex 데스크톱의 작업 방식을 모바일로 옮기는 개인용 클라�
 | 맞춤 설정 | 모델·추론 강도·작업 권한, 맞춤 지침, Codex 설정 편집, 테마와 대화 아이콘, 기기 언어/한국어/영어 UI |
 | 앱 업데이트 | 공개 GitHub 릴리스 확인, APK 다운로드·무결성·서명 검증, Android 설치 화면 연결 |
 
-휴대폰에서는 서랍과 시트로, 태블릿에서는 여러 패널로 구성합니다. UI가 아직 전용 화면을 제공하지 않는 기능도 Codex 도구와 설정을 통해 사용할 수 있는 구조이며, 실제 지원 범위는 실행 엔진·계정·Android 권한·설치된 명령에 따라 달라집니다.
+휴대폰에서는 서랍과 시트로, 태블릿에서는 여러 패널로 구성합니다. 라이트·다크 테마에 반투명 상단 바, 떠 있는 입력창, 끌어서 닫는 모바일 시트를 제공하며 동작 줄이기 설정을 따릅니다. UI가 아직 전용 화면을 제공하지 않는 기능도 Codex 도구와 설정을 통해 사용할 수 있는 구조이며, 실제 지원 범위는 실행 엔진·계정·Android 권한·설치된 명령에 따라 달라집니다.
 
 ## 설치
 
@@ -39,9 +39,9 @@ Codex 데스크톱의 작업 방식을 모바일로 옮기는 개인용 클라�
 
 | Actions 산출물 | 용도 |
 | --- | --- |
-| **`mobile-codex-update-assets`** | **설치할 때 받을 파일.** ZIP을 풀면 `mobile-codex-0.1.12-alpha-arm64.apk`와 검증 파일이 나옵니다. |
+| **`mobile-codex-update-assets`** | **설치할 때 받을 파일.** ZIP을 풀면 `mobile-codex-0.1.13-alpha-arm64.apk`와 검증 파일이 나옵니다. |
 | `mobile-codex-arm64-debug` | APK·런타임 정보·개발 도구의 대응 소스를 함께 담은 큰 묶음입니다. |
-| `check-reports` | 테스트·Lint 결과입니다. 설치 파일은 없습니다. |
+| `check-reports` | 테스트·Lint 결과와 브라우저 화면 검사·스크린샷입니다. 설치 파일은 없습니다. |
 
 Actions 산출물 다운로드에는 GitHub 로그인이 필요하며, 보관 기간은 14일입니다. 빌드에 실패했거나 산출물이 만료된 실행에서는 APK를 받을 수 없습니다.
 
@@ -115,6 +115,8 @@ python3 tools/build_native.py --ndk "$ANDROID_HOME/ndk/28.2.13676358"
 python3 tools/prepare_devtools.py
 npm ci --ignore-scripts
 npm test
+npx playwright install --with-deps chromium
+npm run test:layout
 python3 -m unittest discover -s tests -p 'test_*.py'
 ./gradlew assembleDebug testDebugUnitTest lintDebug assembleDebugAndroidTest
 ```
