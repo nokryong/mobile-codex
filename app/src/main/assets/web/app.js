@@ -883,9 +883,6 @@
   function renderProjects() {
     const target = $('projects'); target.replaceChildren();
     const projects = state.projects || [];
-    const general = node('div', null, 'general-project' + (!state.workspace.selected ? ' selected' : ''));
-    const generalButton = button('', () => selectProject(''), 'project-button'); generalButton.append(icon('code'), node('span', t('일반 대화'))); generalButton.setAttribute('aria-current', String(!state.workspace.selected));
-    general.append(generalButton); target.append(general);
     for (const project of projects) {
       const expandedKey = 'project-expanded:' + project.key, expanded = localStorage.getItem(expandedKey) !== 'false';
       const section = node('section', null, 'project-tree' + (project.selected ? ' selected' : ''));
@@ -1423,7 +1420,7 @@
   document.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', () => dismiss(b.dataset.close)));
   document.querySelectorAll('.sidebar-toggle').forEach(b => b.addEventListener('click', () => { if (matchMedia('(max-width:760px)').matches) sidebar(!document.body.classList.contains('sidebar-open')); else document.body.classList.toggle('sidebar-collapsed'); }));
   document.querySelectorAll('[data-prompt]').forEach(b => b.addEventListener('click', () => { $('prompt').value = b.dataset.prompt; saveDraft(); sizeComposer(); $('prompt').focus(); }));
-  on('scrim', () => sidebar(false)); on('new-chat', async () => newChat(state.workspace?.key || ''));
+  on('scrim', () => sidebar(false)); on('new-chat', async () => newChat(''));
   ['add-project', 'choose-folder', 'composer-folder'].forEach(id => on(id, () => pickFolder()));
    const closeToolMenu = () => { if ($('tool-menu-dialog').open) close('tool-menu-dialog'); };
    ['show-files', 'files-toggle'].forEach(id => on(id, async () => { closeToolMenu(); $('file-panel').hidden = !$('file-panel').hidden; sidebar(false); if (!$('file-panel').hidden) await listFiles(); }));

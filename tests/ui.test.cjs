@@ -300,7 +300,7 @@ test('project tree groups workspace history while general history stays separate
  w.mobileCodexEvent('state',{...snapshot,workspace:{selected:true,key:'p1',name:'Alpha'},projects:[{key:'p1',name:'Alpha',selected:true,available:true}],sessions:[{id:'a',title:'프로젝트 대화',workspaceKey:'p1'},{id:'g',title:'일반 대화'}]});
  const tree=w.document.querySelector('.project-tree');assert.match(tree.textContent,/프로젝트 대화/);assert.doesNotMatch(w.document.getElementById('sessions').textContent,/프로젝트 대화/);assert.match(w.document.getElementById('sessions').textContent,/일반 대화/);
  tree.querySelector('.tree-toggle').click();await tick();assert.equal(tree.classList.contains('collapsed'),true);
- w.document.querySelector('.general-project .project-button').click();await tick();assert.deepEqual(calls.find(c=>c.action==='projects.select').args,{key:''});
+ w.document.getElementById('new-chat').click();await tick();assert.deepEqual(calls.find(c=>c.action==='chat.new').args,{workspaceKey:''});
 });
 
 test('general and workspace drafts keep attachments separately and picker receipts survive duplicate delivery',async()=>{
@@ -819,9 +819,9 @@ test('composer stays compact until focus and expands without losing the draft',a
  assert.equal(composer.classList.contains('composer-expanded'),false);prompt.value='보존할 초안';prompt.focus();assert.equal(composer.classList.contains('composer-expanded'),true);
  prompt.blur();await tick();assert.equal(prompt.value,'보존할 초안');assert.equal(composer.classList.contains('composer-expanded'),false);
 });
-test('project tree has one project plus and no duplicate new-chat row',async()=>{
+test('project tree has one project plus and no duplicate general-chat row',async()=>{
  const {w,snapshot}=setup();await tick();w.mobileCodexEvent('state',{...snapshot,projects:[{key:'p',name:'Project',selected:true,available:true}],sessions:[{id:'s',title:'Existing',workspaceKey:'p'}]});
- const d=w.document;assert.equal(d.querySelectorAll('.general-project .project-new').length,0);assert.equal(d.querySelectorAll('.project-tree .project-new').length,1);assert.equal(d.querySelectorAll('.project-tree .project-sessions .new-thread').length,0);
+ const d=w.document;assert.equal(d.querySelectorAll('.general-project').length,0);assert.equal(d.querySelectorAll('.project-tree .project-new').length,1);assert.equal(d.querySelectorAll('.project-tree .project-sessions .new-thread').length,0);
 });
 test('session list marks background work and approval separately',async()=>{
  const {w,snapshot}=setup();await tick();w.mobileCodexEvent('state',{...snapshot,sessions:[{id:'busy',title:'Working',workspaceKey:'p',busy:true},{id:'approval',title:'Needs approval',workspaceKey:'p',approvalPending:true}]});
