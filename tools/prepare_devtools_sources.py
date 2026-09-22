@@ -44,6 +44,11 @@ def prepare() -> Path:
     recipes = lock['recipeArchive']
     records = [("termux-build-recipes", recipes)]
     for package in lock['packages']:
+        # A rolling package pool may require updating one binary while keeping
+        # the remaining inputs pinned. Include that package's matching recipes
+        # as well as the original snapshot, including local patches/build files.
+        if package.get('recipeArchive'):
+            records.append((package['name'] + '-build-recipes', package['recipeArchive']))
         sources = package.get('sources')
         if sources is None:
             sources = ([{'url': package['sourceArchive'], 'sha256': package['sourceSha256']}]

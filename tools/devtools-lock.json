@@ -648,23 +648,55 @@
     {
       "architecture": "aarch64",
       "depends": "libandroid-support, ncurses",
-      "filename": "pool/main/r/readline/readline_8.3.3_aarch64.deb",
+      "filename": "pool/main/r/readline/readline_8.3.6_aarch64.deb",
       "homepage": "https://tiswww.case.edu/php/chet/readline/rltop.html",
+      "index": {
+        "sha256": "c6168f627fb56d0637606b1882f00793fc4cfdc4a044364b7bc09e82e80a08d7",
+        "url": "https://packages.termux.dev/apt/termux-main/dists/stable/main/binary-aarch64/Packages"
+      },
       "license": "GPL-3.0",
       "name": "readline",
-      "recipe": "https://github.com/termux/termux-packages/blob/40a00dd69107b62d7c9cc71109b3c8fab9802b07/packages/readline/build.sh",
-      "recipeVersion": "8.3.3",
+      "recipe": "https://github.com/termux/termux-packages/blob/d005fcc8961ca61cd3715555526c324e3d0e68e4/packages/readline/build.sh",
+      "recipeArchive": {
+        "sha256": "dba585ddab6b8711da5decb32526d82ec716b1ec48caaf8ced3b9f24822884b4",
+        "url": "https://codeload.github.com/termux/termux-packages/tar.gz/d005fcc8961ca61cd3715555526c324e3d0e68e4"
+      },
+      "recipeVersion": "8.3.6",
       "recipeVersionMatches": true,
-      "sha256": "e50fb67f40753247dbb83efb17c7fbee0ac868ffcb5b5555d44d76ec8d90b4b1",
-      "size": 293684,
+      "sha256": "616cc73009bc0223f61caed8dd09455714455aa5ea5e180126e2f69c4c775136",
+      "size": 294164,
       "sourceArchiveStatus": "complete",
       "sources": [
         {
           "sha256": "fe5383204467828cd495ee8d1d3c037a7eba1389c22bc6a041f627976f9061cc",
           "url": "https://mirrors.kernel.org/gnu/readline/readline-8.3.tar.gz"
+        },
+        {
+          "sha256": "21f0a03106dbe697337cd25c70eb0edbaa2bdb6d595b45f83285cdd35bac84de",
+          "url": "https://mirrors.kernel.org/gnu/readline/readline-8.3-patches/readline83-001"
+        },
+        {
+          "sha256": "e27364396ba9f6debf7cbaaf1a669e2b2854241ae07f7eca74ca8a8ba0c97472",
+          "url": "https://mirrors.kernel.org/gnu/readline/readline-8.3-patches/readline83-002"
+        },
+        {
+          "sha256": "72dee13601ce38f6746eb15239999a7c56f8e1ff5eb1ec8153a1f213e4acdb29",
+          "url": "https://mirrors.kernel.org/gnu/readline/readline-8.3-patches/readline83-003"
+        },
+        {
+          "sha256": "1f189c4566aa35950964647b9ec3be1a821e42b86048129c63eb7f9d4d2f5a74",
+          "url": "https://mirrors.kernel.org/gnu/readline/readline-8.3-patches/readline83-004"
+        },
+        {
+          "sha256": "5481adbe161c9f6ba972c74db9e18c7aa351d3df3035cc4a673a1aa06247d1c6",
+          "url": "https://mirrors.kernel.org/gnu/readline/readline-8.3-patches/readline83-005"
+        },
+        {
+          "sha256": "4ebd261a608287796e171af0ea9af5a1e3122e46672accda2484b6698c47c1a4",
+          "url": "https://mirrors.kernel.org/gnu/readline/readline-8.3-patches/readline83-006"
         }
       ],
-      "version": "8.3.3"
+      "version": "8.3.6"
     },
     {
       "architecture": "aarch64",
