@@ -746,6 +746,55 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-vis
   .composer-actions { grid-area:actions; width:100%; max-width:none; min-width:0; justify-content:flex-end; }
   .composer-actions .options-button { flex:1 1 auto; min-width:100px; max-width:none; justify-content:flex-start; }
 }
+
+/* Account quota and local profile switching */
+.account-button { min-height:58px; padding:8px; border-radius:14px; gap:10px; }
+.account-button:hover { background:var(--hover); }
+.quota-ring {
+  --remaining:0; width:38px; height:38px; flex:none; border-radius:50%; display:grid; place-items:center;
+  background:conic-gradient(var(--accent) calc(var(--remaining) * 1%),var(--border) 0);
+  position:relative; font-variant-numeric:tabular-nums;
+}
+.quota-ring::before { content:""; position:absolute; inset:5px; border-radius:50%; background:var(--sidebar); }
+.quota-ring>span { position:relative; z-index:1; font-size:9px; font-weight:700; letter-spacing:-.3px; }
+.quota-copy { min-width:0; flex:1; }
+.account-button .quota-copy strong { max-width:none; font-size:13px; font-variant-numeric:tabular-nums; }
+.account-button .quota-copy small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.account-chevron { width:14px; height:14px; color:var(--muted); }
+.card-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.card-heading>span { min-width:0; }
+.card-heading strong,.card-heading small { display:block; }
+.card-heading small { color:var(--muted); margin-top:5px; font-size:11px; line-height:1.5; }
+.card-heading .secondary-button { flex:none; padding:8px 12px; min-height:38px; }
+.accounts-list { display:grid; gap:8px; margin-top:14px; }
+.account-profile { display:flex; align-items:center; gap:10px; min-height:56px; padding:9px 10px; border:1px solid var(--border); border-radius:13px; }
+.account-profile.active { border-color:var(--accent); background:var(--focus-halo); }
+.account-profile-mark { width:30px; height:30px; flex:none; border-radius:50%; display:grid; place-items:center; background:var(--pill); color:var(--muted); font-size:11px; font-weight:700; }
+.account-profile.active .account-profile-mark { background:var(--accent); color:#fff; }
+.account-profile-copy { min-width:0; flex:1; }
+.account-profile-copy strong,.account-profile-copy small { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.account-profile-copy strong { font-size:12px; }
+.account-profile-copy small { color:var(--muted); font-size:11px; margin-top:4px; }
+.account-profile-actions { display:flex; gap:5px; }
+.account-profile-actions button { min-height:36px; padding:7px 10px; font-size:11px; }
+.usage-limits { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:10px; margin-top:14px; }
+.usage-gauge { display:grid; grid-template-columns:58px minmax(0,1fr); align-items:center; gap:12px; padding:12px; border-radius:14px; background:var(--pill); }
+.usage-gauge .quota-ring { width:58px; height:58px; background:conic-gradient(var(--accent) calc(var(--remaining) * 1%),var(--border) 0); }
+.usage-gauge .quota-ring::before { inset:7px; background:var(--pill); }
+.usage-gauge .quota-ring>span { font-size:12px; }
+.usage-gauge-copy { min-width:0; }
+.usage-gauge-copy strong,.usage-gauge-copy small { display:block; }
+.usage-gauge-copy strong { font-size:12px; overflow-wrap:anywhere; }
+.usage-gauge-copy small { margin-top:5px; color:var(--muted); font-size:11px; line-height:1.55; font-variant-numeric:tabular-nums; }
+.account-runtime-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:16px; }
+.account-runtime-actions button { flex:1 1 150px; }
+@media(max-width:480px) {
+  .usage-limits { grid-template-columns:1fr; }
+  .card-heading { align-items:flex-start; }
+  .account-profile { align-items:flex-start; flex-wrap:wrap; }
+  .account-profile-copy { padding-top:2px; }
+  .account-profile-actions { width:100%; padding-left:40px; }
+}
 @media(prefers-reduced-motion:reduce) {
   *,*::before,*::after { animation:none!important; transition:none!important; scroll-behavior:auto!important; }
   :is(.icon-button,.primary-button,.secondary-button,.send-button,.context-button,.nav-button,.suggestions button,.project-button):active:not(:disabled),.suggestions button:hover { transform:none; }

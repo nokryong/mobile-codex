@@ -17,7 +17,7 @@ The APK-opening app may separately require **Allow from this source**. Menu name
 
 Mobile Codex is an independent Android client built around the Codex app-server. It bundles an Android port of Codex, Python, Node.js, and Git, so you do not need to install Termux or keep a separate PC server running.
 
-**0.1.18 alpha** · **ARM64 / Android 10+** · Created by [nokryong](https://github.com/nokryong)
+**0.1.19 alpha** · **ARM64 / Android 10+** · Created by [nokryong](https://github.com/nokryong)
 
 [Download APK](https://github.com/nokryong/mobile-codex/releases) · [Builds](https://github.com/nokryong/mobile-codex/actions/workflows/android.yml) · [Report an issue](https://github.com/nokryong/mobile-codex/issues)
 
@@ -33,6 +33,7 @@ Mobile Codex is an independent Android client built around the Codex app-server.
 | Developer tools | Bundled Python/pip, Node.js/npm/npx, and Git; enter commands and stream output |
 | Change review | Inspect Git status and differences against HEAD, restore working files, and use recovery copies |
 | Plugins, skills, and MCP | Install and enable plugins, connect accounts, import skill folders, and configure MCP servers |
+| Accounts and limits | Save multiple ChatGPT accounts locally, switch safely with separate chat histories, and see remaining Codex limits as compact and detailed charts |
 | Phone controls | Optionally use Android accessibility to open apps, read screens, tap, type, scroll, and navigate |
 | Floating chat and dictation | Chat over other apps; in the main composer, dictate with live status, partial text, and Done/Cancel controls, then review the draft |
 | Preferences | System/English/Korean interface, model and reasoning effort, task permissions, custom instructions, themes, and optional chat icons |
@@ -46,7 +47,7 @@ You need an **ARM64 device running Android 10 or later**, an up-to-date Android 
 
 ### Download the APK
 
-Open [Releases](https://github.com/nokryong/mobile-codex/releases) and download **`mobile-codex-0.1.18-alpha-arm64.apk`** from the release assets. Open the APK and follow Android’s installation prompts. If requested, allow installation from the app you used to download/open it.
+Open [Releases](https://github.com/nokryong/mobile-codex/releases) and download **`mobile-codex-0.1.19-alpha-arm64.apk`** from the release assets. Open the APK and follow Android’s installation prompts. If requested, allow installation from the app you used to download/open it.
 
 New app versions are published automatically after the `main` workflow passes its tests, builds, and original-key signature verification. Alpha versions are marked as prereleases. A published version is never silently replaced; maintainers must increment both `versionName` and `versionCode` for the next release.
 
@@ -67,6 +68,8 @@ Actions artifact downloads require GitHub sign-in and expire after 14 days. Publ
 3. For shell access to a local project, enable **Settings → Tools → Allow device file access**.
 4. Choose a model, reasoning effort, and permissions, then send a request. Use **`+`** for attachments, **`@`** for files/apps, and **`$`** for skills.
 5. Choose **Settings → General → Language** to follow the device language or select English/Korean. Chats and file contents are not translated or reset.
+
+The lower-left quota ring opens **Settings → Account**. From there you can add or switch ChatGPT accounts. Credentials remain in app-private storage, and each account only sees its own saved chats.
 
 Saved chats can be opened without signing in or starting the runtime. Removing a project from the sidebar leaves its folder and chat history intact. Reconnect a folder if Android revokes access.
 

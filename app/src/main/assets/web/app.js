@@ -8,7 +8,7 @@
   let following = true, draftScope = '', sending = null, configOriginal = '', sidebarFocus = null, openedImage = null;
   const imageReads = new Map();
   let viewerImages = [], viewerIndex = 0, viewerGroup = null;
-  let seq = 0, state = {messages: [], sessions: [], projects: [], models: [], account: {}, workspace: {}}, folder = '', openedFile = null, login = null, inputResolve = null, toastTimer, fileSeq = 0, modelKey = '', displayedRequest = null, projectMenuFocus = null, projectMenuActionClosing = false;
+  let seq = 0, state = {messages: [], sessions: [], projects: [], models: [], accounts: [], account: {}, rateLimits: {}, workspace: {}}, folder = '', openedFile = null, login = null, inputResolve = null, toastTimer, fileSeq = 0, modelKey = '', displayedRequest = null, projectMenuFocus = null, projectMenuActionClosing = false;
   let draftContext = {attachments: [], mentions: [], skills: []}, draftOptions = {model:'', effort:''}, autocomplete = {items: [], index: -1, token: '', type: '', version: 0};
   const handledReceipts = new Set(), handledVoiceReceipts = new Set();
   let dictationState = {phase:'idle'}, dictationTimer = null;
@@ -886,7 +886,7 @@
   function render(next) {
     const changedThread = state.threadId !== next.threadId;
     setDraftScope(next); state = next;
-    state.models ||= []; state.messages ||= []; state.projects ||= []; state.workspace ||= {}; state.account ||= {}; setCharacterState(state.characters);
+    state.models ||= []; state.messages ||= []; state.projects ||= []; state.accounts ||= []; state.workspace ||= {}; state.account ||= {}; state.rateLimits ||= {}; setCharacterState(state.characters);
     const logged = C.isLoggedIn(state.account), selected = state.workspace.selected;
     const name = selected ? state.workspace.name : t('일반 대화');
     $('project-label').textContent = name; $('context-folder').textContent = name; $('header-project').textContent = name;
@@ -896,10 +896,7 @@
     document.querySelectorAll('[data-prompt]').forEach((button, i) => { button.dataset.prompt = selected ? [t('이 폴더에 어떤 파일이 있는지 살펴보고 정리해줘.'),t('이 프로젝트를 살펴보고 실행 방법과 개선할 부분을 알려줘.'),t('이 프로젝트의 변경 사항을 검토하고 버그가 있는지 찾아줘.')][i] : generalPrompts[i]; if (button.lastChild?.nodeType === Node.TEXT_NODE) button.lastChild.textContent = selected ? [t('폴더 살펴보기'),t('프로젝트 이해하기'),t('변경 사항 검토')][i] : [t('작업 계획하기'),t('아이디어 정리하기'),t('도움말 보기')][i]; });
     $('login-step').textContent = logged ? '✓' : '1'; $('login-step').classList.toggle('done', logged);
     $('folder-step').textContent = selected ? '✓' : '2'; $('folder-step').classList.toggle('done', !!selected);
-    $('account-name').textContent = state.account.email || (logged ? 'ChatGPT' : t('계정 연결'));
-    $('account-plan').textContent = state.account.planType || (logged ? t('연결된 계정') : t('ChatGPT로 로그인'));
-    $('avatar').textContent = (state.account.email || 'M').charAt(0).toUpperCase();
-    $('connection-dot').classList.toggle('online', !!state.ready);
+    renderQuota(); renderAccounts();
     $('runtime-status').textContent = state.status; $('settings-status').textContent = state.status; $('settings-indicator').textContent = state.ready ? t('연결됨') : t('연결 안 됨'); $('settings-indicator').classList.toggle('online', !!state.ready);
     const pendingDeletes = Number(state.pendingDeletionCount) || 0;
     $('pending-deletions').hidden = pendingDeletes === 0;
@@ -935,10 +932,10 @@
     $('event-log').append(detail);
     while ($('event-log').children.length > 150) $('event-log').firstChild.remove();
   }
-  async function startLogin() {
-    if (C.isLoggedIn(state.account)) return show('settings-dialog');
+  async function startLogin(add = false) {
+    if (C.isLoggedIn(state.account) && !add) return openAccountSettings();
     show('login-dialog'); $('device-code').textContent = t('연결 준비 중'); $('open-login').disabled = true;
-    login = await call('auth.login');
+    login = await call(add ? 'auth.add' : 'auth.login');
     if (!C.safeLoginUrl(login.verificationUrl)) throw new Error(t('잘못된 로그인 응답입니다.'));
     $('device-code').textContent = login.userCode; $('open-login').disabled = false;
   }
@@ -1080,9 +1077,58 @@
     const buckets = result?.rateLimitsByLimitId && Object.keys(result.rateLimitsByLimitId).length ? Object.entries(result.rateLimitsByLimitId) : [['codex', result?.rateLimits]];
     return buckets.filter(([, value]) => value && (value.primary || value.secondary)).flatMap(([key, value]) => [[t('기본'), value.primary], [t('보조'), value.secondary]].filter(([, window]) => window && Number.isFinite(window.usedPercent)).map(([label, window]) => {
       const remaining = Math.max(0, Math.min(100, 100 - window.usedPercent));
-      return {label:(value.limitName || value.normalModelSlug || key) + ' · ' + label, text:t('사용 ') + window.usedPercent + t('% · 남은 ') + remaining + '% · ' + usageDuration(window.windowDurationMins) + t(' · 재설정 ') + usageTime(window.resetsAt)};
+      return {label:(value.limitName || value.normalModelSlug || key) + ' · ' + label, used:window.usedPercent, remaining,
+        duration:usageDuration(window.windowDurationMins), reset:usageTime(window.resetsAt),
+        text:t('사용 ') + window.usedPercent + t('% · 남은 ') + remaining + '% · ' + usageDuration(window.windowDurationMins) + t(' · 재설정 ') + usageTime(window.resetsAt)};
     }));
   }
+  function quotaRing(remaining, label, large = false) {
+    const ring = node('span', null, 'quota-ring'); ring.style.setProperty('--remaining', String(remaining)); ring.setAttribute('role','img'); ring.setAttribute('aria-label', label);
+    ring.append(node('span', large ? Math.round(remaining) + '%' : '')); return ring;
+  }
+  function renderQuota() {
+    const logged = C.isLoggedIn(state.account), rows = usageRows(state.rateLimits), row = rows[0];
+    const ring = $('quota-ring'), value = $('quota-ring-value'), percent = $('quota-percent'), caption = $('quota-caption');
+    if (!logged) {
+      ring.style.setProperty('--remaining','0'); ring.setAttribute('aria-label',t('사용 한도 정보 없음')); value.textContent=''; percent.textContent=t('계정 연결'); caption.textContent=t('ChatGPT로 로그인'); return;
+    }
+    if (!row) {
+      ring.style.setProperty('--remaining','0'); ring.setAttribute('aria-label',t('사용 한도 정보 없음')); value.textContent=''; percent.textContent='–%'; caption.textContent=state.account.email || state.account.planType || t('한도 조회 전'); return;
+    }
+    const remaining = Math.round(row.remaining);
+    ring.style.setProperty('--remaining',String(remaining)); ring.setAttribute('aria-label',t('남은 한도 ') + remaining + '%'); value.textContent='';
+    percent.textContent=remaining + '%'; caption.textContent=t('남은 한도') + ' · ' + row.duration;
+  }
+  function renderUsage(rows) {
+    const target = $('usage-limits'); target.replaceChildren();
+    for (const row of rows) {
+      const card = node('div', null, 'usage-gauge'), copy = node('span', null, 'usage-gauge-copy');
+      copy.append(node('strong', row.label), node('small', t('남은 ') + Math.round(row.remaining) + '% · ' + row.duration + '\n' + t('재설정 ') + row.reset));
+      card.append(quotaRing(row.remaining, row.label + ' ' + t('남은 ') + Math.round(row.remaining) + '%', true), copy); target.append(card);
+    }
+  }
+  function renderAccounts() {
+    const target = $('accounts-list'); if (!target) return; target.replaceChildren();
+    const profiles = Array.isArray(state.accounts) ? state.accounts : [];
+    for (const profile of profiles) {
+      const row = node('div', null, 'account-profile' + (profile.active ? ' active' : ''));
+      const mark = node('span', profile.active ? '✓' : (profile.email || 'C').charAt(0).toUpperCase(), 'account-profile-mark');
+      const copy = node('span', null, 'account-profile-copy'); copy.append(node('strong', profile.email || profile.label || t('ChatGPT 계정')), node('small', profile.planType || (profile.active ? t('현재 사용 중') : t('등록된 계정'))));
+      const actions = node('span', null, 'account-profile-actions');
+      if (profile.active) actions.append(node('span', t('사용 중'), 'status-pill online'));
+      else {
+        actions.append(button(t('전환'), async () => { await call('auth.switch',{key:profile.key}); toast(t('계정을 전환했습니다.')); }, 'secondary-button'));
+        actions.append(button(t('삭제'), async () => { if (!confirm((profile.email || profile.label) + '\n' + t('이 기기에 저장된 계정을 삭제할까요?'))) return; await call('auth.remove',{key:profile.key}); }, 'secondary-button subtle-danger'));
+      }
+      row.append(mark,copy,actions); target.append(row);
+    }
+    if (!profiles.length) target.append(node('p',t('등록된 계정이 없습니다.'),'empty-note'));
+  }
+  function selectSettingsTab(name) {
+    document.querySelectorAll('[data-settings-tab]').forEach(button => button.classList.toggle('active', button.dataset.settingsTab === name));
+    document.querySelectorAll('[data-settings-panel]').forEach(panel => panel.hidden = panel.dataset.settingsPanel !== name);
+  }
+  function openAccountSettings() { selectSettingsTab('account'); show('settings-dialog'); sidebar(false); if (C.isLoggedIn(state.account)) loadUsage(); }
   async function loadUsage() {
     if (usageLoading) return;
     const status = $('usage-status'), target = $('usage-limits');
@@ -1092,7 +1138,7 @@
     try {
       const result = await rpc('account/rateLimits/read', {}), rows = usageRows(result);
       if (JSON.stringify(state.account) !== accountScope) { target.replaceChildren(); status.textContent = t('계정이 바뀌었습니다. 다시 조회해 주세요.'); return; }
-      target.replaceChildren(...rows.map(row => { const item = node('p', null, 'muted'); item.append(node('strong', row.label), document.createTextNode(' ' + row.text)); return item; }));
+      state.rateLimits = result || {}; renderUsage(rows); renderQuota();
       status.textContent = rows.length ? t('현재 계정의 Codex 사용 한도입니다.') : t('사용 한도 정보가 제공되지 않았습니다.');
     } catch (error) { target.replaceChildren(); status.textContent = t('사용 한도를 조회할 수 없습니다. ') + error.message; }
     finally { usageLoading = false; $('usage-refresh').disabled = false; }
@@ -1367,10 +1413,9 @@
   on('permissions', async () => { try { await call('permissions.set', {mode:$('permissions').value}); } catch (e) { $('permissions').value = state.permissions; throw e; } finally { optionsSummary(); } }, 'change');
   document.querySelectorAll('input[name="permission"]').forEach(r => r.addEventListener('change', () => { $('permissions').value = r.value; $('permissions').dispatchEvent(new Event('change')); }));
   ensureCharacterPackUi();
-  on('connect', startLogin); on('account-button', startLogin); on('settings', () => { ensureCharacterPackUi(); show('settings-dialog'); sidebar(false); if (!characterState.folderConfigured && characterState.packs.length <= 1) loadCharacterPacks(); });
+  on('connect', () => startLogin(false)); on('account-button', openAccountSettings); on('settings', () => { ensureCharacterPackUi(); show('settings-dialog'); sidebar(false); if (!characterState.folderConfigured && characterState.packs.length <= 1) loadCharacterPacks(); });
   document.querySelectorAll('[data-settings-tab]').forEach(tab => tab.addEventListener('click', () => {
-    const selected = tab.dataset.settingsTab; document.querySelectorAll('[data-settings-tab]').forEach(b => b.classList.toggle('active', b === tab));
-    document.querySelectorAll('[data-settings-panel]').forEach(panel => panel.hidden = panel.dataset.settingsPanel !== selected);
+    const selected = tab.dataset.settingsTab; selectSettingsTab(selected);
     if (selected === 'personal' && !instructionsLoaded) loadInstructions();
     if (selected === 'account') loadUsage();
     if (selected === 'updates') loadUpdates();
@@ -1378,7 +1423,8 @@
   on('device-code', async () => { if (login) { await call('ui.copyCode', {code: login.userCode}); toast(t('코드를 복사했습니다.')); } });
   on('open-login', () => login && call('ui.loginBrowser', {url: login.verificationUrl}));
   $('login-dialog').addEventListener('close', () => { if (login?.loginId) call('auth.cancel', {loginId: login.loginId}).catch(() => {}); login = null; });
-  on('restart', async () => { await call('runtime.stop'); await call('runtime.start'); }); on('engine-stop', () => call('runtime.stop')); on('logout', () => call('auth.logout'));
+  on('account-add', () => startLogin(true));
+  on('restart', async () => { await call('runtime.stop'); await call('runtime.start'); }); on('engine-stop', () => call('runtime.stop')); on('logout', async () => { if (!C.isLoggedIn(state.account)) return startLogin(false); if (!confirm(t('현재 계정을 이 기기에서 로그아웃할까요?'))) return; await call('auth.logout'); });
   on('usage-refresh', loadUsage);
   ['check','download','cancel','clear','permission','install'].forEach(action => on('update-' + action, () => updateAction(action)));
   $('update-repository').addEventListener('input', () => { updateSourceDirty = true; drawUpdates(updateState); });

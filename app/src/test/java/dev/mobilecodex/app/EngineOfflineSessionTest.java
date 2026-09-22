@@ -170,6 +170,30 @@ public class EngineOfflineSessionTest {
         assertEquals(1, afterFailure.getJSONArray("sessions").length());
         failed.io.shutdownNow();
     }
+    @Test public void exactRequestedModelIsVisibleInThreadInstructionsAndUpdatesOnChange() throws Exception {
+        Engine engine = new Engine(context); loggedIn(engine);
+        java.lang.reflect.Field models = Engine.class.getDeclaredField("models"); models.setAccessible(true);
+        models.set(engine, array(obj("model", "gpt-5.6-sol", "isDefault", true), obj("model", "gpt-6-astra")));
+        java.util.ArrayList<JSONObject> calls = new java.util.ArrayList<>();
+        engine.setTestTransport((method, params) -> {
+            calls.add(obj("method", method, "params", new JSONObject(params.toString())));
+            if (method.equals("thread/start")) return obj("thread", obj("id", "model-thread"));
+            if (method.equals("thread/resume")) return new JSONObject();
+            if (method.equals("turn/start")) return obj("turn", obj("id", "turn-" + calls.size()));
+            throw new AssertionError(method);
+        });
+        handle(engine, "chat.send", obj("text", "which model", "model", "gpt-5.6-sol"));
+        JSONObject started = calls.stream().filter(c -> c.optString("method").equals("thread/start")).findFirst().orElseThrow().getJSONObject("params");
+        assertEquals("gpt-5.6-sol", started.getString("model"));
+        assertTrue(started.getString("developerInstructions").contains("exact model requested for this thread is gpt-5.6-sol"));
+        java.lang.reflect.Field busy = Engine.class.getDeclaredField("busy"); busy.setAccessible(true); busy.setBoolean(engine, false);
+        handle(engine, "chat.send", obj("text", "switch model", "model", "gpt-6-astra"));
+        JSONObject resumed = calls.stream().filter(c -> c.optString("method").equals("thread/resume")).reduce((a,b) -> b).orElseThrow().getJSONObject("params");
+        assertTrue(resumed.getString("developerInstructions").contains("exact model requested for this thread is gpt-6-astra"));
+        JSONObject turn = calls.stream().filter(c -> c.optString("method").equals("turn/start")).reduce((a,b) -> b).orElseThrow().getJSONObject("params");
+        assertEquals("gpt-6-astra", turn.getString("model"));
+        engine.io.shutdownNow();
+    }
     private java.util.Set<String> types(JSONArray input) throws Exception {
         java.util.HashSet<String> out = new java.util.HashSet<>();
         for (int i = 0; i < input.length(); i++) out.add(input.getJSONObject(i).getString("type"));

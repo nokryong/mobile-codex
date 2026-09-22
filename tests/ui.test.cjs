@@ -101,6 +101,31 @@ test('usage never turns missing limits into zero and drops a response from a pre
  assert.match(w.document.getElementById('usage-status').textContent,/계정이 바뀌/);
 });
 
+test('sidebar quota shows remaining percent and opens graphed account details',async()=>{
+ const limits={rateLimits:{primary:{usedPercent:37,windowDurationMins:300,resetsAt:2000000000}}};
+ const {w,snapshot}=setup({'rpc':message=>message.args.method==='account/rateLimits/read'?limits:{data:[]}});await tick();
+ w.mobileCodexEvent('state',{...snapshot,rateLimits:limits,accounts:[{key:'one',email:'me@example.test',planType:'pro',active:true}]});
+ const d=w.document, ring=d.getElementById('quota-ring');
+ assert.equal(d.getElementById('quota-percent').textContent,'63%');assert.equal(ring.style.getPropertyValue('--remaining'),'63');assert.match(ring.getAttribute('aria-label'),/63%/);
+ d.getElementById('account-button').click();await tick();await tick();
+ assert.equal(d.querySelector('[data-settings-panel="account"]').hidden,false);assert.match(d.getElementById('usage-limits').textContent,/남은 63%/);assert.equal(d.querySelectorAll('.usage-gauge .quota-ring').length,1);
+});
+
+test('account profiles can add, switch and remove without exposing credentials',async()=>{
+ const {w,calls,snapshot}=setup({
+   'auth.add':()=>({loginId:'new',verificationUrl:'https://auth.openai.com/codex/device',userCode:'ABCD'}),
+   'auth.switch':()=>({}),'auth.remove':()=>({})
+ });await tick();
+ w.mobileCodexEvent('state',{...snapshot,accounts:[{key:'current',email:'one@example.test',active:true},{key:'other',email:'two@example.test',active:false}],rateLimits:{}});
+ const d=w.document;d.getElementById('account-button').click();await tick();
+ assert.doesNotMatch(d.getElementById('accounts-list').textContent,/access_token|refresh_token/);
+ [...d.querySelectorAll('.account-profile-actions button')].find(button=>button.textContent==='전환').click();await tick();
+ assert.deepEqual(calls.filter(call=>call.action==='auth.switch').at(-1).args,{key:'other'});
+ [...d.querySelectorAll('.account-profile-actions button')].find(button=>button.textContent==='삭제').click();await tick();
+ assert.deepEqual(calls.filter(call=>call.action==='auth.remove').at(-1).args,{key:'other'});
+ d.getElementById('account-add').click();await tick();assert.ok(calls.some(call=>call.action==='auth.add'));assert.equal(d.getElementById('device-code').textContent,'ABCD');
+});
+
 test('a different project cannot inherit the previous project tool cache after a failure',async()=>{
  let offline=false;
  const {w,snapshot}=setup({'rpc':m=>{if(offline)throw new Error('offline');return m.args.method==='skills/list'?{data:[{skills:[{name:'project-only-skill',description:'local',path:'/first/SKILL.md'}]}]}:{data:[],marketplaces:[]};}});await tick();
