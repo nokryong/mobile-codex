@@ -1,6 +1,7 @@
 package dev.mobilecodex.app;
 
 import static dev.mobilecodex.app.core.Texts.t;
+import static dev.mobilecodex.app.core.Json.obj;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import java.io.*;
@@ -39,12 +40,11 @@ final class AccountProfiles {
         for (File directory : entries) {
             if (!validKey(directory.getName()) || !new File(directory, AUTH).isFile()) continue;
             JSONObject metadata = readMetadata(directory);
-            result.put(new JSONObject()
-                .put("key", directory.getName())
-                .put("email", metadata.optString("email"))
-                .put("planType", metadata.optString("planType"))
-                .put("label", label(metadata, directory.getName()))
-                .put("active", directory.getName().equals(active)));
+            result.put(obj("key", directory.getName(),
+                "email", metadata.optString("email"),
+                "planType", metadata.optString("planType"),
+                "label", label(metadata, directory.getName()),
+                "active", directory.getName().equals(active)));
         }
         return result;
     }
@@ -59,12 +59,11 @@ final class AccountProfiles {
         File directory = profileDirectory(key);
         ensureDirectory(directory);
         copyAtomic(liveAuth, new File(directory, AUTH));
-        JSONObject metadata = new JSONObject()
-            .put("email", identity.email)
-            .put("planType", identity.planType)
-            .put("accountId", identity.accountId)
-            .put("subject", identity.subject)
-            .put("updatedAt", System.currentTimeMillis());
+        JSONObject metadata = obj("email", identity.email,
+            "planType", identity.planType,
+            "accountId", identity.accountId,
+            "subject", identity.subject,
+            "updatedAt", System.currentTimeMillis());
         writeAtomic(new File(directory, "profile.json"), metadata.toString());
         writeAtomic(activeFile, key + "\n");
         return publicProfile(key, metadata, true);
@@ -109,8 +108,8 @@ final class AccountProfiles {
     }
 
     private JSONObject publicProfile(String key, JSONObject metadata, boolean active) {
-        return new JSONObject().put("key", key).put("email", metadata.optString("email"))
-            .put("planType", metadata.optString("planType")).put("label", label(metadata, key)).put("active", active);
+        return obj("key", key, "email", metadata.optString("email"),
+            "planType", metadata.optString("planType"), "label", label(metadata, key), "active", active);
     }
 
     private String matchingKey(Identity target) {
