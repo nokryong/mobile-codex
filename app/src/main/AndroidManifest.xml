@@ -37,6 +37,8 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <activity android:name=".ChatWebProbeActivity" android:exported="false"
+            android:windowSoftInputMode="adjustResize" />
         <receiver android:name=".CodexNotificationReceiver" android:exported="false" />
         <activity android:name=".VoiceInputActivity" android:exported="false"
             android:excludeFromRecents="true" android:taskAffinity="" android:enableOnBackInvokedCallback="true" tools:targetApi="33" android:theme="@android:style/Theme.Material.Light.Dialog.NoActionBar" />

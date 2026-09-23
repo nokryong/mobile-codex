@@ -542,6 +542,12 @@ public final class MainActivity extends Activity implements Engine.Ui {
                         catch (Exception e) { respond(id, null, e); }
                     }); return;
                 }
+                if (action.equals("ui.chatWebProbe")) {
+                    runOnUiThread(() -> {
+                        try { startActivity(new Intent(MainActivity.this, ChatWebProbeActivity.class)); respond(id, obj("ok", true), null); }
+                        catch (Exception e) { respond(id, null, e); }
+                    }); return;
+                }
                 if (action.equals("ui.storageAccess")) {
                     runOnUiThread(() -> {
                         try {

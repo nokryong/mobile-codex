@@ -59,6 +59,15 @@
     window.refreshNotificationSettings = refreshNotificationSettings;
     refreshNotificationSettings();
   }
+  function ensureChatWebProbeUi() {
+    const panel = document.querySelector('[data-settings-panel="advanced"]');
+    if (!panel || $('chat-web-probe')) return;
+    const section = node('section', null, 'character-pack-card');
+    section.append(node('h4', t('일반 Chat 전송 실험')),
+      node('p', t('폰 안의 WebView에서 공식 ChatGPT 페이지를 엽니다. 로그인과 검증은 직접 완료해야 합니다. 앱 입력창에서 보내는 경로를 시험하며, 동작은 아직 검증되지 않았습니다.'), 'muted'));
+    const open = button(t('전송 실험 열기'), () => call('ui.chatWebProbe'));
+    open.id = 'chat-web-probe'; section.append(open); panel.append(section);
+  }
   function characterPack(value) { const packs = Array.isArray(value?.packs) ? value.packs : characterState.packs; return packs.find(pack => pack.id === (value?.selectedPackId || characterState.selectedPackId)) || packs.find(pack => pack.id === 'builtin') || packs[0]; }
   function characterVisualKey() { const pack = characterPack(); return characterState.selectedPackId + ':' + JSON.stringify(pack?.icons || {}); }
   function characterErrorText(error) { const text = String(error || ''); for (const prefix of ['아이콘이 없습니다: ', '지원하지 않는 이미지입니다: ']) if (text.startsWith(prefix)) return t(prefix) + text.slice(prefix.length); return t(text); }
@@ -1569,7 +1578,7 @@
   on('permissions', () => setPermissionMode($('permissions').value), 'change');
   on('approval-mode', () => setApprovalMode($('approval-mode').value), 'change');
   document.querySelectorAll('input[name="permission"]').forEach(r => r.addEventListener('change', () => setPermissionMode(r.value).catch(error => toast(error.message))));
-  ensureCharacterPackUi(); ensureNotificationSettings();
+  ensureCharacterPackUi(); ensureNotificationSettings(); ensureChatWebProbeUi();
   on('connect', () => startLogin(false)); on('account-button', openAccountSettings); on('settings', () => { ensureCharacterPackUi(); ensureNotificationSettings(); show('settings-dialog'); sidebar(false); if (!characterState.folderConfigured && characterState.packs.length <= 1) loadCharacterPacks(); });
   document.querySelectorAll('[data-settings-tab]').forEach(tab => tab.addEventListener('click', () => {
     const selected = tab.dataset.settingsTab; selectSettingsTab(selected);

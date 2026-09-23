@@ -41,6 +41,14 @@ test('every wired control exists and initial state renders safely',async()=>{
  assert.match(w.document.getElementById('messages').textContent,/<script>/);
  assert.equal(w.document.getElementById('project-label').textContent,'Project');
 });
+test('advanced settings opens the in-app Chat web transport probe',async()=>{
+ const {w,calls}=setup();await tick();
+ const button=w.document.getElementById('chat-web-probe');
+ assert.ok(button);
+ button.click();await tick();
+ assert.equal(calls.filter(call=>call.action==='ui.chatWebProbe').length,1);
+ assert.match(w.document.querySelector('[data-settings-panel="advanced"]').textContent,/동작은 아직 검증되지 않았습니다/);
+});
 test('submit is cancelled synchronously and calls native with chosen model and effort',async()=>{
  const {w,calls}=setup();await tick();w.document.getElementById('prompt').value='실제 파일 수정';
  const e=new w.Event('submit',{cancelable:true});w.document.getElementById('composer').dispatchEvent(e);
