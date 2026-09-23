@@ -25,6 +25,7 @@ final class ChatWebTransport {
     private boolean pageLoaded;
     private long deadline;
     private long sendStartedAt;
+    private String lastDiagnostic = "";
 
     @SuppressLint("SetJavaScriptEnabled")
     ChatWebTransport(Activity activity, FrameLayout root) {
@@ -74,6 +75,7 @@ final class ChatWebTransport {
         pending = done;
         submittedText = text.trim();
         sendStartedAt = System.currentTimeMillis() / 1000;
+        lastDiagnostic = "";
         clicked = false;
         inserting = false;
         deadline = System.currentTimeMillis() + 600_000;
@@ -117,10 +119,30 @@ final class ChatWebTransport {
     private void requery(int attempt) {
         if (pending == null) return;
         if (expired()) { finish(null, new IllegalStateException("전송 후 답변 저장을 확인하지 못했습니다. 같은 메시지를 다시 보내기 전에 웹 대화를 확인해 주세요.")); return; }
-        String id = conversationId(page.getUrl());
-        if (id.isEmpty()) { retry(() -> requery(attempt + 1), attempt, 150, "대화 주소를 찾지 못했습니다."); return; }
-        String script = requeryScript(id, submittedText, sendStartedAt);
-        page.evaluateJavascript(script, ignored -> pollResult(attempt, 0, id));
+        String inspect = "(function(){return JSON.stringify({path:location.pathname,visibility:document.visibilityState,ready:document.readyState,"
+            + "users:document.querySelectorAll('[data-message-author-role=user]').length,"
+            + "assistants:document.querySelectorAll('[data-message-author-role=assistant]').length,"
+            + "composer:!!document.querySelector('#prompt-textarea'),"
+            + "network:performance.getEntriesByType('resource').filter(x=>x.name.includes('/backend-api/conversation')).slice(-3)"
+            + ".map(x=>({kind:new URL(x.name).pathname.includes('/conversation/')?'read':'send',status:x.responseStatus||0}))})})()";
+        page.evaluateJavascript(inspect, raw -> {
+            if (pending == null) return;
+            JSONObject evidence;
+            try { evidence = new JSONObject(jsString(raw)); }
+            catch (Exception ignored) { evidence = new JSONObject(); }
+            String path = evidence.optString("path", "");
+            String id = conversationId("https://chatgpt.com" + path);
+            if (id.isEmpty()) id = conversationId(page.getUrl());
+            lastDiagnostic = "화면=" + (id.isEmpty() ? ("/".equals(path) ? "첫 화면" : "기타") : "대화")
+                + ", 사용자=" + evidence.optInt("users", -1) + ", 답변=" + evidence.optInt("assistants", -1)
+                + ", 표시=" + evidence.optString("visibility", "?") + ", 준비=" + evidence.optString("ready", "?")
+                + ", 입력창=" + evidence.optBoolean("composer", false)
+                + ", 네트워크=" + evidence.optJSONArray("network");
+            if (id.isEmpty()) { retry(() -> requery(attempt + 1), attempt, 30, "대화 주소를 찾지 못했습니다."); return; }
+            String script = requeryScript(id, submittedText, sendStartedAt);
+            final String foundId = id;
+            page.evaluateJavascript(script, ignored -> pollResult(attempt, 0, foundId));
+        });
     }
 
     private void pollResult(int attempt, int polls, String id) {
@@ -134,8 +156,7 @@ final class ChatWebTransport {
             if ("pending".equals(kind) && polls < 60) { page.postDelayed(() -> pollResult(attempt, polls + 1, id), 250); return; }
             if ("waiting".equals(kind) || "pending".equals(kind)) { page.postDelayed(() -> requery(attempt + 1), 2500); return; }
             if ("ok".equals(kind)) {
-                String url = page.getUrl();
-                if (id.equals(conversationId(url))) activity.getSharedPreferences("general-chat", 0).edit().putString("url", url).apply();
+                activity.getSharedPreferences("general-chat", 0).edit().putString("url", "https://chatgpt.com/c/" + id).apply();
                 finish(result, null); return;
             }
             finish(null, new IllegalStateException(result.optString("reason", "일반 Chat 조회 실패")));
@@ -169,7 +190,7 @@ final class ChatWebTransport {
     }
 
     private void retry(Runnable step, int attempt, int maximum, String error) {
-        if (attempt >= maximum || expired()) finish(null, new IllegalStateException(error));
+        if (attempt >= maximum || expired()) finish(null, new IllegalStateException(error + (lastDiagnostic.isEmpty() ? "" : " [" + lastDiagnostic + "]")));
         else page.postDelayed(step, 500);
     }
 

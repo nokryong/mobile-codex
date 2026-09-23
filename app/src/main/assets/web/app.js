@@ -16,7 +16,7 @@
   let chatIconsEnabled = localStorage.getItem('chat-icons') !== 'off', activityIcon = 'thinking';
   let chatMode = localStorage.getItem('conversation-mode') === 'chat', chatBusy = false;
   let chatMessages = [];
-  try { const saved = JSON.parse(localStorage.getItem('chat-web-messages') || '[]'); if (Array.isArray(saved)) chatMessages = saved.slice(-100); } catch {}
+  try { const saved = JSON.parse(localStorage.getItem('chat-web-messages') || '[]'); if (Array.isArray(saved)) { const failed = new Set(saved.filter(x => x.id?.endsWith('-error')).map(x => x.id.slice(0, -6))); chatMessages = saved.filter(x => !failed.has(x.id) && !x.id?.endsWith('-error')).slice(-100); } } catch {}
   let chatModel = localStorage.getItem('chat-web-model') || '';
   let characterState = {folderName:'', folderConfigured:false, selectedPackId:'builtin', packs:[{id:'builtin',name:'Builtin',valid:true,icons:{}}]};
   let instructionsOriginal = '', instructionsLoaded = false, instructionsSaving = false, devtoolsCheckResult = null, devtoolsCheckSummary = '', devtoolsChecking = false, usageLoading = false, accountActionStatus = {text:'', error:false};
@@ -851,6 +851,7 @@
     $('activity-text').textContent = 'ChatGPT 답변 기다리는 중';
     $('stop').hidden = true;
     $('file-panel').hidden = true;
+    $('chat-error').hidden = true;
     hideAutocomplete();
     renderDraftContext();
     drawMessages(); updateSend(); sizeComposer();
@@ -867,6 +868,7 @@
       renderChatMode();
       call('chat.web.prepare').catch(error => toast(error.message));
     } else {
+      $('chat-error').hidden = true;
       render(state);
       try { $('prompt').value = localStorage.getItem(draftScope) || ''; } catch { $('prompt').value = ''; }
       $('welcome-title').textContent = '어떤 작업을 할까요?';
@@ -881,7 +883,7 @@
     if (chatMode) {
       if (chatBusy) throw new Error('ChatGPT 답변을 기다리는 중입니다.');
       await call('chat.web.new'); chatMessages = []; persistChatMessages();
-      $('prompt').value = ''; saveDraft(); renderChatMode(); sidebar(false); return;
+      $('prompt').value = ''; saveDraft(); renderChatMode(); $('chat-error').hidden = true; sidebar(false); return;
     }
     await call('chat.new', {workspaceKey:workspaceKey || ''}); sidebar(false);
   }
@@ -1580,6 +1582,7 @@
       if (!text || chatBusy) return;
       const id = 'chat-' + Date.now() + '-' + Math.random().toString(36).slice(2);
       chatBusy = true;
+      $('chat-error').hidden = true;
       chatMessages.push({id, role:'user', text});
       $('welcome').hidden = true; $('activity').hidden = false;
       drawMessages(); updateSend(); scrollLatest();
@@ -1593,8 +1596,8 @@
         persistChatMessages();
         if (chatMode && $('prompt').value === value) { $('prompt').value = ''; saveDraft(); }
       } catch (error) {
-        chatMessages.push({id:id + '-error', role:'assistant', text:'전송 또는 답변 저장 확인에 실패했습니다: ' + error.message});
-        persistChatMessages();
+        chatMessages = chatMessages.filter(message => message.id !== id);
+        if (chatMode) { $('chat-error').textContent = '전송 또는 답변 저장 확인에 실패했습니다. 같은 메시지를 다시 보내기 전에 웹 대화를 확인해 주세요. ' + error.message; $('chat-error').hidden = false; }
         throw error;
       } finally {
         chatBusy = false;

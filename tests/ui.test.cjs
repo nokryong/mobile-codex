@@ -71,6 +71,15 @@ test('Chat switch routes the same composer to ordinary Chat and restores the Cod
  assert.equal(prompt.value,'Codex 초안');
  assert.doesNotMatch(d.getElementById('messages').textContent,/일반 Chat 답변/);
 });
+test('failed Chat verification keeps the draft and shows an error outside the assistant transcript',async()=>{
+ const {w,calls}=setup({'chat.web.send':()=>{throw new Error('대화 주소를 찾지 못했습니다. [화면=첫 화면]');}});await tick();
+ const d=w.document;d.getElementById('mode-chat').click();await tick();
+ const prompt=d.getElementById('prompt');prompt.value='아 난넝';d.getElementById('composer').dispatchEvent(new w.Event('submit',{cancelable:true}));await tick();
+ assert.equal(calls.filter(x=>x.action==='chat.web.send').length,1);
+ assert.equal(prompt.value,'아 난넝');
+ assert.equal(d.querySelectorAll('#messages .message.assistant').length,0);
+ assert.match(d.getElementById('chat-error').textContent,/대화 주소를 찾지 못했습니다/);
+});
 test('composer exposes approval review beside the model without changing file access',async()=>{
  const {w,calls,snapshot}=setup({'approvals.set':()=>({ok:true})});await tick();
  const select=w.document.getElementById('approval-mode');assert.equal(select.value,'auto-review');
