@@ -132,16 +132,18 @@ public final class ChatWebProbeActivity extends Activity {
             + "if(Array.isArray(v))return v.length?[shape(v[0],d+1)]:[];"
             + "if(v&&typeof v==='object'){const o={};for(const k of Object.keys(v).slice(0,25))o[k]=/token|cookie|password|secret|proof|captcha|arkose|authorization/i.test(k)?'[redacted]':shape(v[k],d+1);return o;}return typeof v;};"
             + "const bodyShape=b=>{if(b==null)return 'none';if(typeof b==='string'){try{return shape(JSON.parse(b));}catch{return 'string';}}return shape(b);};"
+            + "const headerNames=h=>{try{return [...new Headers(h||{}).keys()].slice(0,30);}catch{return [];}};"
             + "const path=u=>u.pathname.replace(/[0-9a-f]{8}-[0-9a-f-]{27,}/ig,':id').replace(/\\/[A-Za-z0-9_-]{32,}(?=\\/|$)/g,'/:id');"
             + "const add=(method,url,body)=>{try{const u=new URL(url,location.href);if(u.host!==location.host||method==='GET'||!u.pathname.startsWith('/backend-api/'))return null;"
-            + "const r={method,path:path(u),body:bodyShape(body),status:'pending'};window.__mcProtocol.push(r);if(window.__mcProtocol.length>20)window.__mcProtocol.shift();return r;}catch{return null;}};"
+            + "const r={method,path:path(u),body:bodyShape(body),headers:[],status:'pending'};window.__mcProtocol.push(r);if(window.__mcProtocol.length>20)window.__mcProtocol.shift();return r;}catch{return null;}};"
             + "const fetch0=window.fetch;window.fetch=function(input,init){const method=String((init&&init.method)||(input&&input.method)||'GET').toUpperCase();"
-            + "const url=typeof input==='string'?input:(input&&input.url)||'';const body=init&&init.body;const r=add(method,url,body);"
+            + "const url=typeof input==='string'?input:(input&&input.url)||'';const body=init&&init.body;const r=add(method,url,body);if(r)r.headers=headerNames((init&&init.headers)||(input&&input.headers));"
             + "if(r&&body==null&&input instanceof Request)input.clone().text().then(s=>{r.body=bodyShape(s);}).catch(()=>{});"
-            + "const p=fetch0.apply(this,arguments);return r?p.then(v=>{r.status=v.status;return v;},e=>{r.status=e.name||'error';throw e;}):p;};"
+            + "const p=fetch0.apply(this,arguments);return r?p.then(v=>{r.status=v.status;r.contentType=(v.headers&&v.headers.get('content-type')||'').split(';')[0];r.requestId=v.headers&&v.headers.get('x-request-id')||'';"
+            + "if(!v.ok)v.clone().json().then(j=>{r.errorCode=String((j.error&&j.error.code)||j.code||'').slice(0,80);}).catch(()=>{});return v;},e=>{r.status=e.name||'error';throw e;}):p;};"
             + "const open0=XMLHttpRequest.prototype.open,send0=XMLHttpRequest.prototype.send;"
             + "XMLHttpRequest.prototype.open=function(method,url){this.__mcMethod=String(method).toUpperCase();this.__mcUrl=url;return open0.apply(this,arguments);};"
-            + "XMLHttpRequest.prototype.send=function(body){const r=add(this.__mcMethod||'GET',this.__mcUrl||'',body);if(r)this.addEventListener('loadend',()=>{r.status=this.status;},{once:true});return send0.apply(this,arguments);};"
+            + "XMLHttpRequest.prototype.send=function(body){const r=add(this.__mcMethod||'GET',this.__mcUrl||'',body);if(r)this.addEventListener('loadend',()=>{r.status=this.status;r.contentType=(this.getResponseHeader('content-type')||'').split(';')[0];r.requestId=this.getResponseHeader('x-request-id')||'';},{once:true});return send0.apply(this,arguments);};"
             + "return 'armed';})()";
     }
 
@@ -164,7 +166,10 @@ public final class ChatWebProbeActivity extends Activity {
                     JSONObject item = entries.optJSONObject(i);
                     if (item != null) shown.append(item.optString("method")).append(' ').append(item.optString("path"))
                         .append(" · HTTP ").append(item.optString("status")).append(" · fields=")
-                        .append(item.opt("body")).append('\n');
+                        .append(item.opt("body")).append(" · headers=").append(item.opt("headers"))
+                        .append(" · type=").append(item.optString("contentType"))
+                        .append(" · error=").append(item.optString("errorCode"))
+                        .append(" · requestId=").append(item.optString("requestId")).append('\n');
                 }
             } catch (Exception ignored) { shown.append("웹 진단을 읽지 못했습니다.\n"); }
             synchronized (nativeRequestPaths) {
