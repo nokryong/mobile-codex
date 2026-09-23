@@ -105,7 +105,7 @@ final class ChatWebTransport {
 
     /** Observes only the official client's request outcome and conversation ID, never credentials or proofs. */
     static String sendObserverScript() {
-        return "window.__mcChatObserved={id:'',sendStatus:0,prepareStatus:0};"
+        return "window.__mcChatObserved={id:'',sendStatus:0,prepareStatus:0,active:false};"
             + "if(!window.__mcChatFetchObserved){const original=window.fetch;"
             + "window.fetch=function(input,init){const result=original.apply(this,arguments);try{"
             + "const u=new URL(typeof input==='string'?input:input.url,location.href);"
@@ -113,6 +113,7 @@ final class ChatWebTransport {
             + "if(u.origin===location.origin&&method.toUpperCase()==='POST'"
             + "&&(u.pathname==='/backend-api/f/conversation'||u.pathname==='/backend-api/f/conversation/prepare')){"
             + "const observed=window.__mcChatObserved,prepare=u.pathname.endsWith('/prepare');"
+            + "if(!observed||!observed.active)return result;"
             + "const record=body=>{try{const id=JSON.parse(body).conversation_id;"
             + "if(typeof id==='string'&&/^[0-9a-fA-F-]{36}$/.test(id))observed.id=id;}catch(e){}};"
             + "if(init&&typeof init.body==='string')record(init.body);"
@@ -125,7 +126,7 @@ final class ChatWebTransport {
         if (pending == null || clicked) return;
         String script = "(function(){const b=document.querySelector('#composer-submit-button,[data-testid=\"send-button\"]');"
             + "if(!b)return 'missing';if(b.disabled||b.getAttribute('aria-disabled')==='true')return 'disabled';"
-            + "b.click();return 'clicked'})()";
+            + "if(window.__mcChatObserved)window.__mcChatObserved.active=true;b.click();return 'clicked'})()";
         page.evaluateJavascript(script, raw -> {
             if (pending == null || clicked) return;
             String outcome = jsString(raw);
