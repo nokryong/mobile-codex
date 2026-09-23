@@ -23,6 +23,7 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.HashSet;
+import java.util.Iterator;
 
 /** On-device experiment: user-authenticated ChatGPT web page with a Mobile Codex input. */
 public final class ChatWebProbeActivity extends Activity {
@@ -179,7 +180,7 @@ public final class ChatWebProbeActivity extends Activity {
         HttpURLConnection connection = null;
         try {
             FileHome home = new FileHome();
-            JSONObject auth = new JSONObject(Files.readString(home.authFile.toPath(), StandardCharsets.UTF_8));
+            JSONObject auth = new JSONObject(new String(Files.readAllBytes(home.authFile.toPath()), StandardCharsets.UTF_8));
             String token = auth.getJSONObject("tokens").getString("access_token");
             URL url = new URL("https://chatgpt.com/backend-api/conversation/" + id);
             connection = (HttpURLConnection) url.openConnection();
@@ -200,7 +201,8 @@ public final class ChatWebProbeActivity extends Activity {
             }
             JSONObject mapping = conversation.optJSONObject("mapping");
             String matchingUserNode = "";
-            if (mapping != null) for (String key : mapping.keySet()) {
+            if (mapping != null) for (Iterator<String> keys = mapping.keys(); keys.hasNext();) {
+                String key = keys.next();
                 JSONObject node = mapping.optJSONObject(key), message = node == null ? null : node.optJSONObject("message");
                 if (message == null) continue;
                 String role = message.optJSONObject("author") == null ? "" : message.optJSONObject("author").optString("role");
@@ -212,7 +214,8 @@ public final class ChatWebProbeActivity extends Activity {
             }
             boolean answerLinked = false;
             String answerModel = "";
-            if (mapping != null && !matchingUserNode.isEmpty()) for (String key : mapping.keySet()) {
+            if (mapping != null && !matchingUserNode.isEmpty()) for (Iterator<String> keys = mapping.keys(); keys.hasNext();) {
+                String key = keys.next();
                 JSONObject node = mapping.optJSONObject(key), message = node == null ? null : node.optJSONObject("message");
                 if (message == null || message.optJSONObject("author") == null
                     || !"assistant".equals(message.optJSONObject("author").optString("role"))
