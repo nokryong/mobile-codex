@@ -1,3 +1,9 @@
+# Verification — current scope
+
+The current app metadata is `0.1.25-alpha` (`versionCode 26`, ARM64, Android 10+). The automated records below are historical entries for the versions named in their headings; they are not evidence of current physical-device behavior. Current release availability is tracked in the public [Releases](https://github.com/nokryong/mobile-codex/releases) page and current workflow results in [Actions](https://github.com/nokryong/mobile-codex/actions/workflows/android.yml).
+
+Physical Android login, WebView behavior, SAF folder access, and device-specific performance remain outside this document's automated browser/build evidence unless an entry explicitly says otherwise. Do not treat an account-security or device-login prompt alone as a confirmed app defect; report the exact prompt and screen when opening an issue.
+
 # Verification — 0.1.13 alpha
 
 상단 바·입력창·바텀시트와 라이트·다크 테마를 정리했습니다. Android 시스템 바·키보드 inset 처리는 기존 네이티브 레이아웃이 계속 담당합니다. 스와이프 닫기는 시트 손잡이에서만 시작하고, 짧은 드래그·취소·미저장 지침 확인을 처리합니다. 승인 요청 창에는 드래그 닫기를 넣지 않습니다.

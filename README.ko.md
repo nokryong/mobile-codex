@@ -1,13 +1,5 @@
 # Mobile Codex
 
-<p align="center"><img src="app/src/main/assets/web/codex-logo.png" alt="Mobile Codex 로고" width="144" /></p>
-
-<p>
-  <img width="24%" alt="General chat" src="https://github.com/user-attachments/assets/14dd8782-58eb-4784-96bc-aaa190adfa87" />
-  <img width="24%" alt="Git clone" src="https://github.com/user-attachments/assets/84b311d7-c584-4107-a09e-07862b11797d" />
-  <img width="24%" alt="Skill selection" src="https://github.com/user-attachments/assets/e2ca66de-9ac6-4044-89c5-4daf41c8e308" />
-  <img width="24%" alt="Image generation" src="https://github.com/user-attachments/assets/7beb3213-9051-4fc8-9051-40ff5fc45a5a" />
-</p>
 ## 설치 전에 확인하세요
 
 Play 프로텍트가 APK 설치를 막는 경우, 다음 순서로 잠시 설정을 바꾸세요.
@@ -21,11 +13,20 @@ APK를 여는 앱에서 **이 출처 허용**을 별도로 요구할 수 있습�
 
 [English](README.md) · **한국어**
 
+<p align="center"><img src="app/src/main/assets/web/codex-logo.png" alt="Mobile Codex 로고" width="144" /></p>
+
+<p>
+  <img width="24%" alt="General chat" src="https://github.com/user-attachments/assets/14dd8782-58eb-4784-96bc-aaa190adfa87" />
+  <img width="24%" alt="Git clone" src="https://github.com/user-attachments/assets/84b311d7-c584-4107-a09e-07862b11797d" />
+  <img width="24%" alt="Skill selection" src="https://github.com/user-attachments/assets/e2ca66de-9ac6-4044-89c5-4daf41c8e308" />
+  <img width="24%" alt="Image generation" src="https://github.com/user-attachments/assets/7beb3213-9051-4fc8-9051-40ff5fc45a5a" />
+</p>
+
 **Android 휴대폰과 태블릿에서, 대화부터 파일 작업과 코드 실행까지.**
 
 Codex 데스크톱의 작업 방식을 모바일로 옮기는 개인용 클라이언트입니다. Codex 실행 엔진과 Python·Node.js·Git을 APK에 포함해, Termux 설치나 별도 PC 서버 없이 기기에서 바로 작업할 수 있습니다.
 
-**0.1.19 alpha** · **ARM64 / Android 10 이상** · 제작 [nokryong](https://github.com/nokryong)
+**0.1.25 alpha** · **ARM64 / Android 10 이상** · 제작 [nokryong](https://github.com/nokryong)
 
 [APK 다운로드](https://github.com/nokryong/mobile-codex/releases) · [개발 빌드](https://github.com/nokryong/mobile-codex/actions/workflows/android.yml) · [문제 제보](https://github.com/nokryong/mobile-codex/issues)
 
@@ -59,7 +60,7 @@ Codex 데스크톱의 작업 방식을 모바일로 옮기는 개인용 클라�
 
 | Actions 산출물 | 용도 |
 | --- | --- |
-| **`mobile-codex-update-assets`** | **설치할 때 받을 파일.** ZIP을 풀면 `mobile-codex-0.1.22-alpha-arm64.apk`와 검증 파일이 나옵니다. |
+| **`mobile-codex-update-assets`** | **설치할 때 받을 파일.** ZIP을 풀면 `mobile-codex-0.1.25-alpha-arm64.apk`와 검증 파일이 나옵니다. |
 | `mobile-codex-arm64-debug` | APK·런타임 정보·개발 도구의 대응 소스를 함께 담은 큰 묶음입니다. |
 | `check-reports` | 테스트·Lint 결과와 브라우저 화면 검사·스크린샷입니다. 설치 파일은 없습니다. |
 
@@ -112,7 +113,7 @@ Android 10은 화면 요소를 읽고, Android 11 이상은 스크린샷도 사�
 - **이미지:** 여러 결과를 갤러리로 묶어 확대·넘기기·개별 원본 저장을 제공합니다. 생성 기능의 사용 가능 여부는 엔진과 계정에 따릅니다.
 - **맞춤 지침:** 설정에서 언어·말투·작업 규칙을 편집합니다. 실제 Codex 전역 지침 파일에 저장하고 다음 요청부터 다시 읽습니다.
 - **대화 아이콘:** 설정 → 일반에서 캐릭터 표시를 켜거나 끕니다. 생성 이미지와 첨부 사진에는 영향을 주지 않습니다.
-- **로컬 캐릭터 팩:** 앱에서 `character-packs` 루트 폴더를 먼저 선택합니다. `Documents/MobileCodex/character-packs`는 예시일 뿐 어느 일반 폴더든 연결할 수 있습니다. 루트 아래 팩 폴더에 32개 이미지를 복사하고 `mapping.json`을 둔 뒤 새로고침하고 팩을 선택하세요. 파일을 바꾸거나 삭제한 뒤에도 새로고침하며, 접근 권한을 잃으면 루트 폴더를 다시 선택하세요. [32개 상태 전체 예제](docs/examples/character-pack-default/README.md)를 참고하세요.
+- **로컬 캐릭터 팩:** **설정 → 일반**에서 `character-packs` 루트 폴더를 한 번 선택합니다. `Documents/MobileCodex/character-packs`는 예시일 뿐 어느 일반 폴더든 연결할 수 있습니다. 루트 아래 팩 폴더에 32개 이미지를 복사하고 `mapping.json`을 둔 뒤 새로고침하고 목록에서 팩을 선택하세요. 파일을 바꾸거나 삭제한 뒤에도 새로고침하며, 접근 권한을 잃으면 루트 폴더를 다시 선택하세요. 각 팩은 `mapping.json`으로 32개 기본 상태 키를 연결하며 PNG·WebP는 파일당 4 MiB 이하, 가로·세로 각각 2048px 이하이어야 합니다. [32개 상태 전체 예제](docs/examples/character-pack-default/README.md)를 참고하세요.
 - **도구 진단:** 설정 → 도구 → **도구 실행 확인**에서 Python·Node.js·Git 등의 실행 상태를 로그인 없이 확인합니다.
 
 ## Android에서 알아둘 점

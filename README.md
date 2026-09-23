@@ -1,13 +1,5 @@
 # Mobile Codex
 
-<p align="center"><img src="app/src/main/assets/web/codex-logo.png" alt="Mobile Codex logo" width="144" /></p>
-
-<p>
-  <img width="24%" alt="General chat" src="https://github.com/user-attachments/assets/14dd8782-58eb-4784-96bc-aaa190adfa87" />
-  <img width="24%" alt="Git clone" src="https://github.com/user-attachments/assets/84b311d7-c584-4107-a09e-07862b11797d" />
-  <img width="24%" alt="Skill selection" src="https://github.com/user-attachments/assets/e2ca66de-9ac6-4044-89c5-4daf41c8e308" />
-  <img width="24%" alt="Image generation" src="https://github.com/user-attachments/assets/7beb3213-9051-4fc8-9051-40ff5fc45a5a" />
-</p>
 ## Before installing
 
 If Play Protect blocks the APK installation, follow these steps temporarily:
@@ -21,11 +13,20 @@ The APK-opening app may separately require **Allow from this source**. Menu name
 
 **English** · [한국어](README.ko.md)
 
+<p align="center"><img src="app/src/main/assets/web/codex-logo.png" alt="Mobile Codex logo" width="144" /></p>
+
+<p>
+  <img width="24%" alt="General chat" src="https://github.com/user-attachments/assets/14dd8782-58eb-4784-96bc-aaa190adfa87" />
+  <img width="24%" alt="Git clone" src="https://github.com/user-attachments/assets/84b311d7-c584-4107-a09e-07862b11797d" />
+  <img width="24%" alt="Skill selection" src="https://github.com/user-attachments/assets/e2ca66de-9ac6-4044-89c5-4daf41c8e308" />
+  <img width="24%" alt="Image generation" src="https://github.com/user-attachments/assets/7beb3213-9051-4fc8-9051-40ff5fc45a5a" />
+</p>
+
 **Use Codex on your Android phone or tablet, with files and tools running on the device.**
 
 Mobile Codex is an independent Android client built around the Codex app-server. It bundles an Android port of Codex, Python, Node.js, and Git, so you do not need to install Termux or keep a separate PC server running.
 
-**0.1.19 alpha** · **ARM64 / Android 10+** · Created by [nokryong](https://github.com/nokryong)
+**0.1.25 alpha** · **ARM64 / Android 10+** · Created by [nokryong](https://github.com/nokryong)
 
 [Download APK](https://github.com/nokryong/mobile-codex/releases) · [Builds](https://github.com/nokryong/mobile-codex/actions/workflows/android.yml) · [Report an issue](https://github.com/nokryong/mobile-codex/issues)
 
@@ -114,7 +115,7 @@ Recognition uses the device’s configured speech service, which may use externa
 - Generated images appear in a gallery with individual original-file downloads. Generation availability depends on the runtime and account.
 - Custom instructions are saved to Codex’s global instruction file and read from the next request.
 - Chat character icons can be disabled in General settings without affecting attached/generated images.
-- **Local character packs:** Choose a `character-packs` root folder in the app. `Documents/MobileCodex/character-packs` is only an example; select the root, choose a pack beneath it, refresh after file changes, and reselect the root if permission is lost. See the [complete 32-state example](docs/examples/character-pack-default/README.md).
+- **Local character packs:** In **Settings → General**, choose one `character-packs` root folder in the app. `Documents/MobileCodex/character-packs` is only an example; create a pack beneath the selected root, refresh the list, then select the pack. Refresh after file changes, and reselect the root if permission is lost. Each pack maps the 32 built-in state keys through `mapping.json`; PNG and WebP files must be at most 4 MiB and 2048 px on each side. See the [complete 32-state example](docs/examples/character-pack-default/README.md).
 - **Settings → Tools → Check tools** verifies bundled tool execution without requiring sign-in.
 
 ## Android limitations
