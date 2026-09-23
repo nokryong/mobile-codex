@@ -834,13 +834,30 @@
   function persistChatMessages() {
     chatMessages = chatMessages.slice(-100);
     try { localStorage.setItem('chat-web-messages', JSON.stringify(chatMessages)); } catch { toast('Chat 대화의 기기 내 표시 기록을 저장하지 못했습니다.'); }
+    renderChatSidebar();
   }
-  function renderChatMode() {
+  function renderModeChrome() {
     document.body.classList.toggle('chat-mode', chatMode);
     $('mode-chat').setAttribute('aria-pressed', String(chatMode));
     $('mode-codex').setAttribute('aria-pressed', String(!chatMode));
-    $('header-project').textContent = chatMode ? 'Chat' : $('header-project').textContent;
-    $('header-title').textContent = chatMode ? 'ChatGPT' : $('header-title').textContent;
+    $('sidebar-brand-name').textContent = chatMode ? 'ChatGPT' : 'Codex';
+    $('new-chat').setAttribute('aria-label', chatMode ? '새 Chat 대화' : '새 Codex 대화');
+  }
+  function renderChatSidebar() {
+    const list = $('chat-sessions'); list.replaceChildren();
+    const first = chatMessages.find(message => message.role === 'user' && message.text?.trim());
+    const title = first ? first.text.trim().slice(0, 70) : '새 Chat 대화';
+    const row = node('div', null, 'session-row active');
+    const current = button('', () => sidebar(false), 'session active');
+    current.append(node('span', title, 'session-title'));
+    current.setAttribute('aria-current', 'page');
+    row.append(current); list.append(row);
+  }
+  function renderChatMode() {
+    renderModeChrome();
+    $('header-project').textContent = 'Chat';
+    $('header-title').textContent = 'ChatGPT';
+    renderChatSidebar();
     $('welcome').hidden = chatMessages.length > 0;
     $('welcome-title').textContent = '무엇이든 물어보세요';
     $('welcome-description').textContent = '일반 ChatGPT 대화입니다. 아래 입력창에서 보내고 답변을 받습니다.';
@@ -862,6 +879,7 @@
     saveDraft();
     chatMode = next;
     try { localStorage.setItem('conversation-mode', chatMode ? 'chat' : 'codex'); } catch {}
+    renderModeChrome();
     $('messages').replaceChildren(); following = true;
     if (chatMode) {
       try { $('prompt').value = localStorage.getItem('chat-web-draft') || ''; } catch { $('prompt').value = ''; }
@@ -1560,6 +1578,7 @@
   document.querySelectorAll('[data-prompt]').forEach(b => b.addEventListener('click', () => { $('prompt').value = b.dataset.prompt; saveDraft(); sizeComposer(); $('prompt').focus(); }));
   on('mode-chat', () => switchMode('chat'));
   on('mode-codex', () => switchMode('codex'));
+  on('chat-login', () => call('ui.chatWebProbe'));
   on('chat-model-settings', () => call('ui.chatWebProbe'));
   on('scrim', () => sidebar(false)); on('new-chat', async () => newChat(''));
   ['add-project', 'choose-folder', 'composer-folder'].forEach(id => on(id, () => pickFolder()));

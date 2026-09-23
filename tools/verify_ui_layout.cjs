@@ -92,6 +92,34 @@ async function checkSidebar(page,width) {
  if(width!==320 && await page.evaluate(()=>document.body.classList.contains('sidebar-open'))) { await page.locator('#sidebar .sidebar-toggle').click();await page.waitForTimeout(180); }
  return values;
 }
+async function checkModeSwitch(page,width,theme) {
+ await page.locator('#mode-chat').click();
+ assert.equal(await page.locator('body').evaluate(el=>el.classList.contains('chat-mode')),true);
+ assert.equal(await page.locator('#mode-chat').getAttribute('aria-pressed'),'true');
+ assert.equal(await page.locator('#chat-model-settings').isVisible(),true);
+ assert.equal(await page.locator('#composer-options').isVisible(),false);
+ await page.locator('.topbar .sidebar-toggle').click();await page.waitForTimeout(180);
+ assert.equal(await page.locator('#chat-sidebar').isVisible(),true);
+ assert.equal(await page.locator('#projects').isVisible(),false);
+ assert.equal(await page.locator('#sessions').isVisible(),false);
+ assert.equal(await page.locator('#chat-login').isVisible(),true);
+ assert.equal(await page.locator('#account-button').isVisible(),false);
+ await page.screenshot({path:path.join(output,`chat-mode-sidebar-${width}-${theme}.png`)});
+ await page.locator('#sidebar .sidebar-toggle').click();await page.waitForTimeout(180);
+ await page.locator('#mode-codex').click();
+ assert.equal(await page.locator('body').evaluate(el=>el.classList.contains('chat-mode')),false);
+ assert.equal(await page.locator('#mode-codex').getAttribute('aria-pressed'),'true');
+ assert.equal(await page.locator('#composer-options').isVisible(),true);
+ assert.equal(await page.locator('#chat-model-settings').isVisible(),false);
+ await page.locator('.topbar .sidebar-toggle').click();await page.waitForTimeout(180);
+ assert.equal(await page.locator('#chat-sidebar').isVisible(),false);
+ assert.equal(await page.locator('#projects').isVisible(),true);
+ assert.equal(await page.locator('#sessions').isVisible(),true);
+ assert.equal(await page.locator('#account-button').isVisible(),true);
+ assert.equal(await page.locator('#chat-login').isVisible(),false);
+ await page.screenshot({path:path.join(output,`codex-return-sidebar-${width}-${theme}.png`)});
+ await page.locator('#sidebar .sidebar-toggle').click();await page.waitForTimeout(180);
+}
 (async()=>{
  const browser=await chromium.launch({headless:true,executablePath:process.env.MOBILE_CODEX_BROWSER_EXECUTABLE||undefined,args:['--no-sandbox','--disable-dev-shm-usage']});
  const results=[];
@@ -107,6 +135,7 @@ async function checkSidebar(page,width) {
    assert.ok(fileHeader.y>=header.y+header.height-1,'File panel hidden under header');
    if(width>760)await checkComposer(page);
    await page.locator('#file-close').click();
+   if(width<=393)await checkModeSwitch(page,width,theme);
    if(width===393){
     // Exercise the actual user path into Settings, then drag its handle.
     await page.locator('.topbar .sidebar-toggle').click();await page.locator('#settings').click();
@@ -135,7 +164,7 @@ async function checkSidebar(page,width) {
   assert.equal(await page.locator('#send').evaluate(el=>getComputedStyle(el).transitionDuration),'0s');
   await page.screenshot({path:path.join(output,'options-reduced-motion.png')});await context.close();
   const sourceGitDiffHash=crypto.createHash('sha256').update(execFileSync('git',['diff','--no-ext-diff'],{cwd:root,encoding:'utf8'})).digest('hex');
-  fs.writeFileSync(path.join(output,'layout-results.json'),JSON.stringify({sourceTimestamp:new Date().toISOString(),sourceGitDiffHash,viewports:results,assertions:'composer bounds, sidebar long-label action columns, 44px targets, settings visibility, file panel, keyboard resize, reduced motion'},null,2));
+  fs.writeFileSync(path.join(output,'layout-results.json'),JSON.stringify({sourceTimestamp:new Date().toISOString(),sourceGitDiffHash,viewports:results,assertions:'composer bounds, Chat and Codex round-trip with distinct sidebars, sidebar long-label action columns, 44px targets, settings visibility, file panel, keyboard resize, reduced motion'},null,2));
   console.log('Browser layouts passed: 320/393/800/1280px, light/dark, English/Korean, resized keyboard, sheet drag and reduced motion.');
  } finally {await browser.close();}
 })().catch(error=>{console.error(error);process.exitCode=1;});

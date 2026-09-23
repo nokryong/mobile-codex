@@ -833,5 +833,12 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-vis
 .chat-error{max-width:780px;margin:12px auto;padding:12px 15px;border:1px solid var(--danger);border-radius:12px;color:var(--danger);background:var(--bg);font-size:13px;line-height:1.6;overflow-wrap:anywhere}
 body.chat-mode #files-toggle,body.chat-mode #composer-folder,body.chat-mode #composer-options,body.chat-mode #approval-mode,body.chat-mode #add-attachment,body.chat-mode #stop,body.chat-mode #onboarding,body.chat-mode #suggestions,body.chat-mode #draft-context,body.chat-mode #autocomplete,body.chat-mode #projects,body.chat-mode #sessions,body.chat-mode .sidebar-scroll>.section-title{display:none!important}
 body.chat-mode #chat-model-settings{display:flex!important}
+body:not(.chat-mode) #chat-model-settings{display:none!important}
+/* Keep the two modes' navigation and account controls distinct. */
+#chat-sidebar,#chat-login{display:none!important}
+body.chat-mode #chat-sidebar{display:block!important}
+body.chat-mode #chat-login{display:flex!important}
+body.chat-mode #show-tools,body.chat-mode #account-button{display:none!important}
+body.chat-mode .sidebar-top .brand img,body.chat-mode .sidebar-top .mobile-tag{display:none}
 @media(max-width:760px){.mode-switch button{min-width:67px;min-height:38px;padding:7px 11px}.topbar-left{max-width:calc(50% - 77px)}body.chat-mode #header-project{display:none}}
 @media(max-width:360px){.mode-switch button{min-width:57px;padding:6px 8px;font-size:12px}}
