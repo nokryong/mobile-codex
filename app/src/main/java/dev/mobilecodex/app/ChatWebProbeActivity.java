@@ -2,6 +2,8 @@ package dev.mobilecodex.app;
 
 import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.graphics.Color;
 import android.os.Bundle;
 import android.view.inputmethod.InputMethodManager;
@@ -103,6 +105,8 @@ public final class ChatWebProbeActivity extends Activity {
         root.addView(requeryButton);
         Button inspectButton = new Button(this); inspectButton.setText("전송 경로 진단 갱신");
         inspectButton.setOnClickListener(v -> displayProtocol()); root.addView(inspectButton);
+        Button copyButton = new Button(this); copyButton.setText("비밀값 제외 진단 복사");
+        copyButton.setOnClickListener(v -> displayProtocol(true)); root.addView(copyButton);
         root.addView(page, new LinearLayout.LayoutParams(-1, 0, 1));
         LinearLayout composer = new LinearLayout(this);
         input = new EditText(this); input.setSingleLine(false); input.setMinLines(1); input.setMaxLines(3);
@@ -121,7 +125,8 @@ public final class ChatWebProbeActivity extends Activity {
 
     private static String safePath(String path) {
         return path.replaceAll("[0-9a-fA-F]{8}-[0-9a-fA-F-]{27,}", ":id")
-            .replaceAll("/[A-Za-z0-9_-]{32,}(?=/|$)", "/:id");
+            .replaceAll("/[A-Za-z0-9_-]{32,}(?=/|$)", "/:id")
+            .replaceAll("[^/]+@[^/]+", ":account");
     }
 
     private static String protocolCaptureScript() {
@@ -130,20 +135,20 @@ public final class ChatWebProbeActivity extends Activity {
             + "if(v instanceof FormData)return Object.fromEntries([...v.keys()].slice(0,25).map(k=>[k,'form-field']));"
             + "if(v instanceof URLSearchParams)return Object.fromEntries([...v.keys()].slice(0,25).map(k=>[k,'parameter']));"
             + "if(Array.isArray(v))return v.length?[shape(v[0],d+1)]:[];"
-            + "if(v&&typeof v==='object'){const o={};for(const k of Object.keys(v).slice(0,25)){const value=v[k];"
-            + "o[k]=/token|cookie|password|secret|proof|captcha|arkose|authorization/i.test(k)?'[redacted]':"
+            + "if(v&&typeof v==='object'){const o={};for(const k of Object.keys(v).slice(0,25)){const value=v[k],name=/^[A-Za-z_][A-Za-z0-9_-]{0,63}$/.test(k)?k:'[other-field]';"
+            + "o[name]=/token|cookie|password|secret|proof|captcha|arkose|authorization/i.test(k)?'[redacted]':"
             + "(/^(action|model|role|content_type|recipient|conversation_mode)$/.test(k)&&typeof value==='string'&&/^[A-Za-z0-9_.-]{1,80}$/.test(value))?value:"
             + "(k==='stream'&&typeof value==='boolean')?value:shape(value,d+1);}return o;}return typeof v;};"
             + "const bodyShape=b=>{if(b==null)return 'none';if(typeof b==='string'){try{return shape(JSON.parse(b));}catch{return 'string';}}return shape(b);};"
             + "const headerNames=h=>{try{return [...new Headers(h||{}).keys()].slice(0,30);}catch{return [];}};"
-            + "const path=u=>u.pathname.replace(/[0-9a-f]{8}-[0-9a-f-]{27,}/ig,':id').replace(/\\/[A-Za-z0-9_-]{32,}(?=\\/|$)/g,'/:id');"
+            + "const path=u=>u.pathname.replace(/[0-9a-f]{8}-[0-9a-f-]{27,}/ig,':id').replace(/\\/[A-Za-z0-9_-]{32,}(?=\\/|$)/g,'/:id').replace(/[^/]+@[^/]+/g,':account');"
             + "const add=(method,url,body)=>{try{const u=new URL(url,location.href);if(u.host!==location.host||method==='GET'||!u.pathname.startsWith('/backend-api/'))return null;"
             + "const r={method,path:path(u),body:bodyShape(body),headers:[],status:'pending'};window.__mcProtocol.push(r);if(window.__mcProtocol.length>20)window.__mcProtocol.shift();return r;}catch{return null;}};"
             + "const fetch0=window.fetch;window.fetch=function(input,init){const method=String((init&&init.method)||(input&&input.method)||'GET').toUpperCase();"
             + "const url=typeof input==='string'?input:(input&&input.url)||'';const body=init&&init.body;const r=add(method,url,body);if(r)r.headers=headerNames((init&&init.headers)||(input&&input.headers));"
             + "if(r&&body==null&&input instanceof Request)input.clone().text().then(s=>{r.body=bodyShape(s);}).catch(()=>{});"
             + "const p=fetch0.apply(this,arguments);return r?p.then(v=>{r.status=v.status;r.contentType=(v.headers&&v.headers.get('content-type')||'').split(';')[0];r.requestId=v.headers&&v.headers.get('x-request-id')||'';"
-            + "if(!v.ok)v.clone().json().then(j=>{r.errorCode=String((j.error&&j.error.code)||j.code||'').slice(0,80);}).catch(()=>{});return v;},e=>{r.status=e.name||'error';throw e;}):p;};"
+            + "if(!v.ok)v.clone().json().then(j=>{const code=String((j.error&&j.error.code)||j.code||'');r.errorCode=/^[A-Za-z0-9_.-]{0,80}$/.test(code)?code:'other';}).catch(()=>{});return v;},e=>{r.status=e.name||'error';throw e;}):p;};"
             + "const open0=XMLHttpRequest.prototype.open,send0=XMLHttpRequest.prototype.send;"
             + "XMLHttpRequest.prototype.open=function(method,url){this.__mcMethod=String(method).toUpperCase();this.__mcUrl=url;return open0.apply(this,arguments);};"
             + "XMLHttpRequest.prototype.send=function(body){const r=add(this.__mcMethod||'GET',this.__mcUrl||'',body);if(r)this.addEventListener('loadend',()=>{r.status=this.status;r.contentType=(this.getResponseHeader('content-type')||'').split(';')[0];r.requestId=this.getResponseHeader('x-request-id')||'';},{once:true});return send0.apply(this,arguments);};"
@@ -159,7 +164,9 @@ public final class ChatWebProbeActivity extends Activity {
         });
     }
 
-    private void displayProtocol() {
+    private void displayProtocol() { displayProtocol(false); }
+
+    private void displayProtocol(boolean copy) {
         page.evaluateJavascript("JSON.stringify(window.__mcProtocol||[])", value -> {
             String raw = javascriptString(value);
             StringBuilder shown = new StringBuilder("웹 요청 구조 (값 제외)\n");
@@ -180,6 +187,11 @@ public final class ChatWebProbeActivity extends Activity {
                 for (String request : nativeRequestPaths) shown.append(request).append('\n');
             }
             protocolDetails.setText(shown.toString());
+            if (copy) {
+                ClipboardManager clipboard = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+                clipboard.setPrimaryClip(ClipData.newPlainText("Chat 전송 진단", shown.toString()));
+                stage("비밀값 제외 진단을 복사했습니다.");
+            }
         });
     }
 
