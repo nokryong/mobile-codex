@@ -22,6 +22,7 @@ import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
 import org.json.JSONArray;
 import org.json.JSONObject;
+import java.util.ArrayList;
 
 /** On-device experiment: user-authenticated ChatGPT web page with a Mobile Codex input. */
 public final class ChatWebProbeActivity extends Activity {
@@ -33,6 +34,9 @@ public final class ChatWebProbeActivity extends Activity {
     private String submittedText = "";
     private long beforeAssistantCount = -1;
     private boolean waitingForAssistant;
+    private volatile boolean recordingProtocol;
+    private final ArrayList<String> nativeRequestPaths = new ArrayList<>();
+    private TextView protocolDetails;
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override public void onCreate(Bundle state) {
@@ -52,6 +56,9 @@ public final class ChatWebProbeActivity extends Activity {
         root.addView(note);
         diagnostic = new TextView(this); diagnostic.setTextIsSelectable(true); diagnostic.setMaxLines(5);
         root.addView(diagnostic);
+        protocolDetails = new TextView(this); protocolDetails.setTextIsSelectable(true); protocolDetails.setMaxLines(12);
+        protocolDetails.setText("전송 전에는 메서드·경로·본문 구조 진단이 비어 있습니다.");
+        root.addView(protocolDetails);
         page = new WebView(this);
         WebSettings settings = page.getSettings();
         settings.setJavaScriptEnabled(true);
@@ -65,6 +72,16 @@ public final class ChatWebProbeActivity extends Activity {
         CookieManager.getInstance().setAcceptThirdPartyCookies(page, true);
         // Remote web content never gets a JavaScriptInterface or access to the packaged app UI.
         page.setWebViewClient(new WebViewClient() {
+            @Override public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+                if (recordingProtocol && "chatgpt.com".equals(request.getUrl().getHost())
+                    && "POST".equalsIgnoreCase(request.getMethod())) {
+                    String path = request.getUrl().getPath();
+                    if (path != null && path.startsWith("/backend-api/")) synchronized (nativeRequestPaths) {
+                        if (nativeRequestPaths.size() < 20) nativeRequestPaths.add("POST " + safePath(path));
+                    }
+                }
+                return null;
+            }
             @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 if ("https".equals(request.getUrl().getScheme())) return false;
                 stage("외부 주소 필요: 이 WebView에서는 열지 않음");
@@ -84,6 +101,8 @@ public final class ChatWebProbeActivity extends Activity {
         requeryButton = new Button(this); requeryButton.setText("같은 대화 서버 재조회");
         requeryButton.setEnabled(false); requeryButton.setOnClickListener(v -> requeryConversation());
         root.addView(requeryButton);
+        Button inspectButton = new Button(this); inspectButton.setText("전송 경로 진단 갱신");
+        inspectButton.setOnClickListener(v -> displayProtocol()); root.addView(inspectButton);
         root.addView(page, new LinearLayout.LayoutParams(-1, 0, 1));
         LinearLayout composer = new LinearLayout(this);
         input = new EditText(this); input.setSingleLine(false); input.setMinLines(1); input.setMaxLines(3);
@@ -99,6 +118,62 @@ public final class ChatWebProbeActivity extends Activity {
     }
 
     private int dp(int value) { return Math.round(value * getResources().getDisplayMetrics().density); }
+
+    private static String safePath(String path) {
+        return path.replaceAll("[0-9a-fA-F]{8}-[0-9a-fA-F-]{27,}", ":id")
+            .replaceAll("/[A-Za-z0-9_-]{32,}(?=/|$)", "/:id");
+    }
+
+    private static String protocolCaptureScript() {
+        return "(function(){if(window.__mcProtocol)return 'ready';window.__mcProtocol=[];"
+            + "const shape=(v,d=0)=>{if(d>3)return Array.isArray(v)?'array':typeof v;"
+            + "if(v instanceof FormData)return Object.fromEntries([...v.keys()].slice(0,25).map(k=>[k,'form-field']));"
+            + "if(v instanceof URLSearchParams)return Object.fromEntries([...v.keys()].slice(0,25).map(k=>[k,'parameter']));"
+            + "if(Array.isArray(v))return v.length?[shape(v[0],d+1)]:[];"
+            + "if(v&&typeof v==='object'){const o={};for(const k of Object.keys(v).slice(0,25))o[k]=/token|cookie|password|secret|proof|captcha|arkose|authorization/i.test(k)?'[redacted]':shape(v[k],d+1);return o;}return typeof v;};"
+            + "const bodyShape=b=>{if(b==null)return 'none';if(typeof b==='string'){try{return shape(JSON.parse(b));}catch{return 'string';}}return shape(b);};"
+            + "const path=u=>u.pathname.replace(/[0-9a-f]{8}-[0-9a-f-]{27,}/ig,':id').replace(/\\/[A-Za-z0-9_-]{32,}(?=\\/|$)/g,'/:id');"
+            + "const add=(method,url,body)=>{try{const u=new URL(url,location.href);if(u.host!==location.host||method==='GET'||!u.pathname.startsWith('/backend-api/'))return null;"
+            + "const r={method,path:path(u),body:bodyShape(body),status:'pending'};window.__mcProtocol.push(r);if(window.__mcProtocol.length>20)window.__mcProtocol.shift();return r;}catch{return null;}};"
+            + "const fetch0=window.fetch;window.fetch=function(input,init){const method=String((init&&init.method)||(input&&input.method)||'GET').toUpperCase();"
+            + "const url=typeof input==='string'?input:(input&&input.url)||'';const body=init&&init.body;const r=add(method,url,body);"
+            + "if(r&&body==null&&input instanceof Request)input.clone().text().then(s=>{r.body=bodyShape(s);}).catch(()=>{});"
+            + "const p=fetch0.apply(this,arguments);return r?p.then(v=>{r.status=v.status;return v;},e=>{r.status=e.name||'error';throw e;}):p;};"
+            + "const open0=XMLHttpRequest.prototype.open,send0=XMLHttpRequest.prototype.send;"
+            + "XMLHttpRequest.prototype.open=function(method,url){this.__mcMethod=String(method).toUpperCase();this.__mcUrl=url;return open0.apply(this,arguments);};"
+            + "XMLHttpRequest.prototype.send=function(body){const r=add(this.__mcMethod||'GET',this.__mcUrl||'',body);if(r)this.addEventListener('loadend',()=>{r.status=this.status;},{once:true});return send0.apply(this,arguments);};"
+            + "return 'armed';})()";
+    }
+
+    private void armProtocol(Runnable next) {
+        synchronized (nativeRequestPaths) { nativeRequestPaths.clear(); }
+        recordingProtocol = true;
+        page.evaluateJavascript(protocolCaptureScript(), value -> {
+            stage("전송 경로 진단: " + javascriptString(value));
+            next.run();
+        });
+    }
+
+    private void displayProtocol() {
+        page.evaluateJavascript("JSON.stringify(window.__mcProtocol||[])", value -> {
+            String raw = javascriptString(value);
+            StringBuilder shown = new StringBuilder("웹 요청 구조 (값 제외)\n");
+            try {
+                JSONArray entries = new JSONArray(raw);
+                for (int i = 0; i < Math.min(entries.length(), 12); i++) {
+                    JSONObject item = entries.optJSONObject(i);
+                    if (item != null) shown.append(item.optString("method")).append(' ').append(item.optString("path"))
+                        .append(" · HTTP ").append(item.optString("status")).append(" · fields=")
+                        .append(item.opt("body")).append('\n');
+                }
+            } catch (Exception ignored) { shown.append("웹 진단을 읽지 못했습니다.\n"); }
+            synchronized (nativeRequestPaths) {
+                shown.append("Android 관측 경로\n");
+                for (String request : nativeRequestPaths) shown.append(request).append('\n');
+            }
+            protocolDetails.setText(shown.toString());
+        });
+    }
 
     private void stage(String description) {
         if (stages.length() > 2500) stages.delete(0, stages.length() - 2000);
@@ -124,7 +199,7 @@ public final class ChatWebProbeActivity extends Activity {
             value -> {
                 try { beforeAssistantCount = Long.parseLong(value); }
                 catch (Exception ignored) { beforeAssistantCount = -1; }
-                insertIntoWebComposer(text);
+                armProtocol(() -> insertIntoWebComposer(text));
             });
     }
 
@@ -148,8 +223,9 @@ public final class ChatWebProbeActivity extends Activity {
         page.evaluateJavascript(script, result -> {
             String outcome = javascriptString(result);
             if ("send_button_disabled".equals(outcome) && attempt < 15) { page.postDelayed(() -> clickWebSend(attempt + 1), 200); return; }
-            if (!"send_clicked".equals(outcome)) { stage("웹 전송 클릭 실패: " + outcome); sendButton.setEnabled(true); return; }
+            if (!"send_clicked".equals(outcome)) { stage("웹 전송 클릭 실패: " + outcome); displayProtocol(); sendButton.setEnabled(true); return; }
             stage("웹 전송 버튼 클릭됨; HTTP 전송 성공은 아직 미확인");
+            page.postDelayed(this::displayProtocol, 2500);
             input.setText("");
             waitingForAssistant = true;
             pollAssistant(0);
@@ -164,11 +240,12 @@ public final class ChatWebProbeActivity extends Activity {
             if (beforeAssistantCount >= 0 && count > beforeAssistantCount) {
                 waitingForAssistant = false;
                 stage("앱 WebView에 새 답변 표시 확인");
+                displayProtocol();
                 requeryButton.setEnabled(true);
                 sendButton.setEnabled(true);
                 page.postDelayed(this::requeryConversation, 500);
             } else if (attempt < 120) page.postDelayed(() -> pollAssistant(attempt + 1), 1000);
-            else { waitingForAssistant = false; sendButton.setEnabled(true); stage("답변 표시 시간 초과; 화면을 직접 확인해 주세요."); }
+            else { waitingForAssistant = false; sendButton.setEnabled(true); stage("답변 표시 시간 초과; 화면을 직접 확인해 주세요."); displayProtocol(); }
         });
     }
 
