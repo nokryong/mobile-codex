@@ -48,14 +48,14 @@
     <div class="sidebar-bottom"><button id="show-tools" class="nav-button" aria-haspopup="dialog" aria-controls="tool-menu-dialog"><svg><use href="#i-settings"/></svg>도구</button><button id="settings" class="nav-button"><svg><use href="#i-settings"/></svg>설정</button><button id="account-button" class="account-button" aria-haspopup="dialog" aria-controls="settings-dialog"><span id="quota-ring" class="quota-ring" style="--remaining:0" role="img" aria-label="사용 한도 정보 없음"><span id="quota-ring-value">–</span></span><span class="quota-copy"><strong id="quota-percent">계정 연결</strong><small id="quota-caption">ChatGPT로 로그인</small></span><svg class="account-chevron"><use href="#i-chevron-right"/></svg></button></div>
   </aside>
   <main class="main">
-    <header class="topbar"><div class="topbar-left"><button class="icon-button sidebar-toggle" aria-label="사이드바 열기"><svg><use href="#i-panel"/></svg></button><span id="header-project">새 대화</span><span class="topbar-divider">/</span><span id="header-title">Mobile Codex</span></div><button id="files-toggle" class="outline-button"><svg><use href="#i-panel"/></svg><span>파일</span></button></header>
+    <header class="topbar"><div class="topbar-left"><button class="icon-button sidebar-toggle" aria-label="사이드바 열기"><svg><use href="#i-panel"/></svg></button><span id="header-project">새 대화</span><span class="topbar-divider">/</span><span id="header-title">Mobile Codex</span></div><div class="mode-switch" role="group" aria-label="대화 모드"><button id="mode-chat" type="button" aria-pressed="false">Chat</button><button id="mode-codex" type="button" aria-pressed="true">Codex</button></div><button id="files-toggle" class="outline-button"><svg><use href="#i-panel"/></svg><span>파일</span></button></header>
     <div class="workspace-body">
       <section class="conversation">
         <div id="chat-scroll" class="chat-scroll">
           <div id="welcome" class="welcome">
             <div id="welcome-character" class="welcome-character"></div><div class="welcome-mark"><img src="codex-logo.png" alt="Mobile Codex"></div>
-            <h1>어떤 작업을 할까요?</h1>
-            <p>아이디어부터 코드, 기기의 파일까지. Codex와 함께 작업하세요.</p>
+            <h1 id="welcome-title">어떤 작업을 할까요?</h1>
+            <p id="welcome-description">아이디어부터 코드, 기기의 파일까지. Codex와 함께 작업하세요.</p>
             <div class="onboarding" id="onboarding">
               <button id="connect" class="setup-row"><span class="step" id="login-step">1</span><span><strong>ChatGPT 계정 연결</strong><small>사용 중인 계정으로 시작하세요</small></span><span class="row-arrow">→</span></button>
               <button id="choose-folder" class="setup-row"><span class="step" id="folder-step">2</span><span><strong>작업 폴더 선택</strong><small>프로젝트 폴더를 연결하세요</small></span><span class="row-arrow">→</span></button>
@@ -84,6 +84,7 @@
               <div class="composer-actions">
                 <label class="approval-mode-picker"><span class="sr-only">승인 방식</span><select id="approval-mode" aria-label="승인 방식"><option value="ask">승인 받기</option><option value="auto-review" selected>자동 검토</option><option value="allow-all">모두 허용</option></select></label>
                 <button id="composer-options" type="button" class="context-button options-button" aria-haspopup="dialog" aria-controls="options-dialog"><svg><use href="#i-settings"/></svg><span id="model-summary">기본 모델</span><svg><use href="#i-down"/></svg></button>
+                <button id="chat-model-settings" type="button" class="context-button options-button" aria-label="Chat 모델 설정" hidden><span id="chat-model-summary">Chat 모델 설정</span><svg><use href="#i-down"/></svg></button>
                 <button id="voice-input" type="button" class="icon-button voice-button" aria-label="음성으로 초안 입력" title="음성 입력 · 확인 후 보내기"><svg><use href="#i-mic"/></svg></button>
                 <button id="send" type="submit" class="send-button" aria-label="보내기" disabled><svg><use href="#i-up"/></svg></button>
                 <button id="stop" type="button" class="send-button" aria-label="작업 중지" hidden><svg><use href="#i-stop"/></svg></button>

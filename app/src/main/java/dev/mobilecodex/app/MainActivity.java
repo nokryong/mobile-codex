@@ -50,6 +50,7 @@ public final class MainActivity extends Activity implements Engine.Ui {
     private static final int PICK_FOLDER = 31, EXPORT_RECOVERY = 32, IMPORT_SKILL = 33, EXPORT_IMAGE = 34, PICK_ATTACHMENTS = 35, EXPORT_ATTACHMENT = 36, INSTALL_UPDATE = 37, PICK_CHARACTERS = 38;
     private WebView web;
     private SafeWebViewLayout root;
+    private ChatWebTransport chatWeb;
     private boolean keyboardVisible;
     private String theme = "system";
     private Engine engine;
@@ -164,7 +165,7 @@ public final class MainActivity extends Activity implements Engine.Ui {
         return new WebResourceResponse("text/plain", "UTF-8", 403, "Forbidden", Map.of(), new ByteArrayInputStream(new byte[0]));
     }
     @Override protected void onStart() { super.onStart(); if (loaded) engine.attach(this); }
-    @Override protected void onResume() { super.onResume(); AppLanguage.configure(this); foreground = true; getSharedPreferences("notifications", 0).edit().putBoolean("foreground", true).commit(); requestNotificationPermissionIfNeeded(); event("notifications.changed", obj()); event("updates.changed", updates.snapshot()); if (loaded) engine.attach(this); event("voice.changed", obj()); }
+    @Override protected void onResume() { super.onResume(); AppLanguage.configure(this); foreground = true; getSharedPreferences("notifications", 0).edit().putBoolean("foreground", true).commit(); requestNotificationPermissionIfNeeded(); event("notifications.changed", obj()); event("updates.changed", updates.snapshot()); if (loaded) engine.attach(this); event("voice.changed", obj()); if (chatWeb != null) chatWeb.reloadIfIdle(); }
     @Override protected void onPause() { foreground = false; getSharedPreferences("notifications", 0).edit().putBoolean("foreground", false).commit(); if (dictation != null && !dictation.waitingPermission()) dictation.cancel(); super.onPause(); }
     @Override protected void onNewIntent(Intent intent) { super.onNewIntent(intent); setIntent(intent); handleNotificationIntent(intent); }
     private void handleNotificationIntent(Intent intent) {
@@ -185,7 +186,12 @@ public final class MainActivity extends Activity implements Engine.Ui {
         if (dictation != null) dictation.cancel();
         engine.detach(this);
         if (approvalDialog != null) approvalDialog.dismiss();
+        if (chatWeb != null) chatWeb.destroy();
         web.removeJavascriptInterface("Native"); web.destroy(); super.onDestroy();
+    }
+    private ChatWebTransport chatWeb() {
+        if (chatWeb == null) chatWeb = new ChatWebTransport(this, root);
+        return chatWeb;
     }
     @Override public void onBackPressed() { handleBack(); }
     private void handleBack() {
@@ -547,6 +553,19 @@ public final class MainActivity extends Activity implements Engine.Ui {
                         try { startActivity(new Intent(MainActivity.this, ChatWebProbeActivity.class)); respond(id, obj("ok", true), null); }
                         catch (Exception e) { respond(id, null, e); }
                     }); return;
+                }
+                if (action.equals("chat.web.prepare")) {
+                    runOnUiThread(() -> { try { chatWeb(); respond(id, obj("ok", true), null); }
+                        catch (Exception e) { respond(id, null, e); } }); return;
+                }
+                if (action.equals("chat.web.new")) {
+                    runOnUiThread(() -> { try { chatWeb().newChat(); respond(id, obj("ok", true), null); }
+                        catch (Exception e) { respond(id, null, e); } }); return;
+                }
+                if (action.equals("chat.web.send")) {
+                    String text = args.getString("text");
+                    runOnUiThread(() -> { try { chatWeb().send(text, (result, error) -> respond(id, result, error)); }
+                        catch (Exception e) { respond(id, null, e); } }); return;
                 }
                 if (action.equals("ui.storageAccess")) {
                     runOnUiThread(() -> {

@@ -14,6 +14,10 @@
   let dictationState = {phase:'idle'}, dictationTimer = null;
   let voiceStarting = false, voiceActive = false, voiceRecoveryGeneration = 0;
   let chatIconsEnabled = localStorage.getItem('chat-icons') !== 'off', activityIcon = 'thinking';
+  let chatMode = localStorage.getItem('conversation-mode') === 'chat', chatBusy = false;
+  let chatMessages = [];
+  try { const saved = JSON.parse(localStorage.getItem('chat-web-messages') || '[]'); if (Array.isArray(saved)) chatMessages = saved.slice(-100); } catch {}
+  let chatModel = localStorage.getItem('chat-web-model') || '';
   let characterState = {folderName:'', folderConfigured:false, selectedPackId:'builtin', packs:[{id:'builtin',name:'Builtin',valid:true,icons:{}}]};
   let instructionsOriginal = '', instructionsLoaded = false, instructionsSaving = false, devtoolsCheckResult = null, devtoolsCheckSummary = '', devtoolsChecking = false, usageLoading = false, accountActionStatus = {text:'', error:false};
   let resetCredits = null, resetCreditBusy = false, resetCreditScope = '', resetCreditIdempotencyKey = '', resetCreditSelectedId = '', usageGeneration = 0;
@@ -23,7 +27,7 @@
     return new Promise((resolve, reject) => {
       if (!window.Native) return reject(new Error(t('Android 앱에서 실행해 주세요.')));
       const id = String(++seq);
-      const timer = setTimeout(() => { pending.delete(id); reject(new Error(t('요청 시간이 초과되었습니다. 상태를 확인하고 다시 시도해 주세요.'))); }, ['files.mutate','recovery.restore','updates.install'].includes(action) ? 610000 : 150000);
+      const timer = setTimeout(() => { pending.delete(id); reject(new Error(t('요청 시간이 초과되었습니다. 상태를 확인하고 다시 시도해 주세요.'))); }, ['files.mutate','recovery.restore','updates.install','chat.web.send'].includes(action) ? 610000 : 150000);
       pending.set(id, {resolve, reject, timer});
       window.Native.postMessage(JSON.stringify({id, action, args}));
     });
@@ -189,6 +193,7 @@
   function restoreOptions(scope) { try { const value = JSON.parse(localStorage.getItem(optionsScope(scope)) || '{}'); return {model:value.model || '', effort:value.effort || ''}; } catch { return {model:'', effort:''}; } }
   function saveOptions() { if (!draftScope) return; draftOptions = {model:$('model').value, effort:$('effort').value}; try { if (draftOptions.model || draftOptions.effort) localStorage.setItem(optionsScope(), JSON.stringify(draftOptions)); else localStorage.removeItem(optionsScope()); } catch {} }
   function saveDraft() {
+    if (chatMode) { try { if ($('prompt').value) localStorage.setItem('chat-web-draft', $('prompt').value); else localStorage.removeItem('chat-web-draft'); } catch {} return; }
     if (!draftScope) return;
     try {
       if ($('prompt').value) localStorage.setItem(draftScope, $('prompt').value); else localStorage.removeItem(draftScope);
@@ -232,7 +237,7 @@
     efforts(); if ([...$('effort').options].some(o => o.value === draftOptions.effort)) $('effort').value = draftOptions.effort;
     sizeComposer();
   }
-  function updateSend() { $('voice-input').disabled = !draftScope || voiceStarting || voiceActive || !!sending; $('voice-input').setAttribute('aria-busy', String(voiceStarting || voiceActive)); $('send').disabled = (! $('prompt').value.trim() && !(draftContext.attachments || []).length) || !!sending || voiceStarting || voiceActive; $('send').setAttribute('aria-label', state.busy ? t('진행 중인 작업에 추가 지시') : t('메시지 보내기')); $('send').title = state.busy ? t('추가 지시') : t('보내기'); }
+  function updateSend() { $('voice-input').disabled = (!chatMode && !draftScope) || voiceStarting || voiceActive || !!sending || chatBusy; $('voice-input').setAttribute('aria-busy', String(voiceStarting || voiceActive)); $('send').disabled = chatMode ? (!$('prompt').value.trim() || chatBusy || voiceStarting || voiceActive) : ((!$('prompt').value.trim() && !(draftContext.attachments || []).length) || !!sending || voiceStarting || voiceActive); $('send').setAttribute('aria-label', !chatMode && state.busy ? t('진행 중인 작업에 추가 지시') : t('메시지 보내기')); $('send').title = !chatMode && state.busy ? t('추가 지시') : t('보내기'); }
   function scrollLatest() { following = true; $('chat-scroll').scrollTop = $('chat-scroll').scrollHeight; $('jump-latest').hidden = true; }
   function sizeComposer() {
     const field = $('prompt'), cap = Math.max(60, Math.min(160, window.innerHeight * .24));
@@ -731,12 +736,13 @@
     drawStatusIcons(); drawMessages();
   }
   function drawMessages() {
+    const messages = chatMode ? chatMessages : (state.messages || []);
     const elements = new Map(Array.from($('messages').children).map(n => [n.dataset.id, n]));
     const keep = new Set();
-    C.groupImageMessages(state.messages || []).forEach(m => {
+    C.groupImageMessages(messages).forEach(m => {
       keep.add(m.id); let el = elements.get(m.id);
       if (!el) { el = node('article', null, 'message ' + (m.role === 'user' ? 'user' : 'assistant')); el.dataset.id = m.id; $('messages').append(el); }
-      const iconName = m.imageStatus === 'generating' ? 'working' : state.busy && m.id === state.messages[state.messages.length - 1]?.id ? 'thinking' : C.messageIcon(m);
+      const iconName = m.imageStatus === 'generating' ? 'working' : (chatMode ? chatBusy : state.busy) && m.id === messages[messages.length - 1]?.id ? 'thinking' : C.messageIcon(m);
       const signature = JSON.stringify([m.text, m.images, m.attachments, m.imageStatus, m.imageError, L.language(), chatIconsEnabled, iconName, characterVisualKey()]);
       if (el.dataset.signature !== signature) {
         el.dataset.signature = signature;
@@ -761,7 +767,7 @@
     });
     for (const [id, el] of elements) if (!keep.has(id)) el.remove();
     if (following) scrollLatest();
-    else $('jump-latest').hidden = !state.messages.length;
+    else $('jump-latest').hidden = !messages.length;
   }
   function efforts() {
     const selected = state.models.find(m => (m.model || m.id) === $('model').value) || state.models.find(m => m.isDefault);
@@ -825,7 +831,58 @@
   async function selectProject(key) {
     await call('projects.select', {key:key || ''}); sidebar(false);
   }
+  function persistChatMessages() {
+    chatMessages = chatMessages.slice(-100);
+    try { localStorage.setItem('chat-web-messages', JSON.stringify(chatMessages)); } catch { toast('Chat 대화의 기기 내 표시 기록을 저장하지 못했습니다.'); }
+  }
+  function renderChatMode() {
+    document.body.classList.toggle('chat-mode', chatMode);
+    $('mode-chat').setAttribute('aria-pressed', String(chatMode));
+    $('mode-codex').setAttribute('aria-pressed', String(!chatMode));
+    $('header-project').textContent = chatMode ? 'Chat' : $('header-project').textContent;
+    $('header-title').textContent = chatMode ? 'ChatGPT' : $('header-title').textContent;
+    $('welcome').hidden = chatMessages.length > 0;
+    $('welcome-title').textContent = '무엇이든 물어보세요';
+    $('welcome-description').textContent = '일반 ChatGPT 대화입니다. 아래 입력창에서 보내고 답변을 받습니다.';
+    $('prompt').placeholder = 'ChatGPT에게 물어보세요';
+    $('prompt').setAttribute('aria-label', 'ChatGPT에게 질문');
+    $('chat-model-summary').textContent = chatModel || 'Chat 모델 설정';
+    $('activity').hidden = !chatBusy;
+    $('activity-text').textContent = 'ChatGPT 답변 기다리는 중';
+    $('stop').hidden = true;
+    $('file-panel').hidden = true;
+    hideAutocomplete();
+    renderDraftContext();
+    drawMessages(); updateSend(); sizeComposer();
+  }
+  function switchMode(mode) {
+    const next = mode === 'chat';
+    if (chatMode === next) return;
+    saveDraft();
+    chatMode = next;
+    try { localStorage.setItem('conversation-mode', chatMode ? 'chat' : 'codex'); } catch {}
+    $('messages').replaceChildren(); following = true;
+    if (chatMode) {
+      try { $('prompt').value = localStorage.getItem('chat-web-draft') || ''; } catch { $('prompt').value = ''; }
+      renderChatMode();
+      call('chat.web.prepare').catch(error => toast(error.message));
+    } else {
+      render(state);
+      try { $('prompt').value = localStorage.getItem(draftScope) || ''; } catch { $('prompt').value = ''; }
+      $('welcome-title').textContent = '어떤 작업을 할까요?';
+      $('welcome-description').textContent = '아이디어부터 코드, 기기의 파일까지. Codex와 함께 작업하세요.';
+      $('prompt').placeholder = '무엇이든 요청하세요. @ 파일·앱, $ 스킬';
+      $('prompt').setAttribute('aria-label', 'Codex에게 요청');
+      sizeComposer();
+    }
+    sidebar(false);
+  }
   async function newChat(workspaceKey) {
+    if (chatMode) {
+      if (chatBusy) throw new Error('ChatGPT 답변을 기다리는 중입니다.');
+      await call('chat.web.new'); chatMessages = []; persistChatMessages();
+      $('prompt').value = ''; saveDraft(); renderChatMode(); sidebar(false); return;
+    }
     await call('chat.new', {workspaceKey:workspaceKey || ''}); sidebar(false);
   }
   async function removeProject(project) {
@@ -939,6 +996,7 @@
     state.phone = {...state.phone, enabled:false, status:t('휴대폰 제어 꺼짐')}; renderPhone();
   }
   function render(next) {
+    if (chatMode) { state = next; state.messages ||= []; state.models ||= []; state.projects ||= []; state.accounts ||= []; state.workspace ||= {}; state.account ||= {}; state.rateLimits ||= {}; setCharacterState(state.characters); return; }
     const previousAccountScope = accountScope(state.account), nextAccountScope = accountScope(next.account);
     if (previousAccountScope !== nextAccountScope) { usageGeneration++; resetCredits = null; resetCreditBusy = false; resetCreditIdempotencyKey = ''; resetCreditSelectedId = ''; resetCreditScope = nextAccountScope; }
     const changedThread = state.threadId !== next.threadId;
@@ -1452,8 +1510,8 @@
     if (name === 'state') render(data);
     else if (name === 'error') { if (!data.threadId || data.threadId === state.threadId) toast(data.message); }
     else if (name === 'notice') toast(data.message);
-    else if (name === 'message.delta') { if (data.threadId && data.threadId !== state.threadId) return; C.appendDelta(state.messages, data.id, data.delta); drawMessages(); }
-    else if (name === 'tool') { if (data.threadId && data.threadId !== state.threadId) return; activityIcon = /read|list|search/.test(data.name) ? 'inspecting' : 'working'; drawStatusIcons(); $('activity-text').textContent = data.name.replace('mobile_', '') + ' · ' + data.path; logEvent(data.name, data); }
+    else if (name === 'message.delta') { if (data.threadId && data.threadId !== state.threadId) return; C.appendDelta(state.messages, data.id, data.delta); if (!chatMode) drawMessages(); }
+    else if (name === 'tool') { if (data.threadId && data.threadId !== state.threadId) return; activityIcon = /read|list|search/.test(data.name) ? 'inspecting' : 'working'; if (!chatMode) { drawStatusIcons(); $('activity-text').textContent = data.name.replace('mobile_', '') + ' · ' + data.path; } logEvent(data.name, data); }
     else if (name === 'agent.event') { if (data.threadId && data.threadId !== state.threadId) return; if (!data.method.endsWith('/delta')) logEvent(data.method, data.params); if (data.method === 'turn/diff/updated') logEvent(t('변경 사항'), data.params.diff); }
     else if (name === 'files.changed' && (!data.threadId || data.threadId === state.threadId) && !$('file-panel').hidden) listFiles().catch(e => toast(e.message));
     else if (name === 'updates.changed') drawUpdates(data);
@@ -1498,6 +1556,9 @@
   document.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', () => dismiss(b.dataset.close)));
   document.querySelectorAll('.sidebar-toggle').forEach(b => b.addEventListener('click', () => { if (matchMedia('(max-width:760px)').matches) sidebar(!document.body.classList.contains('sidebar-open')); else document.body.classList.toggle('sidebar-collapsed'); }));
   document.querySelectorAll('[data-prompt]').forEach(b => b.addEventListener('click', () => { $('prompt').value = b.dataset.prompt; saveDraft(); sizeComposer(); $('prompt').focus(); }));
+  on('mode-chat', () => switchMode('chat'));
+  on('mode-codex', () => switchMode('codex'));
+  on('chat-model-settings', () => call('ui.chatWebProbe'));
   on('scrim', () => sidebar(false)); on('new-chat', async () => newChat(''));
   ['add-project', 'choose-folder', 'composer-folder'].forEach(id => on(id, () => pickFolder()));
    const closeToolMenu = () => { if ($('tool-menu-dialog').open) close('tool-menu-dialog'); };
@@ -1515,6 +1576,32 @@
   on('input-value', e => { if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) $('input-confirm').click(); }, 'keydown');
   on('composer', async () => {
     const value = $('prompt').value, text = value.trim();
+    if (chatMode) {
+      if (!text || chatBusy) return;
+      const id = 'chat-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+      chatBusy = true;
+      chatMessages.push({id, role:'user', text});
+      $('welcome').hidden = true; $('activity').hidden = false;
+      drawMessages(); updateSend(); scrollLatest();
+      try {
+        const result = await call('chat.web.send', {text});
+        if (!result.reply || !result.conversationId) throw new Error('ChatGPT 답변과 대화 저장을 확인하지 못했습니다.');
+        chatMessages.push({id:id + '-reply', role:'assistant', text:result.reply, model:result.model || ''});
+        chatModel = result.model || chatModel;
+        $('chat-model-summary').textContent = chatModel || 'Chat 모델 설정';
+        try { localStorage.setItem('chat-web-model', chatModel); } catch {}
+        persistChatMessages();
+        if (chatMode && $('prompt').value === value) { $('prompt').value = ''; saveDraft(); }
+      } catch (error) {
+        chatMessages.push({id:id + '-error', role:'assistant', text:'전송 또는 답변 저장 확인에 실패했습니다: ' + error.message});
+        persistChatMessages();
+        throw error;
+      } finally {
+        chatBusy = false;
+        if (chatMode) { $('activity').hidden = true; drawMessages(); sizeComposer(); }
+      }
+      return;
+    }
     if ((!text && !draftContext.attachments.length) || sending || voiceStarting || voiceActive) return;
     const steer = !!state.busy, expectedTurnId = state.turnId || '', expectedThreadId = state.threadId || '', workspaceKey = state.workspace?.key || '';
     const submitted = {value, context:JSON.parse(JSON.stringify(draftContext)), scopes:new Set([draftScope])}; sending = submitted;
@@ -1547,15 +1634,15 @@
     }
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); $('composer').requestSubmit(); }
   });
-  let autocompleteTimer; $('prompt').addEventListener('input', () => { saveDraft(); sizeComposer(); clearTimeout(autocompleteTimer); hideAutocomplete(); if (/[@$]$/.test($('prompt').value.slice(0, $('prompt').selectionStart))) queryAutocomplete(); else autocompleteTimer = setTimeout(queryAutocomplete, 120); });
+  let autocompleteTimer; $('prompt').addEventListener('input', () => { saveDraft(); sizeComposer(); clearTimeout(autocompleteTimer); hideAutocomplete(); if (chatMode) return; if (/[@$]$/.test($('prompt').value.slice(0, $('prompt').selectionStart))) queryAutocomplete(); else autocompleteTimer = setTimeout(queryAutocomplete, 120); });
   $('prompt').addEventListener('focus', () => { if (following) frame(scrollLatest); });
   $('composer').addEventListener('focusin', () => $('composer').classList.add('composer-expanded'));
   $('composer').addEventListener('focusout', () => frame(() => { if (! $('composer').contains(document.activeElement)) $('composer').classList.remove('composer-expanded'); }));
   $('composer').addEventListener('click', e => { if (! $('composer').classList.contains('composer-expanded') && e.target === $('composer')) $('prompt').focus(); });
-  $('prompt').addEventListener('click', () => queryAutocomplete());
+  $('prompt').addEventListener('click', () => { if (!chatMode) queryAutocomplete(); });
   $('chat-scroll').addEventListener('scroll', () => {
     const area = $('chat-scroll'); following = area.scrollHeight - area.scrollTop - area.clientHeight < 80;
-    $('jump-latest').hidden = following || !state.messages.length;
+    $('jump-latest').hidden = following || !(chatMode ? chatMessages.length : state.messages.length);
   }, {passive:true});
   on('voice-input', startVoiceInput);
   on('dictation-done', () => call('voice.stop'));
@@ -1579,6 +1666,7 @@
   on('approval-mode', () => setApprovalMode($('approval-mode').value), 'change');
   document.querySelectorAll('input[name="permission"]').forEach(r => r.addEventListener('change', () => setPermissionMode(r.value).catch(error => toast(error.message))));
   ensureCharacterPackUi(); ensureNotificationSettings(); ensureChatWebProbeUi();
+  if (chatMode) { chatMode = false; switchMode('chat'); }
   on('connect', () => startLogin(false)); on('account-button', openAccountSettings); on('settings', () => { ensureCharacterPackUi(); ensureNotificationSettings(); show('settings-dialog'); sidebar(false); if (!characterState.folderConfigured && characterState.packs.length <= 1) loadCharacterPacks(); });
   document.querySelectorAll('[data-settings-tab]').forEach(tab => tab.addEventListener('click', () => {
     const selected = tab.dataset.settingsTab; selectSettingsTab(selected);

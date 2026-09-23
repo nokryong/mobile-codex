@@ -55,6 +55,22 @@ test('submit is cancelled synchronously and calls native with chosen model and e
  assert.equal(e.defaultPrevented,true);await tick();
  assert.equal(calls.find(m=>m.action==='chat.send').args.text,'실제 파일 수정');
 });
+test('Chat switch routes the same composer to ordinary Chat and restores the Codex draft',async()=>{
+ const {w,calls,snapshot}=setup({'chat.web.send':()=>({reply:'일반 Chat 답변',conversationId:'11111111-1111-1111-1111-111111111111',model:'gpt-5-6-thinking'})});await tick();
+ w.mobileCodexEvent('state',snapshot);
+ const d=w.document,prompt=d.getElementById('prompt');prompt.value='Codex 초안';prompt.dispatchEvent(new w.Event('input'));
+ d.getElementById('mode-chat').click();await tick();
+ assert.equal(d.getElementById('mode-chat').getAttribute('aria-pressed'),'true');
+ assert.equal(prompt.value,'');
+ prompt.value='일반 Chat 질문';d.getElementById('composer').dispatchEvent(new w.Event('submit',{cancelable:true}));await tick();
+ assert.equal(calls.filter(x=>x.action==='chat.web.send').length,1);
+ assert.equal(calls.filter(x=>x.action==='chat.send').length,0);
+ assert.match(d.getElementById('messages').textContent,/일반 Chat 질문.*일반 Chat 답변/s);
+ assert.equal(d.getElementById('chat-model-summary').textContent,'gpt-5-6-thinking');
+ d.getElementById('mode-codex').click();await tick();
+ assert.equal(prompt.value,'Codex 초안');
+ assert.doesNotMatch(d.getElementById('messages').textContent,/일반 Chat 답변/);
+});
 test('composer exposes approval review beside the model without changing file access',async()=>{
  const {w,calls,snapshot}=setup({'approvals.set':()=>({ok:true})});await tick();
  const select=w.document.getElementById('approval-mode');assert.equal(select.value,'auto-review');
@@ -528,7 +544,7 @@ test('character packs hydrate from initial RPC, select, and refresh the same id 
  await w.document.getElementById('character-pack-refresh').click(); await tick(); assert.equal(calls.filter(call=>call.action==='characters.refresh').length,1); assert.match(w.document.querySelector('.message .chat-character').src,/\/packs\/done-1\.png$/);
 });
 test('character pack requests expose busy state and preserve selection on cancellation',async()=>{
- let finish; const delayed=new Promise(resolve=>{finish=resolve;}); const {w,snapshot,calls}=setup({'characters.select':()=>delayed}); await tick(); const chars={folderName:'Packs',folderConfigured:true,selectedPackId:'custom',packs:[{id:'builtin',name:'Builtin',valid:true,icons:{}},{id:'custom',name:'Custom',valid:true,icons:{done:'/packs/done.png'}}]}; w.mobileCodexEvent('state',{...snapshot,characters:chars,messages:[{id:'a',role:'assistant',text:'완료했어요.'}]}); w.document.getElementById('settings').click(); await tick(); w.document.querySelector('[data-pack-id="builtin"]').click(); await tick(); assert.equal(w.document.querySelector('[data-pack-id="builtin"]').disabled,true); assert.equal(w.document.getElementById('character-pack-folder-button').disabled,true); assert.equal(w.document.querySelector('[aria-pressed="true"]').dataset.packId,'custom'); finish({cancelled:true}); await tick(); assert.equal(w.document.querySelector('[aria-pressed="true"]').dataset.packId,'custom'); assert.equal(w.document.querySelector('[data-pack-id="builtin"]').disabled,false); assert.equal(calls.filter(call=>call.action==='characters.select').length,1);
+ let finish; const delayed=new Promise(resolve=>{finish=resolve;}); const {w,snapshot,calls}=setup({'characters.select':()=>delayed}); await tick(); const chars={folderName:'Packs',folderConfigured:true,selectedPackId:'custom',packs:[{id:'builtin',name:'Builtin',valid:true,icons:{}},{id:'custom',name:'Custom',valid:true,icons:{done:'/packs/done.png'}}]}; w.mobileCodexEvent('state',{...snapshot,characters:chars,messages:[{id:'a',role:'assistant',text:'완료했어요.'}]}); w.document.getElementById('settings').click(); await tick(); w.document.querySelector('[data-pack-id="builtin"]').click(); await tick(); assert.equal(w.document.querySelector('[data-pack-id="builtin"]').disabled,true); assert.equal(w.document.getElementById('character-pack-folder-button').disabled,true); assert.equal(w.document.querySelector('.character-pack-option[aria-pressed="true"]').dataset.packId,'custom'); finish({cancelled:true}); await tick(); assert.equal(w.document.querySelector('.character-pack-option[aria-pressed="true"]').dataset.packId,'custom'); assert.equal(w.document.querySelector('[data-pack-id="builtin"]').disabled,false); assert.equal(calls.filter(call=>call.action==='characters.select').length,1);
 });
 test('live status uses local thinking and working icons without adding transcript messages',async()=>{
  const {w,snapshot}=setup();await tick();const d=w.document;
