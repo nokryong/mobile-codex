@@ -186,8 +186,12 @@ public final class ChatWebProbeActivity extends Activity {
         stage("같은 대화 서버 재조회 시작");
         requeryButton.setEnabled(false);
         String script = "(function(){window.__mcProbeResult='pending';"
-            + "fetch('/backend-api/conversation/" + id + "',{credentials:'include',headers:{Accept:'application/json'}})"
-            + ".then(async r=>{if(!r.ok){window.__mcProbeResult='재조회 HTTP '+r.status;return;}"
+            + "fetch('/api/auth/session',{credentials:'include',headers:{Accept:'application/json'}})"
+            + ".then(async sessionResponse=>{if(!sessionResponse.ok){window.__mcProbeResult='세션 HTTP '+sessionResponse.status;return;}"
+            + "const session=await sessionResponse.json(),token=session.accessToken;"
+            + "if(typeof token!=='string'||!token){window.__mcProbeResult='웹 세션 인증 정보 없음';return;}"
+            + "const r=await fetch('/backend-api/conversation/" + id + "',{credentials:'include',headers:{Authorization:'Bearer '+token,Accept:'application/json'}});"
+            + "if(!r.ok){window.__mcProbeResult='재조회 HTTP '+r.status;return;}"
             + "const data=await r.json(),mapping=data.mapping||{},nodes=Object.entries(mapping),expected=" + JSONObject.quote(submittedText) + ";"
             + "let match='';for(const [key,node] of nodes){const m=node&&node.message,c=m&&m.content,parts=c&&c.parts;"
             + "if(m&&m.author&&m.author.role==='user'&&Array.isArray(parts)&&parts.some(p=>p===expected)){match=key;break;}}"
