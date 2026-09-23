@@ -87,7 +87,8 @@ final class ChatWebTransport {
         if (expired()) { finish(null, new IllegalStateException("ChatGPT 입력창을 찾지 못했습니다. 웹 로그인 상태를 확인해 주세요.")); return; }
         String host = Uri.parse(page.getUrl() == null ? "" : page.getUrl()).getHost();
         if (!"chatgpt.com".equals(host) || !pageLoaded) { retry(() -> insert(attempt + 1), attempt, 40, "ChatGPT 로그인이 필요합니다."); return; }
-        String script = "(function(){const e=document.querySelector('#prompt-textarea,[data-testid=\"prompt-textarea\"]');"
+        String script = "(function(){" + sendObserverScript()
+            + "const e=document.querySelector('#prompt-textarea,[data-testid=\"prompt-textarea\"]');"
             + "if(!e)return 'missing';if((e.value||e.textContent||'').trim())return 'not_empty';e.focus();"
             + "const ok=document.execCommand('insertText',false," + JSONObject.quote(submittedText) + ");"
             + "return ok&&(e.value||e.textContent||'').trim()?'inserted':'failed'})()";
@@ -100,6 +101,24 @@ final class ChatWebTransport {
             if ("missing".equals(outcome)) { retry(() -> insert(attempt + 1), attempt, 40, "ChatGPT 웹 입력창을 찾지 못했습니다. 웹 로그인/모델 설정을 열어 확인해 주세요."); return; }
             finish(null, new IllegalStateException("웹 입력 실패: " + outcome));
         });
+    }
+
+    /** Observes only the official client's request outcome and conversation ID, never credentials or proofs. */
+    static String sendObserverScript() {
+        return "window.__mcChatObserved={id:'',sendStatus:0,prepareStatus:0};"
+            + "if(!window.__mcChatFetchObserved){const original=window.fetch;"
+            + "window.fetch=function(input,init){const result=original.apply(this,arguments);try{"
+            + "const u=new URL(typeof input==='string'?input:input.url,location.href);"
+            + "const method=(init&&init.method)||(input&&input.method)||'GET';"
+            + "if(u.origin===location.origin&&method.toUpperCase()==='POST'"
+            + "&&(u.pathname==='/backend-api/f/conversation'||u.pathname==='/backend-api/f/conversation/prepare')){"
+            + "const observed=window.__mcChatObserved,prepare=u.pathname.endsWith('/prepare');"
+            + "const record=body=>{try{const id=JSON.parse(body).conversation_id;"
+            + "if(typeof id==='string'&&/^[0-9a-fA-F-]{36}$/.test(id))observed.id=id;}catch(e){}};"
+            + "if(init&&typeof init.body==='string')record(init.body);"
+            + "else if(typeof Request!=='undefined'&&input instanceof Request)input.clone().text().then(record).catch(()=>{});"
+            + "result.then(r=>{if(prepare)observed.prepareStatus=r.status;else observed.sendStatus=r.status;}).catch(()=>{});"
+            + "}}catch(e){}return result;};window.__mcChatFetchObserved=true;}";
     }
 
     private void click(int attempt) {
@@ -119,7 +138,9 @@ final class ChatWebTransport {
     private void requery(int attempt) {
         if (pending == null) return;
         if (expired()) { finish(null, new IllegalStateException("전송 후 답변 저장을 확인하지 못했습니다. 같은 메시지를 다시 보내기 전에 웹 대화를 확인해 주세요.")); return; }
-        String inspect = "(function(){return JSON.stringify({path:location.pathname,visibility:document.visibilityState,ready:document.readyState,"
+        String inspect = "(function(){const observed=window.__mcChatObserved||{};return JSON.stringify({path:location.pathname,"
+            + "observedId:observed.id||'',sendStatus:observed.sendStatus||0,prepareStatus:observed.prepareStatus||0,"
+            + "visibility:document.visibilityState,ready:document.readyState,"
             + "users:document.querySelectorAll('[data-message-author-role=user]').length,"
             + "assistants:document.querySelectorAll('[data-message-author-role=assistant]').length,"
             + "composer:!!document.querySelector('#prompt-textarea'),"
@@ -133,10 +154,13 @@ final class ChatWebTransport {
             String path = evidence.optString("path", "");
             String id = conversationId("https://chatgpt.com" + path);
             if (id.isEmpty()) id = conversationId(page.getUrl());
+            if (id.isEmpty()) id = conversationId("https://chatgpt.com/c/" + evidence.optString("observedId", ""));
             lastDiagnostic = "화면=" + (id.isEmpty() ? ("/".equals(path) ? "첫 화면" : "기타") : "대화")
                 + ", 사용자=" + evidence.optInt("users", -1) + ", 답변=" + evidence.optInt("assistants", -1)
                 + ", 표시=" + evidence.optString("visibility", "?") + ", 준비=" + evidence.optString("ready", "?")
                 + ", 입력창=" + evidence.optBoolean("composer", false)
+                + ", 전송 HTTP=" + evidence.optInt("sendStatus", 0)
+                + ", 대화 준비 HTTP=" + evidence.optInt("prepareStatus", 0)
                 + ", 네트워크=" + evidence.optJSONArray("network");
             if (id.isEmpty()) { retry(() -> requery(attempt + 1), attempt, 30, "대화 주소를 찾지 못했습니다."); return; }
             String script = requeryScript(id, submittedText, sendStartedAt);
