@@ -22,7 +22,9 @@ final class ChatWebTransport {
     private String submittedText = "";
     private boolean clicked;
     private boolean inserting;
+    private boolean pageLoaded;
     private long deadline;
+    private long sendStartedAt;
 
     @SuppressLint("SetJavaScriptEnabled")
     ChatWebTransport(Activity activity, FrameLayout root) {
@@ -46,6 +48,7 @@ final class ChatWebTransport {
                     || !("chatgpt.com".equals(uri.getHost()) || "auth.openai.com".equals(uri.getHost()));
             }
             @Override public void onPageFinished(WebView view, String url) {
+                pageLoaded = "chatgpt.com".equals(Uri.parse(url).getHost());
                 if (pending != null && !clicked && !inserting) page.postDelayed(() -> insert(0), 350);
             }
         });
@@ -55,12 +58,13 @@ final class ChatWebTransport {
     }
 
     void reloadIfIdle() {
-        if (pending == null) page.reload();
+        if (pending == null) { pageLoaded = false; page.reload(); }
     }
 
     void newChat() {
         if (pending != null) throw new IllegalStateException("답변을 기다리는 중입니다.");
         activity.getSharedPreferences("general-chat", 0).edit().remove("url").apply();
+        pageLoaded = false;
         page.loadUrl("https://chatgpt.com/");
     }
 
@@ -69,6 +73,7 @@ final class ChatWebTransport {
         if (text == null || text.trim().isEmpty()) { done.complete(null, new IllegalArgumentException("메시지를 입력해 주세요.")); return; }
         pending = done;
         submittedText = text.trim();
+        sendStartedAt = System.currentTimeMillis() / 1000;
         clicked = false;
         inserting = false;
         deadline = System.currentTimeMillis() + 600_000;
@@ -79,7 +84,7 @@ final class ChatWebTransport {
         if (pending == null || clicked || inserting) return;
         if (expired()) { finish(null, new IllegalStateException("ChatGPT 입력창을 찾지 못했습니다. 웹 로그인 상태를 확인해 주세요.")); return; }
         String host = Uri.parse(page.getUrl() == null ? "" : page.getUrl()).getHost();
-        if (!"chatgpt.com".equals(host)) { retry(() -> insert(attempt + 1), attempt, 40, "ChatGPT 로그인이 필요합니다."); return; }
+        if (!"chatgpt.com".equals(host) || !pageLoaded) { retry(() -> insert(attempt + 1), attempt, 40, "ChatGPT 로그인이 필요합니다."); return; }
         String script = "(function(){const e=document.querySelector('#prompt-textarea,[data-testid=\"prompt-textarea\"]');"
             + "if(!e)return 'missing';if((e.value||e.textContent||'').trim())return 'not_empty';e.focus();"
             + "const ok=document.execCommand('insertText',false," + JSONObject.quote(submittedText) + ");"
@@ -114,7 +119,7 @@ final class ChatWebTransport {
         if (expired()) { finish(null, new IllegalStateException("전송 후 답변 저장을 확인하지 못했습니다. 같은 메시지를 다시 보내기 전에 웹 대화를 확인해 주세요.")); return; }
         String id = conversationId(page.getUrl());
         if (id.isEmpty()) { retry(() -> requery(attempt + 1), attempt, 150, "대화 주소를 찾지 못했습니다."); return; }
-        String script = requeryScript(id, submittedText);
+        String script = requeryScript(id, submittedText, sendStartedAt);
         page.evaluateJavascript(script, ignored -> pollResult(attempt, 0, id));
     }
 
@@ -137,7 +142,7 @@ final class ChatWebTransport {
         });
     }
 
-    static String requeryScript(String id, String expected) {
+    static String requeryScript(String id, String expected, long sentAtSeconds) {
         return "(function(){window.__mcChatQueryResult={kind:'pending'};"
             + "fetch('/api/auth/session',{credentials:'include',headers:{Accept:'application/json'}})"
             + ".then(async s=>{if(!s.ok){window.__mcChatQueryResult={kind:'error',reason:'웹 세션 HTTP '+s.status};return;}"
@@ -146,9 +151,10 @@ final class ChatWebTransport {
             + "const r=await fetch('/backend-api/conversation/" + id + "',{credentials:'include',headers:{Authorization:'Bearer '+token,Accept:'application/json'}});"
             + "if(r.status===404){window.__mcChatQueryResult={kind:'waiting'};return;}"
             + "if(!r.ok){window.__mcChatQueryResult={kind:'error',reason:'대화 조회 HTTP '+r.status};return;}"
-            + "const data=await r.json(),mapping=data.mapping||{},nodes=Object.entries(mapping),expected=" + JSONObject.quote(expected) + ";"
+            + "const data=await r.json(),mapping=data.mapping||{},nodes=Object.entries(mapping),expected=" + JSONObject.quote(expected) + ",sentAt=" + sentAtSeconds + ";"
             + "let match='',matchTime=-1;for(const [key,node] of nodes){const m=node&&node.message,parts=m&&m.content&&m.content.parts;"
             + "if(m&&m.author&&m.author.role==='user'&&Array.isArray(parts)&&parts.some(p=>p===expected)){const time=Number(m.create_time)||0;if(time>=matchTime){match=key;matchTime=time;}}}"
+            + "if(matchTime>0&&matchTime<sentAt-3){window.__mcChatQueryResult={kind:'waiting'};return;}"
             + "if(!match){window.__mcChatQueryResult={kind:'waiting'};return;}"
             + "let best=null,bestTime=-1;for(const [key,node] of nodes){const m=node&&node.message;"
             + "if(!m||!m.author||m.author.role!=='assistant'||m.status!=='finished_successfully'||(m.recipient&&m.recipient!=='all'))continue;"
