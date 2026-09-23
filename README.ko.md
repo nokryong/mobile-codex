@@ -1,4 +1,7 @@
 # Mobile Codex
+
+<p align="center"><img src="app/src/main/assets/web/codex-logo.png" alt="Mobile Codex 로고" width="144" /></p>
+
 <p>
   <img width="24%" alt="General chat" src="https://github.com/user-attachments/assets/14dd8782-58eb-4784-96bc-aaa190adfa87" />
   <img width="24%" alt="Git clone" src="https://github.com/user-attachments/assets/84b311d7-c584-4107-a09e-07862b11797d" />
