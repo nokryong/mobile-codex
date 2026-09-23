@@ -854,6 +854,8 @@ window.MobileCodexEnglish = {
   "초기화권 정보를 사용할 수 없습니다.": "Reset credit information is unavailable.",
   "{count}개 사용 가능": "{count} available",
   "사용 가능한 초기화권이 없습니다.": "No reset credits are available.",
+  "만료일 전체를 확인할 수 없어 사용을 보류합니다.": "Cannot use a credit until all expiry dates are available.",
+  "가장 먼저 만료: ": "Expires first: ",
   "1개 사용": "Use one",
   "사용 한도 초기화권 1개를 사용할까요?": "Use one rate-limit reset credit?",
   "초기화권을 사용하는 중…": "Using reset credit…",

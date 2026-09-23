@@ -16,7 +16,7 @@
   let chatIconsEnabled = localStorage.getItem('chat-icons') !== 'off', activityIcon = 'thinking';
   let characterState = {folderName:'', folderConfigured:false, selectedPackId:'builtin', packs:[{id:'builtin',name:'Builtin',valid:true,icons:{}}]};
   let instructionsOriginal = '', instructionsLoaded = false, instructionsSaving = false, devtoolsCheckResult = null, devtoolsCheckSummary = '', devtoolsChecking = false, usageLoading = false, accountActionStatus = {text:'', error:false};
-  let resetCredits = null, resetCreditBusy = false, resetCreditScope = '', resetCreditIdempotencyKey = '', usageGeneration = 0;
+  let resetCredits = null, resetCreditBusy = false, resetCreditScope = '', resetCreditIdempotencyKey = '', resetCreditSelectedId = '', usageGeneration = 0;
   const toolCache = [null, null, null];
   let updateState = {}, updateSourceDirty = false, updateRequestPending = false;
   function call(action, args = {}) {
@@ -931,7 +931,7 @@
   }
   function render(next) {
     const previousAccountScope = accountScope(state.account), nextAccountScope = accountScope(next.account);
-    if (previousAccountScope !== nextAccountScope) { usageGeneration++; resetCredits = null; resetCreditBusy = false; resetCreditIdempotencyKey = ''; resetCreditScope = nextAccountScope; }
+    if (previousAccountScope !== nextAccountScope) { usageGeneration++; resetCredits = null; resetCreditBusy = false; resetCreditIdempotencyKey = ''; resetCreditSelectedId = ''; resetCreditScope = nextAccountScope; }
     const changedThread = state.threadId !== next.threadId;
     setDraftScope(next); state = next;
     state.models ||= []; state.messages ||= []; state.projects ||= []; state.accounts ||= []; state.workspace ||= {}; state.account ||= {}; state.rateLimits ||= {}; setCharacterState(state.characters);
@@ -1160,7 +1160,21 @@
   }
   function accountScope(account = state.account) { return JSON.stringify(account || {}); }
   function resetResetCreditRequest(scope = accountScope()) {
-    if (resetCreditScope !== scope) { resetCreditScope = scope; resetCreditIdempotencyKey = ''; }
+    if (resetCreditScope !== scope) { resetCreditScope = scope; resetCreditIdempotencyKey = ''; resetCreditSelectedId = ''; }
+  }
+  function earliestResetCredit(data) {
+    const count = data?.availableCount, credits = data?.credits;
+    // The server can omit or cap details. In that case no client-side choice
+    // can guarantee that a hidden credit does not expire sooner.
+    if (!Number.isInteger(count) || count <= 0 || !Array.isArray(credits)) return null;
+    const available = credits.filter(credit => credit?.status === 'available' && credit.resetType === 'codexRateLimits');
+    if (available.length !== count || available.some(credit =>
+      typeof credit.id !== 'string' || !credit.id ||
+      !Object.prototype.hasOwnProperty.call(credit, 'expiresAt') ||
+      (credit.expiresAt !== null && !Number.isSafeInteger(credit.expiresAt)))) return null;
+    return available.slice().sort((a, b) =>
+      (a.expiresAt ?? Infinity) - (b.expiresAt ?? Infinity) ||
+      (a.grantedAt ?? Infinity) - (b.grantedAt ?? Infinity) || a.id.localeCompare(b.id))[0];
   }
   function renderResetCredits(data = resetCredits, status = '') {
     const target = $('reset-credits'); if (!target) return;
@@ -1169,27 +1183,35 @@
     const available = Number.isInteger(data?.availableCount) && data.availableCount >= 0 ? data.availableCount : null;
     const head = node('div', null, 'reset-credits-head'), copy = node('span', null, 'reset-credits-copy');
     const title = node('strong', t('사용 한도 초기화권')); title.id = 'reset-credits-title';
+    const choice = earliestResetCredit(data), canRetry = !!(resetCreditIdempotencyKey && resetCreditSelectedId);
     copy.append(title, node('small', available === null ? t('초기화권 정보를 사용할 수 없습니다.') : (available ? t('{count}개 사용 가능', {count:available}) : t('사용 가능한 초기화권이 없습니다.'))));
+    if (available > 0 && !choice && !canRetry) copy.append(node('small', t('만료일 전체를 확인할 수 없어 사용을 보류합니다.')));
+    else if (choice?.expiresAt != null && !canRetry) copy.append(node('small', t('가장 먼저 만료: ') + usageTime(choice.expiresAt)));
     head.append(copy);
     if (available > 0) {
-      const use = button(t('1개 사용'), consumeResetCredit, 'secondary-button'); use.id = 'reset-credit-use'; use.disabled = resetCreditBusy; head.append(use);
+      const use = button(t('1개 사용'), consumeResetCredit, 'secondary-button'); use.id = 'reset-credit-use'; use.disabled = resetCreditBusy || (!choice && !canRetry); head.append(use);
     }
     target.append(head);
     if (status) { const message = node('p', status.text || status, 'reset-credits-status' + (status.error ? ' error' : '')); message.id = 'reset-credits-status'; message.setAttribute('role','status'); target.append(message); }
   }
   async function consumeResetCredit() {
     if (resetCreditBusy || !Number.isInteger(resetCredits?.availableCount) || resetCredits.availableCount <= 0 || !C.isLoggedIn(state.account)) return;
+    const choice = earliestResetCredit(resetCredits);
+    if (!choice && !resetCreditSelectedId) return;
     if (!confirm(t('사용 한도 초기화권 1개를 사용할까요?'))) return;
     const scope = accountScope(); resetResetCreditRequest(scope); resetCreditBusy = true; renderResetCredits(resetCredits, {text:t('초기화권을 사용하는 중…')});
-    if (!resetCreditIdempotencyKey) resetCreditIdempotencyKey = (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
-    const key = resetCreditIdempotencyKey, generation = usageGeneration;
+    if (!resetCreditIdempotencyKey) {
+      resetCreditIdempotencyKey = (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
+      resetCreditSelectedId = choice.id;
+    }
+    const key = resetCreditIdempotencyKey, creditId = resetCreditSelectedId, generation = usageGeneration;
     try {
-      const params = {idempotencyKey:key};
+      const params = {idempotencyKey:key, creditId};
       const result = await rpc('account/rateLimitResetCredit/consume', params);
       if (generation !== usageGeneration || scope !== accountScope()) return;
       const outcome = result?.outcome || result?.status;
       if (!['reset','alreadyRedeemed','noCredit','nothingToReset'].includes(outcome)) throw new Error(t('초기화권 처리 결과를 확인할 수 없습니다.'));
-      resetCreditIdempotencyKey = '';
+      resetCreditIdempotencyKey = ''; resetCreditSelectedId = '';
       const message = ['reset','alreadyRedeemed'].includes(outcome) ? t('사용 한도를 초기화했습니다.') : outcome === 'noCredit' ? t('사용 가능한 초기화권이 없습니다.') : t('현재 초기화할 사용 한도가 없습니다.');
       if (['reset','alreadyRedeemed','noCredit'].includes(outcome)) resetCredits = null;
       resetCreditBusy = false; renderResetCredits(resetCredits, {text:message});

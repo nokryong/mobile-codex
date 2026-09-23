@@ -7,6 +7,7 @@ const root = 'app/src/main/assets/web/';
 const opened = [];
 afterEach(() => { for (const dom of opened.splice(0)) dom.window.close(); });
 const tick = () => new Promise(r => setTimeout(r, 10));
+const resetCredit = (id, expiresAt) => ({id, expiresAt, grantedAt:1900000000, status:'available', resetType:'codexRateLimits'});
 function setup(overrides = {}, options = {}) {
   const dom = new JSDOM(fs.readFileSync(root+'index.html','utf8'), {url: 'https://appassets.androidplatform.net/index.html', runScripts: 'outside-only'}); opened.push(dom);
   const w = dom.window, calls = [], responses = [];
@@ -101,20 +102,20 @@ test('account usage reads the app-server snapshot and prefers multi-bucket limit
 test('reset credits show available count and consume one after confirmation',async()=>{
  let reads=0, consumed=[];
  const {w,calls}=setup({'rpc':m=>{
-   if(m.args.method==='account/rateLimits/read') { reads++; return {rateLimits:{primary:{usedPercent:40}},rateLimitResetCredits:{availableCount:2,credits:[{id:'credit-1'}]}}; }
+   if(m.args.method==='account/rateLimits/read') { reads++; return {rateLimits:{primary:{usedPercent:40}},rateLimitResetCredits:{availableCount:2,credits:[resetCredit('late',2100000000),resetCredit('early',2000000000)]}}; }
    if(m.args.method==='account/rateLimitResetCredit/consume') { consumed.push(m.args.params); return {outcome:'reset'}; }
    return {data:[]};
  }}); await tick(); w.document.querySelector('[data-settings-tab="account"]').click(); await tick(); await tick();
  const d=w.document; assert.match(d.getElementById('reset-credits').textContent,/2개 사용 가능/);
  const use=d.getElementById('reset-credit-use'); assert.ok(use); use.click(); for(let i=0;i<5;i++) await tick();
- assert.equal(consumed.length,1); assert.equal(consumed[0].creditId,undefined); assert.ok(consumed[0].idempotencyKey);
+ assert.equal(consumed.length,1); assert.equal(consumed[0].creditId,'early'); assert.ok(consumed[0].idempotencyKey);
  assert.equal(reads,2); assert.match(d.getElementById('reset-credits').textContent,/사용 한도를 초기화했습니다/);
 });
 
 test('completed reset cannot spend another credit when the follow-up usage read fails',async()=>{
  let reads=0, consumed=0;
  const {w}=setup({'rpc':m=>{
-   if(m.args.method==='account/rateLimits/read') { if(++reads>1) throw new Error('offline'); return {rateLimits:{},rateLimitResetCredits:{availableCount:2}}; }
+   if(m.args.method==='account/rateLimits/read') { if(++reads>1) throw new Error('offline'); return {rateLimits:{},rateLimitResetCredits:{availableCount:2,credits:[resetCredit('first',2000000000),resetCredit('second',2100000000)]}}; }
    if(m.args.method==='account/rateLimitResetCredit/consume') { consumed++; return {outcome:'alreadyRedeemed'}; }
    return {data:[]};
  }}); await tick(); w.document.querySelector('[data-settings-tab="account"]').click(); await tick(); await tick();
@@ -134,18 +135,43 @@ test('reset credits omit the action when count is unavailable or zero',async()=>
 });
 
 test('reset credit retry reuses key, while account change drops stale response',async()=>{
- let rejectConsume, consumeCalls=0, keys=[];
+ let rejectConsume, consumeCalls=0, attempts=[], reads=0;
  const {w,snapshot}=setup({'rpc':m=>{
-   if(m.args.method==='account/rateLimits/read') return {rateLimits:{},rateLimitResetCredits:{availableCount:1,credits:[{id:'credit-1'}]}};
-   if(m.args.method==='account/rateLimitResetCredit/consume') { consumeCalls++; keys.push(m.args.params.idempotencyKey); return new Promise((resolve,reject)=>{rejectConsume=reject;}); }
+   if(m.args.method==='account/rateLimits/read') return {rateLimits:{},rateLimitResetCredits:{availableCount:2,credits:++reads===1?[resetCredit('first',2000000000),resetCredit('second',2100000000)]:[resetCredit('first',2200000000),resetCredit('second',2100000000)]}};
+   if(m.args.method==='account/rateLimitResetCredit/consume') { consumeCalls++; attempts.push(m.args.params); return new Promise((resolve,reject)=>{rejectConsume=reject;}); }
    return {data:[]};
  }}); await tick(); w.document.querySelector('[data-settings-tab="account"]').click(); await tick(); await tick();
  const use=w.document.getElementById('reset-credit-use'); use.click(); await tick();
  const first=w.document.querySelector('#reset-credit-use'); assert.equal(first.disabled,true); rejectConsume(new Error('offline')); for(let i=0;i<3;i++) await tick();
  assert.match(w.document.getElementById('reset-credits').textContent,/다시 시도/);
- w.document.getElementById('reset-credit-use').click(); await tick(); assert.equal(consumeCalls,2); assert.equal(keys[1],keys[0]);
+ w.document.getElementById('usage-refresh').click(); await tick(); await tick();
+ w.document.getElementById('reset-credit-use').click(); await tick(); assert.equal(consumeCalls,2); assert.equal(attempts[1].idempotencyKey,attempts[0].idempotencyKey); assert.equal(attempts[1].creditId,'first');
  const calls=w.document.querySelector('#reset-credits'); w.mobileCodexEvent('state',{...snapshot,account:{type:'chatgpt',email:'other@example.test'}}); await tick();
  assert.match(calls.textContent,/정보를 사용할 수 없습니다/); assert.doesNotMatch(calls.textContent,/사용 중/);
+});
+
+test('reset credit selection waits for complete expiry details and treats no expiry as last',async()=>{
+ let snapshot={availableCount:2,credits:[resetCredit('never',null),resetCredit('soon',2000000000)]};
+ const attempts=[];
+ const {w}=setup({'rpc':m=>{
+   if(m.args.method==='account/rateLimits/read') return {rateLimits:{},rateLimitResetCredits:snapshot};
+   if(m.args.method==='account/rateLimitResetCredit/consume') { attempts.push(m.args.params); return {outcome:'reset'}; }
+   return {data:[]};
+ }}); await tick(); w.document.querySelector('[data-settings-tab="account"]').click(); await tick(); await tick();
+ assert.equal(w.document.getElementById('reset-credit-use').disabled,false);
+ assert.match(w.document.getElementById('reset-credits').textContent,/가장 먼저 만료/);
+ snapshot={availableCount:2,credits:[resetCredit('soon',2000000000)]};
+ w.document.getElementById('usage-refresh').click(); await tick(); await tick();
+ assert.equal(w.document.getElementById('reset-credit-use').disabled,true);
+ assert.match(w.document.getElementById('reset-credits').textContent,/만료일 전체를 확인할 수 없어/);
+ w.document.getElementById('reset-credit-use').click(); await tick(); assert.equal(attempts.length,0);
+ snapshot={availableCount:2,credits:null};
+ w.document.getElementById('usage-refresh').click(); await tick(); await tick();
+ assert.equal(w.document.getElementById('reset-credit-use').disabled,true);
+ snapshot={availableCount:2,credits:[resetCredit('never',null),resetCredit('soon',2000000000)]};
+ w.document.getElementById('usage-refresh').click(); await tick(); await tick();
+ w.document.getElementById('reset-credit-use').click(); for(let i=0;i<5;i++) await tick();
+ assert.equal(attempts[0].creditId,'soon');
 });
 
 test('usage never turns missing limits into zero and drops a response from a previous account',async()=>{
