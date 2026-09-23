@@ -2,7 +2,9 @@ package dev.mobilecodex.app;
 
 import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.graphics.Color;
 import android.os.Bundle;
+import android.view.inputmethod.InputMethodManager;
 import android.webkit.CookieManager;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
@@ -14,16 +16,12 @@ import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.TextView;
+import androidx.core.graphics.Insets;
+import androidx.core.view.ViewCompat;
+import androidx.core.view.WindowCompat;
+import androidx.core.view.WindowInsetsCompat;
 import org.json.JSONArray;
 import org.json.JSONObject;
-import java.io.ByteArrayOutputStream;
-import java.io.InputStream;
-import java.net.HttpURLConnection;
-import java.net.URL;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.util.HashSet;
-import java.util.Iterator;
 
 /** On-device experiment: user-authenticated ChatGPT web page with a Mobile Codex input. */
 public final class ChatWebProbeActivity extends Activity {
@@ -39,9 +37,16 @@ public final class ChatWebProbeActivity extends Activity {
     @SuppressLint("SetJavaScriptEnabled")
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
+        WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
         setTitle("Chat 전송 실험");
         LinearLayout root = new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(8), dp(8), dp(8), dp(8));
+        root.setBackgroundColor(Color.WHITE);
+        int gap = dp(8);
+        ViewCompat.setOnApplyWindowInsetsListener(root, (view, insets) -> {
+            Insets safe = insets.getInsets(WindowInsetsCompat.Type.systemBars() | WindowInsetsCompat.Type.ime());
+            view.setPadding(gap + safe.left, gap + safe.top, gap + safe.right, gap + safe.bottom);
+            return insets;
+        });
         TextView note = new TextView(this);
         note.setText("공식 ChatGPT 웹을 앱 안에서 엽니다. 로그인·검증을 완료하고 일반 Chat 모델을 선택한 뒤 앱 입력창으로 보내 주세요. 이 화면은 전송 경로 시험용입니다.");
         root.addView(note);
@@ -76,6 +81,9 @@ public final class ChatWebProbeActivity extends Activity {
                 if (request.isForMainFrame()) stage("페이지 HTTP 상태: " + response.getStatusCode());
             }
         });
+        requeryButton = new Button(this); requeryButton.setText("같은 대화 서버 재조회");
+        requeryButton.setEnabled(false); requeryButton.setOnClickListener(v -> requeryConversation());
+        root.addView(requeryButton);
         root.addView(page, new LinearLayout.LayoutParams(-1, 0, 1));
         LinearLayout composer = new LinearLayout(this);
         input = new EditText(this); input.setSingleLine(false); input.setMinLines(1); input.setMaxLines(3);
@@ -84,10 +92,8 @@ public final class ChatWebProbeActivity extends Activity {
         composer.addView(input, new LinearLayout.LayoutParams(0, -2, 1));
         sendButton = new Button(this); sendButton.setText("보내기"); sendButton.setOnClickListener(v -> sendFromNativeInput());
         composer.addView(sendButton); root.addView(composer);
-        requeryButton = new Button(this); requeryButton.setText("같은 대화 서버 재조회");
-        requeryButton.setEnabled(false); requeryButton.setOnClickListener(v -> requeryConversation());
-        root.addView(requeryButton);
         setContentView(root);
+        ViewCompat.requestApplyInsets(root);
         stage("WebView 준비. 메시지 전송 전 로그인 상태를 확인하세요.");
         page.loadUrl("https://chatgpt.com/");
     }
@@ -97,7 +103,11 @@ public final class ChatWebProbeActivity extends Activity {
     private void stage(String description) {
         if (stages.length() > 2500) stages.delete(0, stages.length() - 2000);
         stages.append(System.currentTimeMillis()).append(" · ").append(description).append('\n');
-        diagnostic.setText(stages.toString());
+        String[] lines = stages.toString().split("\n");
+        StringBuilder recent = new StringBuilder();
+        for (int i = Math.max(0, lines.length - 5); i < lines.length; i++)
+            recent.append(lines[i]).append('\n');
+        diagnostic.setText(recent.toString());
     }
 
     private void sendFromNativeInput() {
@@ -107,6 +117,8 @@ public final class ChatWebProbeActivity extends Activity {
         if (!"chatgpt.com".equals(host)) { stage("ChatGPT 페이지에서 로그인 후 다시 시도해 주세요."); return; }
         submittedText = text;
         sendButton.setEnabled(false);
+        ((InputMethodManager) getSystemService(INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(input.getWindowToken(), 0);
+        input.clearFocus();
         stage("앱 입력 접수; 웹 입력 요소 검사 시작");
         page.evaluateJavascript("document.querySelectorAll('[data-message-author-role=\"assistant\"]').length",
             value -> {
@@ -154,6 +166,7 @@ public final class ChatWebProbeActivity extends Activity {
                 stage("앱 WebView에 새 답변 표시 확인");
                 requeryButton.setEnabled(true);
                 sendButton.setEnabled(true);
+                page.postDelayed(this::requeryConversation, 500);
             } else if (attempt < 120) page.postDelayed(() -> pollAssistant(attempt + 1), 1000);
             else { waitingForAssistant = false; sendButton.setEnabled(true); stage("답변 표시 시간 초과; 화면을 직접 확인해 주세요."); }
         });
@@ -165,86 +178,41 @@ public final class ChatWebProbeActivity extends Activity {
     }
 
     private void requeryConversation() {
-        String path = android.net.Uri.parse(page.getUrl() == null ? "" : page.getUrl()).getPath();
+        android.net.Uri pageUri = android.net.Uri.parse(page.getUrl() == null ? "" : page.getUrl());
+        if (!"chatgpt.com".equals(pageUri.getHost())) { stage("ChatGPT 페이지가 아니어서 재조회할 수 없음"); return; }
+        String path = pageUri.getPath();
         String id = path != null && path.matches("/c/[0-9a-fA-F-]{36}") ? path.substring(3) : "";
         if (id.isEmpty()) { stage("대화 ID를 주소에서 찾지 못함; 공식 앱에서 직접 확인해 주세요."); return; }
-        stage("같은 일반 Chat 대화 서버 재조회 시작");
+        stage("같은 대화 서버 재조회 시작");
         requeryButton.setEnabled(false);
-        new Thread(() -> {
-            String outcome = verifyConversation(id, submittedText);
-            runOnUiThread(() -> { stage(outcome); requeryButton.setEnabled(true); });
-        }, "chat-web-requery").start();
+        String script = "(function(){window.__mcProbeResult='pending';"
+            + "fetch('/backend-api/conversation/" + id + "',{credentials:'include',headers:{Accept:'application/json'}})"
+            + ".then(async r=>{if(!r.ok){window.__mcProbeResult='재조회 HTTP '+r.status;return;}"
+            + "const data=await r.json(),mapping=data.mapping||{},nodes=Object.entries(mapping),expected=" + JSONObject.quote(submittedText) + ";"
+            + "let match='';for(const [key,node] of nodes){const m=node&&node.message,c=m&&m.content,parts=c&&c.parts;"
+            + "if(m&&m.author&&m.author.role==='user'&&Array.isArray(parts)&&parts.some(p=>p===expected)){match=key;break;}}"
+            + "let linked=false,model='';if(match)for(const [key,node] of nodes){const m=node&&node.message;"
+            + "if(!m||!m.author||m.author.role!=='assistant'||m.status!=='finished_successfully')continue;"
+            + "let parent=node.parent;const seen=new Set();while(parent&&!seen.has(parent)){seen.add(parent);"
+            + "if(parent===match){linked=true;const meta=m.metadata||{};model=meta.resolved_model_slug||meta.model_slug||'';break;}"
+            + "parent=mapping[parent]&&mapping[parent].parent;}if(linked)break;}"
+            + "window.__mcProbeResult='같은 대화 재조회: 테스트 메시지 '+(match?'있음':'없음')"
+            + "+', 연결된 완료 답변 '+(linked?'있음':'없음')+(model?', 모델 '+model+(model.endsWith('-wm')?' (Work)':''):'');})"
+            + ".catch(e=>{window.__mcProbeResult='재조회 오류: '+e.name;});return 'started';})()";
+        page.evaluateJavascript(script, value -> pollRequery(0));
     }
 
-    private String verifyConversation(String id, String expectedText) {
-        HttpURLConnection connection = null;
-        try {
-            FileHome home = new FileHome();
-            JSONObject auth = new JSONObject(new String(Files.readAllBytes(home.authFile.toPath()), StandardCharsets.UTF_8));
-            String token = auth.getJSONObject("tokens").getString("access_token");
-            URL url = new URL("https://chatgpt.com/backend-api/conversation/" + id);
-            connection = (HttpURLConnection) url.openConnection();
-            connection.setConnectTimeout(15000); connection.setReadTimeout(15000);
-            connection.setRequestProperty("Authorization", "Bearer " + token);
-            connection.setRequestProperty("Accept", "application/json");
-            int status = connection.getResponseCode();
-            if (status != 200) return "재조회 HTTP " + status + "; 계정 일치 또는 인증 상태 확인 필요";
-            JSONObject conversation;
-            try (InputStream stream = connection.getInputStream()) {
-                ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-                byte[] buffer = new byte[16384]; int count;
-                while ((count = stream.read(buffer)) != -1) {
-                    if (bytes.size() + count > 8_000_000) return "재조회 응답이 너무 큼";
-                    bytes.write(buffer, 0, count);
-                }
-                conversation = new JSONObject(new String(bytes.toByteArray(), StandardCharsets.UTF_8));
+    private void pollRequery(int attempt) {
+        if (isFinishing()) return;
+        page.evaluateJavascript("window.__mcProbeResult || 'pending'", value -> {
+            String result = javascriptString(value);
+            if ("pending".equals(result) && attempt < 50) {
+                page.postDelayed(() -> pollRequery(attempt + 1), 300);
+                return;
             }
-            JSONObject mapping = conversation.optJSONObject("mapping");
-            String matchingUserNode = "";
-            if (mapping != null) for (Iterator<String> keys = mapping.keys(); keys.hasNext();) {
-                String key = keys.next();
-                JSONObject node = mapping.optJSONObject(key), message = node == null ? null : node.optJSONObject("message");
-                if (message == null) continue;
-                String role = message.optJSONObject("author") == null ? "" : message.optJSONObject("author").optString("role");
-                if ("user".equals(role)) {
-                    JSONArray parts = message.optJSONObject("content") == null ? null : message.optJSONObject("content").optJSONArray("parts");
-                    if (parts != null) for (int n = 0; n < parts.length(); n++)
-                        if (expectedText.equals(parts.optString(n))) matchingUserNode = key;
-                }
-            }
-            boolean answerLinked = false;
-            String answerModel = "";
-            if (mapping != null && !matchingUserNode.isEmpty()) for (Iterator<String> keys = mapping.keys(); keys.hasNext();) {
-                String key = keys.next();
-                JSONObject node = mapping.optJSONObject(key), message = node == null ? null : node.optJSONObject("message");
-                if (message == null || message.optJSONObject("author") == null
-                    || !"assistant".equals(message.optJSONObject("author").optString("role"))
-                    || !"finished_successfully".equals(message.optString("status"))) continue;
-                String parent = node.optString("parent");
-                HashSet<String> visited = new HashSet<>();
-                while (!parent.isEmpty() && visited.add(parent)) {
-                    if (matchingUserNode.equals(parent)) {
-                        answerLinked = true;
-                        JSONObject metadata = message.optJSONObject("metadata");
-                        answerModel = metadata == null ? "" : metadata.optString("resolved_model_slug", metadata.optString("model_slug"));
-                        break;
-                    }
-                    JSONObject previous = mapping.optJSONObject(parent);
-                    parent = previous == null ? "" : previous.optString("parent");
-                }
-                if (answerLinked) break;
-            }
-            return "같은 대화 재조회: 테스트 메시지 " + (matchingUserNode.isEmpty() ? "없음" : "있음")
-                + ", 그 메시지에 연결된 완료 답변 " + (answerLinked ? "있음" : "없음")
-                + (answerModel.isEmpty() ? "" : ", 모델 " + answerModel + (answerModel.endsWith("-wm") ? " (Work)" : ""));
-        } catch (Exception error) {
-            return "재조회 도구 오류: " + error.getClass().getSimpleName();
-        } finally { if (connection != null) connection.disconnect(); }
-    }
-
-    private final class FileHome {
-        final java.io.File authFile;
-        FileHome() throws java.io.IOException { authFile = CodexHome.open(ChatWebProbeActivity.this).child("auth.json"); }
+            stage("pending".equals(result) ? "재조회 시간 초과" : result);
+            requeryButton.setEnabled(true);
+        });
     }
 
     @Override public void onBackPressed() {
