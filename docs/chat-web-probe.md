@@ -28,7 +28,9 @@ native input and replies displayed in the WebView. The official ChatGPT Android
 app was then opened independently: it showed the exact
 `MC-NATIVE-1790182813756` user message and its reply in the same saved
 conversation. The initial in-WebView requery returned HTTP 404 without the
-web session bearer header; the revised requery path still needs a phone test.
+web session bearer header. After the header fix, an on-device requery found
+the exact `MC-NATIVE-1790183737963` user message and its linked finished
+assistant reply with model `gpt-5-6-thinking`.
 This experiment depends on current webpage DOM selectors. The character UI
 remains in the existing Codex screen; this experiment tests only the transport
 and authentication path. The independent Python probe in
