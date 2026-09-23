@@ -803,6 +803,16 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-vis
 .usage-gauge-copy strong,.usage-gauge-copy small { display:block; }
 .usage-gauge-copy strong { font-size:12px; overflow-wrap:anywhere; }
 .usage-gauge-copy small { margin-top:5px; color:var(--muted); font-size:11px; line-height:1.55; font-variant-numeric:tabular-nums; }
+.reset-credits { margin-top:14px; padding:13px; border:1px solid var(--border); border-radius:14px; background:var(--pill); }
+.reset-credits[hidden] { display:none; }
+.reset-credits-head { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.reset-credits-copy { min-width:0; }
+.reset-credits-copy strong,.reset-credits-copy small { display:block; }
+.reset-credits-copy strong { font-size:12px; }
+.reset-credits-copy small { margin-top:4px; color:var(--muted); font-size:11px; line-height:1.45; }
+.reset-credits .secondary-button { flex:none; }
+.reset-credits-status { margin:9px 0 0; color:var(--muted); font-size:11px; line-height:1.45; }
+.reset-credits-status.error { color:var(--danger); }
 .account-runtime-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:16px; }
 .account-runtime-actions button { flex:1 1 150px; }
 @media(max-width:480px) {

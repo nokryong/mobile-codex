@@ -849,5 +849,16 @@ window.MobileCodexEnglish = {
   "계정 프로필을 준비하지 못했습니다.": "Could not prepare account profiles.",
   "다시 로그인이 필요합니다": "Sign-in is required again",
   "다시 로그인": "Sign in again",
-  "이전 계정을 복원하지 못했습니다: ": "Could not restore the previous account: "
+  "이전 계정을 복원하지 못했습니다: ": "Could not restore the previous account: ",
+  "사용 한도 초기화권": "Rate-limit reset credits",
+  "초기화권 정보를 사용할 수 없습니다.": "Reset credit information is unavailable.",
+  "{count}개 사용 가능": "{count} available",
+  "사용 가능한 초기화권이 없습니다.": "No reset credits are available.",
+  "1개 사용": "Use one",
+  "사용 한도 초기화권 1개를 사용할까요?": "Use one rate-limit reset credit?",
+  "초기화권을 사용하는 중…": "Using reset credit…",
+  "사용 한도를 초기화했습니다.": "Rate limit reset.",
+  "현재 초기화할 사용 한도가 없습니다.": "There is no rate limit to reset right now.",
+  "초기화권 처리 결과를 확인할 수 없습니다.": "Could not confirm the reset credit result.",
+  "초기화권을 사용하지 못했습니다. 다시 시도해 주세요.": "Could not use the reset credit. Try again."
 };

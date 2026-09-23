@@ -98,6 +98,56 @@ test('account usage reads the app-server snapshot and prefers multi-bucket limit
  assert.match(text,/Codex/);assert.match(text,/남은 58%/);assert.match(text,/5시간/);
 });
 
+test('reset credits show available count and consume one after confirmation',async()=>{
+ let reads=0, consumed=[];
+ const {w,calls}=setup({'rpc':m=>{
+   if(m.args.method==='account/rateLimits/read') { reads++; return {rateLimits:{primary:{usedPercent:40}},rateLimitResetCredits:{availableCount:2,credits:[{id:'credit-1'}]}}; }
+   if(m.args.method==='account/rateLimitResetCredit/consume') { consumed.push(m.args.params); return {outcome:'reset'}; }
+   return {data:[]};
+ }}); await tick(); w.document.querySelector('[data-settings-tab="account"]').click(); await tick(); await tick();
+ const d=w.document; assert.match(d.getElementById('reset-credits').textContent,/2개 사용 가능/);
+ const use=d.getElementById('reset-credit-use'); assert.ok(use); use.click(); for(let i=0;i<5;i++) await tick();
+ assert.equal(consumed.length,1); assert.equal(consumed[0].creditId,undefined); assert.ok(consumed[0].idempotencyKey);
+ assert.equal(reads,2); assert.match(d.getElementById('reset-credits').textContent,/사용 한도를 초기화했습니다/);
+});
+
+test('completed reset cannot spend another credit when the follow-up usage read fails',async()=>{
+ let reads=0, consumed=0;
+ const {w}=setup({'rpc':m=>{
+   if(m.args.method==='account/rateLimits/read') { if(++reads>1) throw new Error('offline'); return {rateLimits:{},rateLimitResetCredits:{availableCount:2}}; }
+   if(m.args.method==='account/rateLimitResetCredit/consume') { consumed++; return {outcome:'alreadyRedeemed'}; }
+   return {data:[]};
+ }}); await tick(); w.document.querySelector('[data-settings-tab="account"]').click(); await tick(); await tick();
+ w.document.getElementById('reset-credit-use').click(); for(let i=0;i<5;i++) await tick();
+ assert.equal(consumed,1); assert.equal(reads,2);
+ assert.equal(w.document.getElementById('reset-credit-use'),null);
+ assert.match(w.document.getElementById('reset-credits').textContent,/사용 한도를 초기화했습니다/);
+});
+
+test('reset credits omit the action when count is unavailable or zero',async()=>{
+ let count=0;
+ const {w}=setup({'rpc':m=>m.args.method==='account/rateLimits/read'?{rateLimits:{},rateLimitResetCredits:count++?{availableCount:0}:{credits:null}}:{data:[]}}); await tick();
+ w.document.querySelector('[data-settings-tab="account"]').click(); await tick(); await tick();
+ assert.match(w.document.getElementById('reset-credits').textContent,/정보를 사용할 수 없습니다/); assert.equal(w.document.getElementById('reset-credit-use'),null);
+ w.document.getElementById('usage-refresh').click(); await tick(); await tick();
+ assert.match(w.document.getElementById('reset-credits').textContent,/사용 가능한 초기화권이 없습니다/); assert.equal(w.document.getElementById('reset-credit-use'),null);
+});
+
+test('reset credit retry reuses key, while account change drops stale response',async()=>{
+ let rejectConsume, consumeCalls=0, keys=[];
+ const {w,snapshot}=setup({'rpc':m=>{
+   if(m.args.method==='account/rateLimits/read') return {rateLimits:{},rateLimitResetCredits:{availableCount:1,credits:[{id:'credit-1'}]}};
+   if(m.args.method==='account/rateLimitResetCredit/consume') { consumeCalls++; keys.push(m.args.params.idempotencyKey); return new Promise((resolve,reject)=>{rejectConsume=reject;}); }
+   return {data:[]};
+ }}); await tick(); w.document.querySelector('[data-settings-tab="account"]').click(); await tick(); await tick();
+ const use=w.document.getElementById('reset-credit-use'); use.click(); await tick();
+ const first=w.document.querySelector('#reset-credit-use'); assert.equal(first.disabled,true); rejectConsume(new Error('offline')); for(let i=0;i<3;i++) await tick();
+ assert.match(w.document.getElementById('reset-credits').textContent,/다시 시도/);
+ w.document.getElementById('reset-credit-use').click(); await tick(); assert.equal(consumeCalls,2); assert.equal(keys[1],keys[0]);
+ const calls=w.document.querySelector('#reset-credits'); w.mobileCodexEvent('state',{...snapshot,account:{type:'chatgpt',email:'other@example.test'}}); await tick();
+ assert.match(calls.textContent,/정보를 사용할 수 없습니다/); assert.doesNotMatch(calls.textContent,/사용 중/);
+});
+
 test('usage never turns missing limits into zero and drops a response from a previous account',async()=>{
  let finish, delayed=false;
  const {w,snapshot}=setup({'rpc':m=>m.args.method==='account/rateLimits/read'?(delayed?new Promise(r=>finish=r):{rateLimits:{primary:{usedPercent:null}}}):{data:[]}});await tick();

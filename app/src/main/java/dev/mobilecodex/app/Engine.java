@@ -243,15 +243,17 @@ public final class Engine {
                         start();
                         String method = args.getString("method");
                         JSONObject result = call(method, args.optJSONObject("params") == null ? new JSONObject() : args.getJSONObject("params"));
-                        // account/rateLimits/read may proactively rotate an
+                        // Usage reads and reset-credit redemption may rotate an
                         // expired access/refresh token inside app-server.auth.
                         // Keep the profile copy in sync before the next
                         // account switch or process restart can restore the
                         // pre-rotation token.
-                        if (method.equals("account/rateLimits/read") && account.length() > 0) {
+                        if ((method.equals("account/rateLimits/read") || method.equals("account/rateLimitResetCredit/consume")) && account.length() > 0) {
                             accountProfiles.saveCurrentSnapshot(account);
-                            rateLimits = result == null ? new JSONObject() : result;
-                            publish();
+                            if (method.equals("account/rateLimits/read")) {
+                                rateLimits = result == null ? new JSONObject() : result;
+                                publish();
+                            }
                         }
                         reply.complete(result, null);
                     }

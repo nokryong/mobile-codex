@@ -16,6 +16,7 @@
   let chatIconsEnabled = localStorage.getItem('chat-icons') !== 'off', activityIcon = 'thinking';
   let characterState = {folderName:'', folderConfigured:false, selectedPackId:'builtin', packs:[{id:'builtin',name:'Builtin',valid:true,icons:{}}]};
   let instructionsOriginal = '', instructionsLoaded = false, instructionsSaving = false, devtoolsCheckResult = null, devtoolsCheckSummary = '', devtoolsChecking = false, usageLoading = false, accountActionStatus = {text:'', error:false};
+  let resetCredits = null, resetCreditBusy = false, resetCreditScope = '', resetCreditIdempotencyKey = '', usageGeneration = 0;
   const toolCache = [null, null, null];
   let updateState = {}, updateSourceDirty = false, updateRequestPending = false;
   function call(action, args = {}) {
@@ -929,6 +930,8 @@
     state.phone = {...state.phone, enabled:false, status:t('휴대폰 제어 꺼짐')}; renderPhone();
   }
   function render(next) {
+    const previousAccountScope = accountScope(state.account), nextAccountScope = accountScope(next.account);
+    if (previousAccountScope !== nextAccountScope) { usageGeneration++; resetCredits = null; resetCreditBusy = false; resetCreditIdempotencyKey = ''; resetCreditScope = nextAccountScope; }
     const changedThread = state.threadId !== next.threadId;
     setDraftScope(next); state = next;
     state.models ||= []; state.messages ||= []; state.projects ||= []; state.accounts ||= []; state.workspace ||= {}; state.account ||= {}; state.rateLimits ||= {}; setCharacterState(state.characters);
@@ -941,7 +944,7 @@
     document.querySelectorAll('[data-prompt]').forEach((button, i) => { button.dataset.prompt = selected ? [t('이 폴더에 어떤 파일이 있는지 살펴보고 정리해줘.'),t('이 프로젝트를 살펴보고 실행 방법과 개선할 부분을 알려줘.'),t('이 프로젝트의 변경 사항을 검토하고 버그가 있는지 찾아줘.')][i] : generalPrompts[i]; if (button.lastChild?.nodeType === Node.TEXT_NODE) button.lastChild.textContent = selected ? [t('폴더 살펴보기'),t('프로젝트 이해하기'),t('변경 사항 검토')][i] : [t('작업 계획하기'),t('아이디어 정리하기'),t('도움말 보기')][i]; });
     $('login-step').textContent = logged ? '✓' : '1'; $('login-step').classList.toggle('done', logged);
     $('folder-step').textContent = selected ? '✓' : '2'; $('folder-step').classList.toggle('done', !!selected);
-    renderQuota(); renderAccounts();
+    renderQuota(); renderAccounts(); renderResetCredits(resetCredits);
     $('settings-status').textContent = state.status; $('settings-indicator').textContent = state.ready ? t('연결됨') : t('연결 안 됨'); $('settings-indicator').classList.toggle('online', !!state.ready);
     const pendingDeletes = Number(state.pendingDeletionCount) || 0;
     $('pending-deletions').hidden = pendingDeletes === 0;
@@ -1155,6 +1158,50 @@
       card.append(quotaRing(row.remaining, row.label + ' ' + t('남은 ') + Math.round(row.remaining) + '%', true), copy); target.append(card);
     }
   }
+  function accountScope(account = state.account) { return JSON.stringify(account || {}); }
+  function resetResetCreditRequest(scope = accountScope()) {
+    if (resetCreditScope !== scope) { resetCreditScope = scope; resetCreditIdempotencyKey = ''; }
+  }
+  function renderResetCredits(data = resetCredits, status = '') {
+    const target = $('reset-credits'); if (!target) return;
+    target.replaceChildren(); target.hidden = !C.isLoggedIn(state.account);
+    if (target.hidden) return;
+    const available = Number.isInteger(data?.availableCount) && data.availableCount >= 0 ? data.availableCount : null;
+    const head = node('div', null, 'reset-credits-head'), copy = node('span', null, 'reset-credits-copy');
+    const title = node('strong', t('사용 한도 초기화권')); title.id = 'reset-credits-title';
+    copy.append(title, node('small', available === null ? t('초기화권 정보를 사용할 수 없습니다.') : (available ? t('{count}개 사용 가능', {count:available}) : t('사용 가능한 초기화권이 없습니다.'))));
+    head.append(copy);
+    if (available > 0) {
+      const use = button(t('1개 사용'), consumeResetCredit, 'secondary-button'); use.id = 'reset-credit-use'; use.disabled = resetCreditBusy; head.append(use);
+    }
+    target.append(head);
+    if (status) { const message = node('p', status.text || status, 'reset-credits-status' + (status.error ? ' error' : '')); message.id = 'reset-credits-status'; message.setAttribute('role','status'); target.append(message); }
+  }
+  async function consumeResetCredit() {
+    if (resetCreditBusy || !Number.isInteger(resetCredits?.availableCount) || resetCredits.availableCount <= 0 || !C.isLoggedIn(state.account)) return;
+    if (!confirm(t('사용 한도 초기화권 1개를 사용할까요?'))) return;
+    const scope = accountScope(); resetResetCreditRequest(scope); resetCreditBusy = true; renderResetCredits(resetCredits, {text:t('초기화권을 사용하는 중…')});
+    if (!resetCreditIdempotencyKey) resetCreditIdempotencyKey = (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const key = resetCreditIdempotencyKey, generation = usageGeneration;
+    try {
+      const params = {idempotencyKey:key};
+      const result = await rpc('account/rateLimitResetCredit/consume', params);
+      if (generation !== usageGeneration || scope !== accountScope()) return;
+      const outcome = result?.outcome || result?.status;
+      if (!['reset','alreadyRedeemed','noCredit','nothingToReset'].includes(outcome)) throw new Error(t('초기화권 처리 결과를 확인할 수 없습니다.'));
+      resetCreditIdempotencyKey = '';
+      const message = ['reset','alreadyRedeemed'].includes(outcome) ? t('사용 한도를 초기화했습니다.') : outcome === 'noCredit' ? t('사용 가능한 초기화권이 없습니다.') : t('현재 초기화할 사용 한도가 없습니다.');
+      if (['reset','alreadyRedeemed','noCredit'].includes(outcome)) resetCredits = null;
+      resetCreditBusy = false; renderResetCredits(resetCredits, {text:message});
+      if (['reset','noCredit','nothingToReset','alreadyRedeemed'].includes(outcome)) {
+        await loadUsage();
+        if (scope === accountScope()) renderResetCredits(resetCredits, {text:message});
+      }
+    } catch (error) {
+      if (generation === usageGeneration && scope === accountScope()) { resetCreditBusy = false; renderResetCredits(resetCredits, {text:t('초기화권을 사용하지 못했습니다. 다시 시도해 주세요.'), error:true}); }
+    }
+    finally { if (generation === usageGeneration && scope === accountScope()) resetCreditBusy = false; }
+  }
   function renderAccounts() {
     const target = $('accounts-list'); if (!target) return; target.replaceChildren();
     const status = node('p', accountActionStatus.text, 'muted account-action-status' + (accountActionStatus.error ? ' error' : ''));
@@ -1195,15 +1242,15 @@
   }
   function openAccountSettings() { selectSettingsTab('account'); show('settings-dialog'); sidebar(false); if (C.isLoggedIn(state.account)) loadUsage(); }
   async function loadUsage() {
-    if (usageLoading) return;
+    if (usageLoading || resetCreditBusy) return;
     const status = $('usage-status'), target = $('usage-limits');
-    if (!C.isLoggedIn(state.account)) { status.textContent = t('로그인 후 사용 한도를 조회할 수 있습니다.'); target.replaceChildren(); return; }
-    const accountScope = JSON.stringify(state.account);
+    if (!C.isLoggedIn(state.account)) { status.textContent = t('로그인 후 사용 한도를 조회할 수 있습니다.'); target.replaceChildren(); resetCredits = null; renderResetCredits(); return; }
+    const scope = accountScope(), generation = ++usageGeneration; resetResetCreditRequest(scope);
     usageLoading = true; $('usage-refresh').disabled = true; status.textContent = t('사용 한도를 조회하는 중…');
     try {
       const result = await rpc('account/rateLimits/read', {}), rows = usageRows(result);
-      if (JSON.stringify(state.account) !== accountScope) { target.replaceChildren(); status.textContent = t('계정이 바뀌었습니다. 다시 조회해 주세요.'); return; }
-      state.rateLimits = result || {}; renderUsage(rows); renderQuota();
+      if (generation !== usageGeneration || accountScope() !== scope) { target.replaceChildren(); status.textContent = t('계정이 바뀌었습니다. 다시 조회해 주세요.'); return; }
+      resetCredits = result?.rateLimitResetCredits ?? null; state.rateLimits = result || {}; renderUsage(rows); renderQuota(); renderResetCredits(resetCredits);
       status.textContent = rows.length ? t('현재 계정의 Codex 사용 한도입니다.') : t('사용 한도 정보가 제공되지 않았습니다.');
     } catch (error) { target.replaceChildren(); status.textContent = t('사용 한도를 조회할 수 없습니다. ') + error.message; }
     finally { usageLoading = false; $('usage-refresh').disabled = false; }
@@ -1553,6 +1600,8 @@
     if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
     else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
   });
+  const resetCreditPanel = $('reset-credits');
+  $('usage-limits').after(resetCreditPanel);
   viewportChanged();
   call('state').then(async initial => { render(initial); loadCharacterPacks(); recoverVoiceInput(); loadUpdates(); try { acceptPickedAttachments(await call('attachments.recover'), ''); } catch {} }).catch(e => toast(e.message));
 })();
