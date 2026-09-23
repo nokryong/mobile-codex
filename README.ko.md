@@ -1,5 +1,10 @@
 # Mobile Codex
-
+<p>
+  <img width="24%" alt="General chat" src="https://github.com/user-attachments/assets/14dd8782-58eb-4784-96bc-aaa190adfa87" />
+  <img width="24%" alt="Git clone" src="https://github.com/user-attachments/assets/84b311d7-c584-4107-a09e-07862b11797d" />
+  <img width="24%" alt="Skill selection" src="https://github.com/user-attachments/assets/e2ca66de-9ac6-4044-89c5-4daf41c8e308" />
+  <img width="24%" alt="Image generation" src="https://github.com/user-attachments/assets/7beb3213-9051-4fc8-9051-40ff5fc45a5a" />
+</p>
 ## 설치 전에 확인하세요
 
 Play 프로텍트가 APK 설치를 막는 경우, 다음 순서로 잠시 설정을 바꾸세요.
