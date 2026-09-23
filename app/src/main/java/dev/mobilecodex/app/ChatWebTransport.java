@@ -163,7 +163,13 @@ final class ChatWebTransport {
                 + ", 전송 HTTP=" + evidence.optInt("sendStatus", 0)
                 + ", 대화 준비 HTTP=" + evidence.optInt("prepareStatus", 0)
                 + ", 네트워크=" + evidence.optJSONArray("network");
-            if (id.isEmpty()) { retry(() -> requery(attempt + 1), attempt, 30, "대화 주소를 찾지 못했습니다."); return; }
+            int sendStatus = evidence.optInt("sendStatus", 0);
+            if (sendStatus >= 400) {
+                finish(null, new IllegalStateException("일반 Chat 전송 HTTP " + sendStatus + " [" + lastDiagnostic + "]"));
+                return;
+            }
+            // The official client can emit /f/conversation/prepare only after a slow model finishes.
+            if (id.isEmpty()) { retry(() -> requery(attempt + 1), attempt, 1200, "대화 주소를 찾지 못했습니다."); return; }
             String script = requeryScript(id, submittedText, sendStartedAt);
             final String foundId = id;
             page.evaluateJavascript(script, ignored -> pollResult(attempt, 0, foundId));
