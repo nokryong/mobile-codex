@@ -25,6 +25,7 @@ final class ChatWebTransport {
     private boolean inserting;
     private boolean pageLoaded;
     private boolean modelChanging;
+    private long modelDeadline;
     private long deadline;
     private long sendStartedAt;
     private String lastDiagnostic = "";
@@ -86,33 +87,59 @@ final class ChatWebTransport {
 
     void modelState(Done done) {
         if (pending != null || modelChanging) { done.complete(null, new IllegalStateException("ChatGPT 설정을 변경할 수 없는 상태입니다.")); return; }
-        if (!pageLoaded) { done.complete(null, new IllegalStateException("ChatGPT 웹 화면을 불러오는 중입니다.")); return; }
+        readModelState(done, 0);
+    }
+
+    private void readModelState(Done done, int attempt) {
+        if (!pageLoaded) {
+            if (attempt < 40) page.postDelayed(() -> readModelState(done, attempt + 1), 250);
+            else done.complete(null, new IllegalStateException("ChatGPT 웹 화면을 불러오지 못했습니다. 로그인 상태를 확인해 주세요."));
+            return;
+        }
         page.evaluateJavascript("(function(){const b=" + modelButtonScript() + ";return b?(b.textContent||'').trim():''})()", raw -> {
             String level = jsString(raw);
-            if (modelIndex(level) < 0) done.complete(null, new IllegalStateException("ChatGPT 웹의 모델 설정을 읽지 못했습니다. 로그인 상태를 확인해 주세요."));
-            else {
-                JSONObject result = new JSONObject();
-                try { result.put("level", level); } catch (Exception ignored) {}
-                done.complete(result, null);
+            if (modelIndex(level) < 0) {
+                if (attempt < 40) page.postDelayed(() -> readModelState(done, attempt + 1), 250);
+                else done.complete(null, new IllegalStateException("ChatGPT 웹의 모델 설정을 읽지 못했습니다. 로그인 상태를 확인해 주세요."));
+                return;
             }
+            JSONObject result = new JSONObject();
+            try { result.put("level", level); } catch (Exception ignored) {}
+            done.complete(result, null);
         });
     }
 
     void selectModel(String level, Done done) {
         if (modelIndex(level) < 0) { done.complete(null, new IllegalArgumentException("지원하지 않는 Chat 모델 단계입니다.")); return; }
         if (pending != null || modelChanging) { done.complete(null, new IllegalStateException("ChatGPT 설정을 변경할 수 없는 상태입니다.")); return; }
-        if (!pageLoaded) { done.complete(null, new IllegalStateException("ChatGPT 웹 화면을 불러오는 중입니다.")); return; }
         modelChanging = true;
-        String open = "(function(){const b=" + modelButtonScript() + ";if(!b)return 'missing';"
-            + "if(b.getAttribute('aria-expanded')!=='true')b.click();return 'opened'})()";
+        modelDeadline = System.currentTimeMillis() + 15_000;
+        openModelSlider(level, done, 0, 0);
+    }
+
+    private void openModelSlider(String target, Done done, int attempt, int steps) {
+        if (attempt >= 40 || System.currentTimeMillis() > modelDeadline) {
+            finishModel(done, null, new IllegalStateException("ChatGPT 모델 슬라이더를 열지 못했습니다.")); return;
+        }
+        if (!pageLoaded) { page.postDelayed(() -> openModelSlider(target, done, attempt + 1, steps), 250); return; }
+        String open = "(function(){const b=" + modelButtonScript() + ";"
+            + "const s=document.querySelector('[role=slider],input[type=range]');"
+            + "if(!b)return 'missing';if((b.textContent||'').trim()===" + JSONObject.quote(target) + ")return 'selected';"
+            + "if(s)return 'slider';"
+            + "if(b.getAttribute('aria-expanded')==='true'){"
+            + "if(" + attempt + "===12)b.click();return 'opening';}b.click();return 'clicked'})()";
         page.evaluateJavascript(open, raw -> {
-            if (!"opened".equals(jsString(raw))) { finishModel(done, null, new IllegalStateException("ChatGPT 모델 선택 버튼을 찾지 못했습니다.")); return; }
-            page.postDelayed(() -> adjustModel(level, done, 0), 350);
+            String state = jsString(raw);
+            if ("selected".equals(state)) { selectedModel(target, done); return; }
+            if ("slider".equals(state)) { adjustModel(target, done, steps); return; }
+            page.postDelayed(() -> openModelSlider(target, done, attempt + 1, steps), 250);
         });
     }
 
     private void adjustModel(String target, Done done, int steps) {
-        if (steps > 6) { finishModel(done, null, new IllegalStateException("ChatGPT 모델 선택을 확인하지 못했습니다.")); return; }
+        if (steps > 8 || System.currentTimeMillis() > modelDeadline) {
+            finishModel(done, null, new IllegalStateException("ChatGPT 모델 선택을 확인하지 못했습니다.")); return;
+        }
         String inspect = "(function(){const s=document.querySelector('[role=slider],input[type=range]');"
             + "const b=" + modelButtonScript() + ";if(!s)return JSON.stringify({error:'slider_missing'});"
             + "return JSON.stringify({value:s.getAttribute('aria-valuetext')||s.getAttribute('aria-label')||'',"
@@ -121,23 +148,19 @@ final class ChatWebTransport {
             JSONObject state;
             try { state = new JSONObject(jsString(raw)); }
             catch (Exception error) { finishModel(done, null, new IllegalStateException("ChatGPT 모델 선택 상태를 읽지 못했습니다.")); return; }
-            if ("slider_missing".equals(state.optString("error"))) {
-                finishModel(done, null, new IllegalStateException("ChatGPT 모델 슬라이더를 열지 못했습니다.")); return;
-            }
+            if ("slider_missing".equals(state.optString("error"))) { openModelSlider(target, done, 0, steps); return; }
             String current = levelFromSlider(state.optString("value"));
             if (current.isEmpty()) current = state.optString("button");
             int currentIndex = modelIndex(current);
             if (currentIndex < 0) { finishModel(done, null, new IllegalStateException("현재 ChatGPT 모델 단계를 확인하지 못했습니다.")); return; }
             if (target.equals(current)) {
-                JSONObject result = new JSONObject();
-                try { result.put("level", target); } catch (Exception ignored) {}
-                finishModel(done, result, null);
+                selectedModel(target, done);
                 return;
             }
             int key = modelIndex(target) > currentIndex ? KeyEvent.KEYCODE_DPAD_RIGHT : KeyEvent.KEYCODE_DPAD_LEFT;
+            page.requestFocus();
             page.evaluateJavascript("(function(){const s=document.querySelector('[role=slider],input[type=range]');if(s)s.focus();return !!s})()", focused -> {
-                if (!"true".equals(focused)) { finishModel(done, null, new IllegalStateException("ChatGPT 모델 슬라이더에 초점을 맞추지 못했습니다.")); return; }
-                page.requestFocus();
+                if (!"true".equals(focused)) { openModelSlider(target, done, 0, steps); return; }
                 page.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, key));
                 page.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, key));
                 page.postDelayed(() -> adjustModel(target, done, steps + 1), 300);
@@ -152,9 +175,34 @@ final class ChatWebTransport {
         return "";
     }
 
+    private void selectedModel(String level, Done done) {
+        JSONObject result = new JSONObject();
+        try { result.put("level", level); } catch (Exception ignored) {}
+        finishModel(done, result, null);
+    }
+
     private void finishModel(Done done, JSONObject result, Exception error) {
-        modelChanging = false;
-        done.complete(result, error);
+        page.evaluateJavascript("(function(){const b=" + modelButtonScript() + ";"
+            + "if(b?.getAttribute('aria-expanded')==='true')b.click();return true})()", ignored -> {
+            if (result != null) verifyModelSelection(result.optString("level"), done, 0);
+            else { modelChanging = false; done.complete(null, error); }
+        });
+    }
+
+    private void verifyModelSelection(String level, Done done, int attempt) {
+        page.evaluateJavascript("(function(){const b=" + modelButtonScript() + ";return b?(b.textContent||'').trim():''})()", raw -> {
+            if (level.equals(jsString(raw))) {
+                JSONObject result = new JSONObject();
+                try { result.put("level", level); } catch (Exception ignored) {}
+                modelChanging = false;
+                done.complete(result, null);
+            } else if (attempt < 8 && System.currentTimeMillis() <= modelDeadline) {
+                page.postDelayed(() -> verifyModelSelection(level, done, attempt + 1), 250);
+            } else {
+                modelChanging = false;
+                done.complete(null, new IllegalStateException("ChatGPT 모델 변경이 적용됐는지 확인하지 못했습니다."));
+            }
+        });
     }
 
     void send(String text, Done done) {

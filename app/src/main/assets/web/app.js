@@ -880,7 +880,10 @@
       $('chat-model-summary').textContent = chatConfirmedLevel;
       $('chat-model-status').textContent = '눈금을 움직여 Chat 모델을 선택하세요.';
       $('chat-model-slider').disabled = false;
-    } catch (error) { $('chat-model-status').textContent = error.message; }
+    } catch (error) {
+      $('chat-model-status').textContent = `${error.message} 눈금을 선택하면 다시 시도합니다.`;
+      $('chat-model-slider').disabled = false;
+    }
   }
   async function selectChatModelLevel() {
     if (chatModelChanging) return;
@@ -900,7 +903,7 @@
       $('chat-model-status').textContent = error.message;
     } finally {
       chatModelChanging = false;
-      $('chat-model-slider').disabled = !chatConfirmedLevel;
+      $('chat-model-slider').disabled = false;
     }
   }
   function renderChatMode() {

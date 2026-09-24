@@ -51,6 +51,7 @@ public final class MainActivity extends Activity implements Engine.Ui {
     private WebView web;
     private SafeWebViewLayout root;
     private ChatWebTransport chatWeb;
+    private boolean chatWebLoginOpened;
     private boolean keyboardVisible;
     private String theme = "system";
     private Engine engine;
@@ -165,7 +166,7 @@ public final class MainActivity extends Activity implements Engine.Ui {
         return new WebResourceResponse("text/plain", "UTF-8", 403, "Forbidden", Map.of(), new ByteArrayInputStream(new byte[0]));
     }
     @Override protected void onStart() { super.onStart(); if (loaded) engine.attach(this); }
-    @Override protected void onResume() { super.onResume(); AppLanguage.configure(this); foreground = true; getSharedPreferences("notifications", 0).edit().putBoolean("foreground", true).commit(); requestNotificationPermissionIfNeeded(); event("notifications.changed", obj()); event("updates.changed", updates.snapshot()); if (loaded) engine.attach(this); event("voice.changed", obj()); if (chatWeb != null) chatWeb.reloadIfIdle(); }
+    @Override protected void onResume() { super.onResume(); AppLanguage.configure(this); foreground = true; getSharedPreferences("notifications", 0).edit().putBoolean("foreground", true).commit(); requestNotificationPermissionIfNeeded(); event("notifications.changed", obj()); event("updates.changed", updates.snapshot()); if (loaded) engine.attach(this); event("voice.changed", obj()); if (chatWebLoginOpened && chatWeb != null) chatWeb.reloadIfIdle(); chatWebLoginOpened = false; }
     @Override protected void onPause() { foreground = false; getSharedPreferences("notifications", 0).edit().putBoolean("foreground", false).commit(); if (dictation != null && !dictation.waitingPermission()) dictation.cancel(); super.onPause(); }
     @Override protected void onNewIntent(Intent intent) { super.onNewIntent(intent); setIntent(intent); handleNotificationIntent(intent); }
     private void handleNotificationIntent(Intent intent) {
@@ -550,7 +551,7 @@ public final class MainActivity extends Activity implements Engine.Ui {
                 }
                 if (action.equals("ui.chatWebProbe")) {
                     runOnUiThread(() -> {
-                        try { startActivity(new Intent(MainActivity.this, ChatWebProbeActivity.class)); respond(id, obj("ok", true), null); }
+                        try { startActivity(new Intent(MainActivity.this, ChatWebProbeActivity.class)); chatWebLoginOpened = true; respond(id, obj("ok", true), null); }
                         catch (Exception e) { respond(id, null, e); }
                     }); return;
                 }

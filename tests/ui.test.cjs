@@ -103,6 +103,16 @@ test('Chat model slider applies a verified level through the Chat web transport'
  assert.equal(calls.find(m=>m.action==='chat.web.selectModel').args.level,'X-High');
  assert.equal(d.getElementById('chat-model-summary').textContent,'X-High');
 });
+test('Chat model slider can retry a selection after the session state read fails',async()=>{
+ const {w,calls}=setup({'chat.web.modelState':()=>{throw new Error('화면 준비 중');},'chat.web.selectModel':m=>({level:m.args.level})});await tick();
+ const d=w.document;d.getElementById('mode-chat').click();await tick();
+ d.getElementById('chat-model-settings').click();await tick();
+ const slider=d.getElementById('chat-model-slider');assert.equal(slider.disabled,false);
+ assert.match(d.getElementById('chat-model-status').textContent,/다시 시도/);
+ slider.value='3';slider.dispatchEvent(new w.Event('input'));slider.dispatchEvent(new w.Event('change'));await tick();
+ assert.equal(calls.find(m=>m.action==='chat.web.selectModel').args.level,'X-High');
+ assert.equal(d.getElementById('chat-model-summary').textContent,'X-High');
+});
 test('failed Chat verification keeps the draft and shows an error outside the assistant transcript',async()=>{
  const {w,calls}=setup({'chat.web.send':()=>{throw new Error('대화 주소를 찾지 못했습니다. [화면=첫 화면]');}});await tick();
  const d=w.document;d.getElementById('mode-chat').click();await tick();
