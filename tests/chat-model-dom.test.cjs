@@ -10,7 +10,8 @@ function setup(html) {
   const dom = new JSDOM(html, {url:'https://chatgpt.com/',runScripts:'outside-only'});
   opened.push(dom);
   const {window:w} = dom;
-  w.Element.prototype.getBoundingClientRect = function () { return {x:10,y:10,width:100,height:40,left:10,top:10,right:110,bottom:50}; };
+  w.Element.prototype.getBoundingClientRect = function () { const y=this.hasAttribute('data-far')?500:10;
+    return {x:10,y,width:100,height:40,left:10,top:y,right:110,bottom:y+40}; };
   w.eval(script);
   return {w,adapter:w.MCChatModelDom};
 }
@@ -81,6 +82,13 @@ test('recognizes the reasoning trigger before its current label is available', (
   const {adapter} = setup('<button aria-haspopup="menu" aria-label="추론 수준" aria-expanded="false"></button>');
   assert.equal(adapter.inspect().state,'closed');
   assert.equal(adapter.inspect().level,'');
+});
+
+test('finds a composer model button without aria-haspopup when the menu is closed', () => {
+  const {adapter} = setup('<button data-far>Pro</button><form><div id="prompt-textarea" contenteditable="true"></div><button type="button">6 Pro</button></form>');
+  assert.equal(adapter.inspect().state,'closed');
+  assert.equal(adapter.inspect().level,'Pro');
+  assert.equal(adapter.inspect().trigger.label,'Pro');
 });
 
 test('disabled and unavailable options fail closed', () => {

@@ -46,10 +46,18 @@
     };
   }
   function triggers() {
-    return [...root.document.querySelectorAll('button[aria-haspopup], [role="button"][aria-haspopup]')].filter(visible)
+    const prompt = root.document.querySelector('#prompt-textarea,[data-testid="prompt-textarea"]');
+    const promptBox = prompt?.getBoundingClientRect();
+    return [...root.document.querySelectorAll('button,[role="button"]')].filter(visible)
       .filter(button => {
         const label = normalize([button.getAttribute('aria-label'), button.textContent, description(button)].join(' '));
-        return !!level(label) || /추론\s*수준|reasoning\s*(level|effort)|performance/i.test(label);
+        const hasPopup = !!button.getAttribute('aria-haspopup');
+        if (hasPopup && (/추론\s*수준|reasoning\s*(level|effort)|performance/i.test(label) || level(label))) return true;
+        if (!level(label) || !promptBox) return false;
+        const box = button.getBoundingClientRect();
+        const sameForm = !!prompt.closest('form') && prompt.closest('form').contains(button);
+        const nearComposer = Math.abs(box.top - promptBox.top) <= 180 && Math.abs(box.left - promptBox.left) <= root.innerWidth;
+        return sameForm || nearComposer;
       });
   }
   function type(element) {

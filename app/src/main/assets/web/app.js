@@ -917,6 +917,7 @@
       renderChatModelSlider(requested);
     } catch (error) {
       chatConfirmedLevel = ''; chatConfirmedEpoch = null;
+      renderChatModelSlider('');
       $('chat-model-summary').textContent = '확인되지 않음';
       $('chat-model-status').textContent = error.message;
     } finally {
