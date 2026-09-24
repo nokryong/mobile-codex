@@ -19,7 +19,7 @@
   try { const saved = JSON.parse(localStorage.getItem('chat-web-messages') || '[]'); if (Array.isArray(saved)) { const failed = new Set(saved.filter(x => x.id?.endsWith('-error')).map(x => x.id.slice(0, -6))); chatMessages = saved.filter(x => !failed.has(x.id) && !x.id?.endsWith('-error')).slice(-100); } } catch {}
   let chatModel = localStorage.getItem('chat-web-model') || '';
   const chatLevels = ['Instant', 'Medium', 'High', 'X-High', 'Pro'];
-  let chatConfirmedLevel = '', chatConfirmedEpoch = null, chatModelChanging = false, chatRequestedLevel = '', chatSelectionRevision = 0;
+  let chatConfirmedLevel = '', chatConfirmedEpoch = null, chatModelChanging = false, chatModelApplyPromise = null, chatRequestedLevel = '', chatSelectionRevision = 0;
   let characterState = {folderName:'', folderConfigured:false, selectedPackId:'builtin', packs:[{id:'builtin',name:'Builtin',valid:true,icons:{}}]};
   let instructionsOriginal = '', instructionsLoaded = false, instructionsSaving = false, devtoolsCheckResult = null, devtoolsCheckSummary = '', devtoolsChecking = false, usageLoading = false, accountActionStatus = {text:'', error:false};
   let resetCredits = null, resetCreditBusy = false, resetCreditScope = '', resetCreditIdempotencyKey = '', resetCreditSelectedId = '', usageGeneration = 0;
@@ -880,6 +880,11 @@
   async function openChatModelSlider() {
     if (chatBusy) throw new Error('ChatGPT 답변을 기다리는 중에는 모델을 바꿀 수 없습니다.');
     show('chat-model-dialog');
+    if (chatModelChanging) {
+      renderChatModelSlider(chatRequestedLevel);
+      $('chat-model-status').textContent = '';
+      return;
+    }
     $('chat-model-slider').disabled = true;
     $('chat-model-status').textContent = '현재 ChatGPT 설정을 확인하는 중입니다.';
     try {
@@ -899,31 +904,39 @@
       $('chat-model-slider').disabled = false;
     }
   }
-  async function selectChatModelLevel() {
-    if (chatModelChanging) return;
+  function selectChatModelLevel() {
     const requested = chatLevels[Number($('chat-model-slider').value)];
     chatRequestedLevel = requested;
     chatSelectionRevision++;
+    renderChatModelSlider(requested);
+    $('chat-model-summary').textContent = requested;
+    $('chat-model-status').textContent = '';
+    if (chatModelChanging) return chatModelApplyPromise;
     chatModelChanging = true;
-    $('chat-model-slider').disabled = true;
-    $('chat-model-status').textContent = `${requested} 적용 중…`;
-    try {
-      const result = await call('chat.web.selectModel', {level: requested});
-      if (result?.level !== requested) throw new Error('ChatGPT 웹의 모델 설정이 바뀌었는지 확인하지 못했습니다.');
-      chatConfirmedLevel = requested;
-      chatConfirmedEpoch = result.sessionEpoch ?? null;
-      $('chat-model-summary').textContent = requested;
-      $('chat-model-status').textContent = `${requested} 선택 확인됨`;
-      renderChatModelSlider(requested);
-    } catch (error) {
-      chatConfirmedLevel = ''; chatConfirmedEpoch = null;
-      renderChatModelSlider('');
-      $('chat-model-summary').textContent = '확인되지 않음';
-      $('chat-model-status').textContent = error.message;
-    } finally {
-      chatModelChanging = false;
-      $('chat-model-slider').disabled = false;
-    }
+    chatModelApplyPromise = (async () => {
+      try {
+        while (chatRequestedLevel && chatRequestedLevel !== chatConfirmedLevel) {
+          const level = chatRequestedLevel;
+          try {
+            const result = await call('chat.web.selectModel', {level});
+            if (result?.level !== level) throw new Error('ChatGPT 웹의 모델 설정이 바뀌었는지 확인하지 못했습니다.');
+            chatConfirmedLevel = level;
+            chatConfirmedEpoch = result.sessionEpoch ?? null;
+          } catch (error) {
+            chatConfirmedLevel = ''; chatConfirmedEpoch = null;
+            if (chatRequestedLevel === level) {
+              $('chat-model-summary').textContent = '확인되지 않음';
+              $('chat-model-status').textContent = error.message;
+              break;
+            }
+          }
+        }
+      } finally {
+        chatModelChanging = false;
+        chatModelApplyPromise = null;
+      }
+    })();
+    return chatModelApplyPromise;
   }
   function renderChatMode() {
     renderModeChrome();

@@ -105,6 +105,44 @@ test('Chat model slider applies a verified level through the Chat web transport'
  assert.equal(calls.find(m=>m.action==='chat.web.selectModel').args.level,'X-High');
  assert.equal(d.getElementById('chat-model-summary').textContent,'X-High');
 });
+test('Chat slider responds immediately and queues the latest choice without locking the thumb',async()=>{
+  let releaseFirst;
+  const first = new Promise(resolve => { releaseFirst = resolve; });
+  let selections = 0;
+  const {w,calls}=setup({'chat.web.modelState':()=>({level:'Medium'}),
+    'chat.web.selectModel':async m=>{ selections++; if(selections===1) await first; return {level:m.args.level}; }});
+  await tick();
+  const d=w.document;d.getElementById('mode-chat').click();await tick();
+  d.getElementById('chat-model-settings').click();await tick();
+  const slider=d.getElementById('chat-model-slider');
+  slider.value='2';slider.dispatchEvent(new w.Event('input'));slider.dispatchEvent(new w.Event('change'));
+  await Promise.resolve();
+  assert.equal(d.getElementById('chat-model-level').textContent,'High 추론 수준');
+  assert.equal(d.getElementById('chat-model-summary').textContent,'High');
+  assert.equal(slider.disabled,false);
+  assert.doesNotMatch(d.getElementById('chat-model-status').textContent,/적용 중/);
+  slider.value='4';slider.dispatchEvent(new w.Event('input'));slider.dispatchEvent(new w.Event('change'));
+  await tick();
+  assert.equal(d.getElementById('chat-model-level').textContent,'Pro 추론 수준');
+  assert.equal(slider.disabled,false);
+  assert.equal(calls.filter(m=>m.action==='chat.web.selectModel').length,1);
+  releaseFirst();await tick();
+  assert.deepEqual(calls.filter(m=>m.action==='chat.web.selectModel').map(m=>m.args.level),['High','Pro']);
+});
+test('a failed Pro choice leaves the Chat slider usable for the next choice',async()=>{
+  const {w,calls}=setup({'chat.web.modelState':()=>({level:'High'}),
+    'chat.web.selectModel':m=>{ if(m.args.level==='Pro') throw new Error('Pro 웹 설정 확인 실패'); return {level:m.args.level}; }});
+  await tick();
+  const d=w.document;d.getElementById('mode-chat').click();await tick();
+  d.getElementById('chat-model-settings').click();await tick();
+  const slider=d.getElementById('chat-model-slider');
+  slider.value='4';slider.dispatchEvent(new w.Event('input'));slider.dispatchEvent(new w.Event('change'));await tick();
+  assert.equal(slider.disabled,false);
+  assert.match(d.getElementById('chat-model-status').textContent,/Pro 웹 설정 확인 실패/);
+  slider.value='1';slider.dispatchEvent(new w.Event('input'));slider.dispatchEvent(new w.Event('change'));await tick();
+  assert.equal(slider.disabled,false);
+  assert.deepEqual(calls.filter(m=>m.action==='chat.web.selectModel').map(m=>m.args.level),['Pro','Medium']);
+});
 test('Chat model slider can retry a selection after the session state read fails',async()=>{
  const {w,calls}=setup({'chat.web.modelState':()=>{throw new Error('화면 준비 중');},'chat.web.selectModel':m=>({level:m.args.level})});await tick();
  const d=w.document;d.getElementById('mode-chat').click();await tick();

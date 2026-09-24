@@ -380,7 +380,7 @@ final class ChatWebTransport {
         }
         if (!"slider".equals(type) && !"stepper".equals(type)) { modelError(operation, "알 수 없는 ChatGPT 설정 컨트롤입니다."); return; }
         if (control == null || control.optBoolean("disabled")) { modelError(operation, "ChatGPT 설정 컨트롤이 비활성화돼 있습니다."); return; }
-        if (target.equals(current)) { verifyModelSelection(operation, target, 0); return; }
+        if (target.equals(current)) { finishModelSelection(operation, target); return; }
         if (modelIndex(current) < 0) { modelError(operation, "현재 ChatGPT 설정값을 읽지 못했습니다."); return; }
         if (state.optInt("total", 0) != 0 && state.optInt("total") != MODEL_LEVELS.length) {
             modelError(operation, "현재 계정의 설정 단계가 앱과 다릅니다."); return;
@@ -415,7 +415,7 @@ final class ChatWebTransport {
         inspectModel(state -> {
             if (!liveModel(operation)) return;
             String current = state.optString("level");
-            if (target.equals(current)) { verifyModelSelection(operation, target, 0); return; }
+            if (target.equals(current)) { finishModelSelection(operation, target); return; }
             if (modelIndex(current) >= 0 && !current.equals(before) && "open".equals(state.optString("state"))) {
                 adjustModel(operation, target, steps, state); return;
             }
@@ -424,56 +424,20 @@ final class ChatWebTransport {
         });
     }
 
-    private void verifyModelSelection(long operation, String target, int phase) {
+    private void finishModelSelection(long operation, String target) {
         if (!liveModel(operation)) return;
-        modelStage = phase == 0 ? "closing-before-verify" : "reopened-verifying";
+        modelStage = "confirming-value";
         inspectModel(state -> {
             if (!liveModel(operation)) return;
             String stage = state.optString("state");
-            if (phase == 0) {
-                if ("open".equals(stage)) {
-                    tapModelButton(state.optJSONObject("trigger"), state.optJSONObject("viewport"));
-                    waitClosed(operation, target, 0);
-                } else if ("closed".equals(stage)) reopenForVerification(operation, target);
-                else modelError(operation, "설정 메뉴를 닫지 못했습니다.");
-            } else if (phase == 1) {
-                if (!"open".equals(stage) || !target.equals(state.optString("level"))) {
-                    modelError(operation, "메뉴 재조회에서 요청한 설정을 확인하지 못했습니다."); return;
-                }
+            if (!target.equals(state.optString("level"))) {
+                modelError(operation, "웹 설정값이 요청한 단계와 다릅니다."); return;
+            }
+            if ("open".equals(stage)) {
                 tapModelButton(state.optJSONObject("trigger"), state.optJSONObject("viewport"));
                 waitFinalClosed(operation, target, 0);
-            }
-        });
-    }
-
-    private void waitClosed(long operation, String target, int attempt) {
-        if (!liveModel(operation)) return;
-        inspectModel(state -> {
-            if (!liveModel(operation)) return;
-            if ("closed".equals(state.optString("state"))) { reopenForVerification(operation, target); return; }
-            if (attempt == 6) { page.requestFocus(); page.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ESCAPE)); page.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ESCAPE)); }
-            if (attempt >= 15) { modelError(operation, "설정 메뉴를 닫지 못했습니다."); return; }
-            page.postDelayed(() -> waitClosed(operation, target, attempt + 1), 80);
-        });
-    }
-
-    private void reopenForVerification(long operation, String target) {
-        if (!liveModel(operation)) return;
-        inspectModel(state -> {
-            if (!liveModel(operation)) return;
-            if (!"closed".equals(state.optString("state"))) { modelError(operation, "재확인할 모델 버튼이 없습니다."); return; }
-            tapModelButton(state.optJSONObject("trigger"), state.optJSONObject("viewport"));
-            waitReopened(operation, target, 0);
-        });
-    }
-
-    private void waitReopened(long operation, String target, int attempt) {
-        if (!liveModel(operation)) return;
-        inspectModel(state -> {
-            if (!liveModel(operation)) return;
-            if ("open".equals(state.optString("state"))) { verifyModelSelection(operation, target, 1); return; }
-            if (attempt >= 15) { modelError(operation, "설정 메뉴 재조회에 실패했습니다."); return; }
-            page.postDelayed(() -> waitReopened(operation, target, attempt + 1), 80);
+            } else if ("closed".equals(stage)) completeModelSelection(operation, target);
+            else modelError(operation, "웹 설정 상태를 확인하지 못했습니다.");
         });
     }
 
@@ -486,15 +450,24 @@ final class ChatWebTransport {
                 if (!closedLevel.isEmpty() && !target.equals(closedLevel)) {
                     modelError(operation, "메뉴를 닫은 뒤 선택값이 유지되지 않았습니다."); return;
                 }
-                JSONObject result = new JSONObject();
-                try { result.put("level", target); result.put("sessionEpoch", sessionEpoch); result.put("verification", "ui-confirmed"); }
-                catch (Exception ignored) {}
-                completeModel(operation, result, null);
+                completeModelSelection(operation, target);
                 return;
+            }
+            if (attempt == 6) {
+                page.requestFocus();
+                page.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ESCAPE));
+                page.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ESCAPE));
             }
             if (attempt >= 12) { modelError(operation, "선택값 확인 뒤 메뉴를 닫지 못했습니다."); return; }
             page.postDelayed(() -> waitFinalClosed(operation, target, attempt + 1), 80);
         });
+    }
+
+    private void completeModelSelection(long operation, String target) {
+        JSONObject result = new JSONObject();
+        try { result.put("level", target); result.put("sessionEpoch", sessionEpoch); result.put("verification", "ui-confirmed"); }
+        catch (Exception ignored) {}
+        completeModel(operation, result, null);
     }
 
     private void modelError(long operation, String message) {
