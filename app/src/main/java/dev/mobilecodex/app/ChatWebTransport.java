@@ -212,7 +212,7 @@ final class ChatWebTransport {
             + "if(!m||!m.author||m.author.role!=='assistant'||m.status!=='finished_successfully'||(m.recipient&&m.recipient!=='all'))continue;"
             + "let parent=node.parent;const seen=new Set();let linked=false;while(parent&&!seen.has(parent)){seen.add(parent);"
             + "if(parent===match){linked=true;break;}parent=mapping[parent]&&mapping[parent].parent;}"
-            + "if(!linked)continue;const parts=m.content&&m.content.parts,text=Array.isArray(parts)?parts.map(p=>typeof p==='string'?p:(p&&typeof p.text==='string'?p.text:'')).filter(Boolean).join('\n'):'';"
+            + "if(!linked)continue;const parts=m.content&&m.content.parts,text=Array.isArray(parts)?parts.map(p=>typeof p==='string'?p:(p&&typeof p.text==='string'?p.text:'')).filter(Boolean).join('\\n'):'';"
             + "if(!text)continue;const time=Number(m.create_time)||0;if(time>=bestTime){bestTime=time;best={message:m,text};}}"
             + "if(!best){window.__mcChatQueryResult={kind:'waiting'};return;}"
             + "const meta=best.message.metadata||{},model=meta.resolved_model_slug||meta.model_slug||'';"
