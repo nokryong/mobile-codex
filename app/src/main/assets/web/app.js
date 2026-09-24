@@ -1696,14 +1696,19 @@
     const value = $('prompt').value, text = value.trim();
     if (chatMode) {
       if (!text || chatBusy) return;
-      if (chatRequestedLevel && chatConfirmedLevel !== chatRequestedLevel) {
+      const requestedOptionId = chatRequestedLevel;
+      const selectionRevision = chatSelectionRevision;
+      if (requestedOptionId && chatConfirmedLevel !== requestedOptionId && chatModelApplyPromise) {
+        chatBusy = true; updateSend();
+        try { await chatModelApplyPromise; }
+        finally { chatBusy = false; updateSend(); }
+      }
+      if (requestedOptionId && (chatConfirmedLevel !== requestedOptionId || chatRequestedLevel !== requestedOptionId)) {
         $('chat-error').textContent = '선택한 ChatGPT 설정이 확인되지 않아 전송하지 않았습니다. 설정을 다시 확인해 주세요.';
         $('chat-error').hidden = false;
         return;
       }
       const id = 'chat-' + Date.now() + '-' + Math.random().toString(36).slice(2);
-      const requestedOptionId = chatRequestedLevel;
-      const selectionRevision = chatSelectionRevision;
       chatBusy = true;
       $('chat-error').hidden = true;
       chatMessages.push({id, role:'user', text});

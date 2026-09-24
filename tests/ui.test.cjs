@@ -143,6 +143,26 @@ test('a failed Pro choice leaves the Chat slider usable for the next choice',asy
   assert.equal(slider.disabled,false);
   assert.deepEqual(calls.filter(m=>m.action==='chat.web.selectModel').map(m=>m.args.level),['Pro','Medium']);
 });
+test('Chat send waits for its selected level instead of sending the previous level',async()=>{
+  let releaseSelection;
+  const selection = new Promise(resolve => { releaseSelection = resolve; });
+  const {w,calls}=setup({'chat.web.modelState':()=>({level:'Medium',sessionEpoch:2}),
+    'chat.web.selectModel':async m=>{ await selection; return {level:m.args.level,sessionEpoch:2}; },
+    'chat.web.send':m=>({operationId:m.args.operationId,uiConfirmedSetting:m.args.requestedOptionId,
+      reply:'확인',conversationId:'11111111-1111-1111-1111-111111111111'})});
+  await tick();
+  const d=w.document;d.getElementById('mode-chat').click();await tick();
+  d.getElementById('chat-model-settings').click();await tick();
+  const slider=d.getElementById('chat-model-slider');
+  slider.value='2';slider.dispatchEvent(new w.Event('input'));slider.dispatchEvent(new w.Event('change'));await tick();
+  d.getElementById('chat-model-dialog').close();
+  d.getElementById('prompt').value='설정 확인 후 전송';
+  d.getElementById('composer').dispatchEvent(new w.Event('submit',{cancelable:true}));await tick();
+  assert.equal(calls.filter(m=>m.action==='chat.web.send').length,0);
+  releaseSelection();await tick();
+  assert.equal(calls.filter(m=>m.action==='chat.web.send').length,1);
+  assert.equal(calls.find(m=>m.action==='chat.web.send').args.requestedOptionId,'High');
+});
 test('Chat model slider can retry a selection after the session state read fails',async()=>{
  const {w,calls}=setup({'chat.web.modelState':()=>{throw new Error('화면 준비 중');},'chat.web.selectModel':m=>({level:m.args.level})});await tick();
  const d=w.document;d.getElementById('mode-chat').click();await tick();
