@@ -943,8 +943,8 @@ body.chat-mode #show-tools,body.chat-mode #account-button{display:none!important
 .composer:focus-within {
   border:0;
   outline:0;
-  box-shadow:none;
-  background:transparent;
+  box-shadow:var(--shadow);
+  background:var(--input);
 }
 .composer { padding-top:8px; padding-bottom:5px; }
 .composer-bottom { gap:4px; margin-top:3px; }
@@ -1017,3 +1017,27 @@ body.chat-mode #show-tools,body.chat-mode #account-button{display:none!important
 /* Keep a 44px hit area while leaving the icon artwork compact. */
 .composer-attach,.send-button,.voice-button { width:44px; height:44px; min-width:44px; min-height:44px; }
 .composer-bottom .context-button { min-height:44px; }
+
+/* The controls retain their tap area while the visible shapes sit closer to the text size. */
+.approval-mode-picker { position:relative; display:flex; align-items:center; min-height:44px; isolation:isolate; }
+.approval-mode-picker::before { content:""; position:absolute; inset:7px 0; border-radius:999px; background:var(--pill); pointer-events:none; z-index:0; }
+.approval-mode-picker select { position:relative; z-index:1; height:44px; background:transparent; }
+.composer-bottom .options-button { position:relative; background:transparent; isolation:isolate; }
+.composer-bottom .options-button::before { content:""; position:absolute; inset:7px 0; border-radius:999px; background:var(--pill); pointer-events:none; z-index:0; }
+.composer-bottom .options-button > * { position:relative; z-index:1; }
+.composer-bottom .options-button:hover { background:transparent; }
+.composer-bottom .options-button:hover::before { background:var(--hover); }
+.send-button,.send-button:disabled { position:relative; background:transparent; box-shadow:none; }
+.send-button::before { content:""; position:absolute; inset:6px; border-radius:50%; background:var(--solid); box-shadow:0 1px 3px rgba(0,0,0,.1); pointer-events:none; z-index:0; }
+.send-button:disabled::before { background:var(--disabled-bg); box-shadow:none; }
+.send-button svg { position:relative; z-index:1; width:17px; height:17px; }
+
+/* Small previews in the draft and sent message; tapping opens the full image viewer. */
+.draft-context .context-chip { padding:2px 4px; gap:4px; }
+.draft-context .context-image { display:grid; place-items:center; flex:none; width:44px; height:44px; padding:0; }
+.draft-context .context-image img { display:block; width:36px; height:36px; border-radius:7px; object-fit:cover; }
+.sent-attachments { display:flex; flex-wrap:wrap; align-items:flex-start; gap:7px; }
+.sent-attachments .image-card { width:88px; max-width:88px; margin:0; border:0; border-radius:10px; }
+.sent-attachments .image-open { width:88px; height:88px; overflow:hidden; border-radius:10px; }
+.sent-attachments .image-card img { width:100%; height:100%; max-height:none; object-fit:cover; }
+.sent-attachments .image-card figcaption { display:none; }
