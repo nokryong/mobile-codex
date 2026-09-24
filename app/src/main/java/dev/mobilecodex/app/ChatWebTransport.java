@@ -341,7 +341,7 @@ final class ChatWebTransport {
             if ("ambiguous".equals(stage) || "error".equals(stage)) { modelError(operation, "ChatGPT 설정 컨트롤을 특정하지 못했습니다."); return; }
             if ("open".equals(stage)) { adjustModel(operation, target, steps, state); return; }
             if (!"closed".equals(stage) || state.isNull("trigger")) { modelError(operation, "ChatGPT 모델 버튼을 찾지 못했습니다."); return; }
-            if (target.equals(state.optString("level"))) { verifyModelSelection(operation, target, 0); return; }
+            if (target.equals(state.optString("level"))) { finishModelSelection(operation, target); return; }
             tapModelButton(state.optJSONObject("trigger"), state.optJSONObject("viewport"));
             waitOpen(operation, target, steps, 0);
         });
