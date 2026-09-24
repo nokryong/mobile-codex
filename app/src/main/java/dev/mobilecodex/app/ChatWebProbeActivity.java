@@ -84,6 +84,13 @@ public final class ChatWebProbeActivity extends Activity {
         requeryButton = new Button(this); requeryButton.setText("같은 대화 서버 재조회");
         requeryButton.setEnabled(false); requeryButton.setOnClickListener(v -> requeryConversation());
         root.addView(requeryButton);
+        Button inspectModel = new Button(this); inspectModel.setText("모델 UI 검사");
+        inspectModel.setOnClickListener(v -> page.evaluateJavascript(
+            "(function(){const all=[...document.querySelectorAll('button,[role=slider],input[type=range],[aria-valuenow]')];"
+                + "const hits=all.filter(e=>/model|thinking|instant|medium|high|pro|추론|모델|성능/i.test((e.textContent||'').slice(0,100)+' '+(e.getAttribute('aria-label')||'')+' '+(e.getAttribute('aria-valuetext')||'')));"
+                + "return JSON.stringify(hits.slice(-12).map(e=>({tag:e.tagName,role:e.getAttribute('role'),label:e.getAttribute('aria-label'),value:e.getAttribute('aria-valuenow'),valueText:e.getAttribute('aria-valuetext'),text:(e.textContent||'').trim().slice(0,60),html:e.outerHTML.slice(0,500)})))})()",
+            raw -> stage("모델 UI: " + javascriptString(raw))));
+        root.addView(inspectModel);
         root.addView(page, new LinearLayout.LayoutParams(-1, 0, 1));
         LinearLayout composer = new LinearLayout(this);
         input = new EditText(this); input.setSingleLine(false); input.setMinLines(1); input.setMaxLines(3);
