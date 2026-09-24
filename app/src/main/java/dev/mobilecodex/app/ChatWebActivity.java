@@ -50,18 +50,19 @@ public final class ChatWebActivity extends Activity {
             customScript = readAsset(ui) + "\n" + readAsset(icons);
         } catch (Exception error) { throw new IllegalStateException("Chat 화면 코드를 읽지 못했습니다.", error); }
         SafeWebViewLayout safe = new SafeWebViewLayout(this);
-        LinearLayout content = new LinearLayout(this); content.setOrientation(LinearLayout.VERTICAL);
+        FrameLayout content = new FrameLayout(this);
         safe.addView(content, new FrameLayout.LayoutParams(-1, -1));
-        fallback = new LinearLayout(this); fallback.setGravity(Gravity.CENTER_VERTICAL);
+        fallback = new LinearLayout(this); fallback.setGravity(Gravity.CENTER); fallback.setOrientation(LinearLayout.VERTICAL);
+        fallback.setBackgroundColor(Color.WHITE);
+        fallback.setVisibility(View.GONE);
+        status = new TextView(this); status.setTextSize(14); status.setGravity(Gravity.CENTER);
+        fallback.addView(status, new LinearLayout.LayoutParams(-1, -2));
+        LinearLayout errorActions = new LinearLayout(this); errorActions.setGravity(Gravity.CENTER);
         Button back = new Button(this); back.setText("Codex"); back.setOnClickListener(v -> returnToCodex());
-        fallback.addView(back, new LinearLayout.LayoutParams(-2, dp(48)));
-        status = new TextView(this); status.setText(t("ChatGPT 불러오는 중…")); status.setTextSize(13);
-        fallback.addView(status, new LinearLayout.LayoutParams(0, -2, 1));
+        errorActions.addView(back, new LinearLayout.LayoutParams(-2, dp(48)));
         Button retry = new Button(this); retry.setText(t("새로고침")); retry.setOnClickListener(v -> page.reload());
-        fallback.addView(retry, new LinearLayout.LayoutParams(-2, dp(48)));
-        content.addView(fallback);
-        progress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
-        content.addView(progress, new LinearLayout.LayoutParams(-1, dp(2)));
+        errorActions.addView(retry, new LinearLayout.LayoutParams(-2, dp(48)));
+        fallback.addView(errorActions, new LinearLayout.LayoutParams(-1, -2));
         page = new WebView(this);
         WebSettings settings = page.getSettings();
         settings.setJavaScriptEnabled(true); settings.setDomStorageEnabled(true);
@@ -88,11 +89,11 @@ public final class ChatWebActivity extends Activity {
                 return true;
             }
             @Override public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
-                loadFailed = false; fallback.setVisibility(View.VISIBLE); status.setText(t("ChatGPT 불러오는 중…"));
+                loadFailed = false; fallback.setVisibility(View.GONE); progress.setVisibility(View.VISIBLE);
             }
             @Override public void onPageFinished(WebView view, String url) {
-                if (official(Uri.parse(url))) { inject(); if (!loadFailed) fallback.setVisibility(View.GONE); }
-                status.setText(t("ChatGPT 로그인 또는 화면 확인"));
+                if (official(Uri.parse(url))) inject();
+                if (!loadFailed) progress.setVisibility(View.GONE);
             }
             @Override public void doUpdateVisitedHistory(WebView view, String url, boolean reload) {
                 Uri uri = Uri.parse(url);
@@ -107,9 +108,6 @@ public final class ChatWebActivity extends Activity {
             }
         });
         page.setWebChromeClient(new WebChromeClient() {
-            @Override public void onProgressChanged(WebView view, int value) {
-                progress.setProgress(value); progress.setVisibility(value < 100 ? View.VISIBLE : View.GONE);
-            }
             @Override public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> callback, FileChooserParams params) {
                 if (!official(Uri.parse(view.getUrl() == null ? "" : view.getUrl()))) return false;
                 if (fileCallback != null) fileCallback.onReceiveValue(null);
@@ -119,7 +117,11 @@ public final class ChatWebActivity extends Activity {
                 return true;
             }
         });
-        content.addView(page, new LinearLayout.LayoutParams(-1, 0, 1));
+        content.addView(page, new FrameLayout.LayoutParams(-1, -1));
+        progress = new ProgressBar(this);
+        progress.setContentDescription(t("ChatGPT 불러오는 중"));
+        content.addView(progress, new FrameLayout.LayoutParams(dp(32), dp(32), Gravity.CENTER));
+        content.addView(fallback, new FrameLayout.LayoutParams(-1, -1));
         setContentView(safe);
         if (Build.VERSION.SDK_INT >= 33) getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
             android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT, this::back);
@@ -132,7 +134,7 @@ public final class ChatWebActivity extends Activity {
         if (page == null || !official(Uri.parse(page.getUrl() == null ? "" : page.getUrl()))) return;
         page.evaluateJavascript(customScript, null);
     }
-    private void showLoadError() { loadFailed = true; fallback.setVisibility(View.VISIBLE); status.setText(t("연결을 확인하고 새로고침해 주세요.")); }
+    private void showLoadError() { loadFailed = true; progress.setVisibility(View.GONE); fallback.setVisibility(View.VISIBLE); status.setText(t("연결을 확인하고 새로고침해 주세요.")); }
     private void returnToCodex() { startActivity(new Intent(this, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)); }
     private void back() {
         page.evaluateJavascript("!!(window.__mcChatCustom && window.__mcChatCustom.closeSidebar())", handled -> {
