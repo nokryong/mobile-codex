@@ -36,3 +36,45 @@ remains in the existing Codex screen; this experiment tests only the transport
 and authentication path. The independent Python probe in
 `tools/probe_chat_requirements.py` only inspects requirements and never sends
 a conversation message.
+
+## Pro selection failure capture (after 1ac60cc)
+
+The debug transport now freezes a settings-only `lastFailedSelection` before
+clearing the operation. It includes its own build/environment, operation ID,
+start/end session epochs, exact failure/stage, monotonic elapsed time, timeout
+source, last observed snapshot, and bounded change events. Read operations and
+successful recovery selections do not erase it. The last failure is kept in
+app-private `chat-model-diagnostic` preferences, not shared storage or Git.
+`currentAfterRecovery` is a separate observation; if evaluation times out it is
+null, not a stale snapshot presented as current.
+
+The same sending WebView records touch dispatch results, Android/DOM focus,
+arrow-key down/up return values, and operation-scoped DOM arrow events. DOM
+event delivery is evidence of delivery only, not setting application. Settings
+value text and individual accessible descriptions are bounded and separated;
+text/ordinal interpretations and conflicts remain visible. Unrelated active
+or event-target elements are described structurally without text or IDs.
+The observer ignores all typed characters and removes its listeners after the
+operation or its timer. No conversation, request body, cookie or token is read
+by this diagnostic.
+
+For one minimal reproduction: confirm X-High, choose Pro once, then open
+**설정 진단 보기** / **진단 복사**. Preserve `lastFailedSelection` before comparing
+the current value or changing to High to check recovery. A message send is not
+needed. A successful setting choice still verifies the observed menu/closed
+label only; persistence after reopening and actual generation settings require
+separate evidence. Pro's failure cause is not yet established on the device.
+
+`waitModelChange` now waits for a condition within the existing 5-second
+operation deadline instead of failing after ten 80ms polls. It sends no extra
+key while waiting. No longer timeout or repeated menu reopen was added.
+Pro radio options with duplicate normalized names report `ambiguous-option`,
+not `disabled`; original bounded setting labels remain in the diagnostic.
+
+For iterative test APKs, dispatch `android.yml` on the development branch with
+`apk_only=true`. This prepares required packaged runtimes, assembles and signs
+the APK, and uploads artifacts. Full test/layout/lint jobs and release publishing
+are skipped. Default/main checks remain full. Targeted local DOM regressions:
+`node --test tests/chat-model-dom.test.cjs`. Frozen-trace JVM regressions:
+`./gradlew testDebugUnitTest --tests dev.mobilecodex.app.ChatModelTraceTest`
+(where an Android/JDK build environment is available).

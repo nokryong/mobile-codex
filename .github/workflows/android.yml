@@ -4,6 +4,11 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      apk_only:
+        description: 'Fast test APK (skip full test, layout and lint suites)'
+        type: boolean
+        default: false
 permissions:
   contents: write
 concurrency:
@@ -24,7 +29,8 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - if: ${{ !inputs.apk_only }}
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
           cache: npm
@@ -33,7 +39,8 @@ jobs:
           packages: platform-tools
           log-accepted-android-sdk-licenses: false
       - run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0' 'ndk;28.2.13676358'
-      - run: npm ci --ignore-scripts
+      - if: ${{ !inputs.apk_only }}
+        run: npm ci --ignore-scripts
       - run: python3 -m pip install -r tools/requirements-devtools.txt
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
@@ -46,16 +53,22 @@ jobs:
           python3 tools/prepare_devtools.py
           python3 tools/prepare_devtools.py --verify
       - name: Test UI and runtime packaging
+        if: ${{ !inputs.apk_only }}
         run: |
           npm test
           python3 -m unittest discover -s tests -p 'test_*.py'
       - name: Check responsive browser layouts
+        if: ${{ !inputs.apk_only }}
         run: |
           npx playwright install --with-deps chromium
           sudo apt-get install -y fonts-noto-cjk
           npm run test:layout
       - name: Build and check Android app
+        if: ${{ !inputs.apk_only }}
         run: ./gradlew --no-daemon assembleDebug testDebugUnitTest lintDebug assembleDebugAndroidTest
+      - name: Build test APK
+        if: ${{ inputs.apk_only }}
+        run: ./gradlew --no-daemon assembleDebug
       - name: Sign APK with the original installation key
         if: github.event_name != 'pull_request'
         env:
@@ -86,12 +99,12 @@ jobs:
           if-no-files-found: error
           retention-days: 14
       - name: Publish versioned GitHub release
-        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && !inputs.apk_only
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 tools/publish_release.py
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        if: always()
+        if: ${{ always() && !inputs.apk_only }}
         with:
           name: check-reports
           path: |

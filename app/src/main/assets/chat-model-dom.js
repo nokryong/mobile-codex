@@ -1,6 +1,7 @@
 /* Runs only inside the authenticated ChatGPT WebView. Never reads credentials or messages. */
 (function (root) {
   'use strict';
+  if (root.MCChatModelDom?.diagnosticVersion === 2) return;
   const LEVELS = ['Instant', 'Medium', 'High', 'X-High', 'Pro'];
   const normalize = value => String(value || '').normalize('NFKC').replace(/\s+/g, ' ').trim();
   function level(value) {
@@ -33,17 +34,33 @@
     match = text.match(/(\d+)(?:st|nd|rd|th)?\s+of\s+(\d+)/i);
     return match ? {position:Number(match[1]), total:Number(match[2])} : null;
   }
-  function safeElement(element) {
+  // Only settings controls supply text. The active element/event receiver is structural only.
+  function shortSettingText(value) {
+    return normalize(value).replace(/[\w.+-]+@[\w.-]+\.[a-z]{2,}/gi, '[redacted-email]')
+      .replace(/(?:Bearer\s+\S+|(?:token|cookie|password|authorization)\s*[:=]\s*\S+)/gi, '[redacted]')
+      .replace(/[A-Za-z0-9_+\/=-]{32,}/g, '[redacted-opaque]').slice(0, 160);
+  }
+  function valueEvidence(element) {
+    if (!element) return null;
+    return {
+      ariaValueText:shortSettingText(element.getAttribute('aria-valuetext')),
+      displayText:shortSettingText(element.textContent),
+      descriptions:(element.getAttribute('aria-describedby') || '').split(/\s+/).filter(Boolean).slice(0, 4)
+        .map(id => shortSettingText(root.document.getElementById(id)?.textContent || ''))
+    };
+  }
+  function safeElement(element, structuralOnly = false) {
     if (!element) return null;
     const box = element.getBoundingClientRect();
     const attr = name => element.getAttribute(name) || '';
     return {
       tag:element.tagName.toLowerCase(), role:attr('role'),
-      label:level(settingLabel(element)) || (/성능|Performance/i.test(settingLabel(element)) ? 'performance' : 'unknown'),
+      label:structuralOnly ? undefined : level(settingLabel(element)) || (/성능|Performance/i.test(settingLabel(element)) ? 'performance' : 'unknown'),
       haspopup:attr('aria-haspopup'), expanded:attr('aria-expanded'), controls:!!attr('aria-controls'),
       checked:attr('aria-checked'), selected:attr('aria-selected'),
       min:attr('aria-valuemin'), max:attr('aria-valuemax'), now:attr('aria-valuenow'),
-      valueText:level(attr('aria-valuetext') || description(element)),
+      valueText:structuralOnly ? undefined : level(attr('aria-valuetext') || description(element)),
+      valueEvidence:structuralOnly ? undefined : valueEvidence(element),
       disabled:!!element.disabled || attr('aria-disabled') === 'true',
       visible:visible(element),
       box:{x:Math.round(box.x),y:Math.round(box.y),width:Math.round(box.width),height:Math.round(box.height)},
@@ -119,25 +136,33 @@
     const childPopups = leaves.filter(entry => controlledIds.has(entry.popup.id));
     const active = childPopups.length === 1 ? childPopups : leaves;
     const scoped = active.length === 1 ? active[0] : null;
-    return {button, buttons, popup:scoped?.popup || null, controls:scoped?.controls || [], ambiguous:buttons.length > 1 || active.length > 1};
+    return {button, buttons, popup:scoped?.popup || null, controls:scoped?.controls || [],
+      popupCount:popups.length, activePopupCount:active.length,
+      controlCount:active.reduce((sum, entry) => sum + entry.controls.length, 0),
+      ambiguous:buttons.length > 1 || active.length > 1};
   }
   function inspect() {
     const found = locate();
-    if (found.ambiguous) return {state:'ambiguous',triggerCount:found.buttons.length};
+    const context = {triggerCount:found.buttons.length, popupCount:found.popupCount,
+      activePopupCount:found.activePopupCount, controlCount:found.controlCount,
+      inputObservation:inputSnapshot(), focus:safeElement(root.document.activeElement, true)};
+    if (found.ambiguous) return {...context,state:'ambiguous'};
     const controls = found.controls, kinds = controls.map(type);
     const options = controls.length && kinds.every(kind => kind === 'option');
-    if (controls.length > 1 && !options) return {state:'ambiguous',controlCount:controls.length};
+    if (controls.length > 1 && !options) return {...context,state:'ambiguous',controls:controls.slice(0, 8).map(element => safeElement(element))};
     const control = controls.length === 1 ? controls[0] : null;
     const details = control ? description(control) : '';
     const position = ordinal(details);
     const buttonLevel = found.button ? level(settingLabel(found.button)) : '';
     let current = control ? level(control.getAttribute('aria-valuetext') || details || control.textContent) : '';
+    const levelFromText = current;
+    let levelFromOrdinal = '', levelSource = current ? (control.getAttribute('aria-valuetext') ? 'aria-valuetext' : details ? 'description' : 'display-text') : 'unknown';
     if (control && type(control) === 'stepper' && position?.total === LEVELS.length
         && position.position >= 1 && position.position <= LEVELS.length)
-      current = LEVELS[position.position - 1];
+      { current = levelFromOrdinal = LEVELS[position.position - 1]; levelSource = 'stepper-ordinal'; }
     if (options) {
       const checked = controls.filter(element => element.getAttribute('aria-checked') === 'true' || element.getAttribute('aria-selected') === 'true');
-      if (checked.length === 1) current = level(checked[0].getAttribute('aria-label') || checked[0].textContent);
+      if (checked.length === 1) { current = level(checked[0].getAttribute('aria-label') || checked[0].textContent); levelSource = 'checked-option'; }
     }
     if (!current && control && type(control) === 'slider') {
       const minimum = Number(control.getAttribute('aria-valuemin') ?? control.min);
@@ -145,25 +170,56 @@
       const value = Number(control.getAttribute('aria-valuenow') ?? control.value);
       if (Number.isFinite(minimum) && Number.isFinite(maximum) && Number.isFinite(value)
           && maximum - minimum === 4 && value >= minimum && value <= maximum)
-        current = LEVELS[value - minimum] || '';
+        { current = LEVELS[value - minimum] || ''; if (current) levelSource = 'slider-number'; }
     }
     return {
+      ...context,
+      levelFromText,levelFromOrdinal,levelSource:current ? levelSource : !found.popup && buttonLevel ? 'trigger' : 'unknown',
+      levelConflict:!!levelFromText && !!levelFromOrdinal && levelFromText !== levelFromOrdinal,
       state:found.popup ? 'open' : found.button ? 'closed' : 'unavailable',
       type:options ? 'options' : control ? type(control) : 'none',
       level:current || (found.popup ? '' : buttonLevel),
       position:position?.position || 0,total:position?.total || 0,
       trigger:safeElement(found.button),control:safeElement(control),
-      options:options ? controls.map(safeElement) : [],
-      focus:safeElement(root.document.activeElement),
+      options:options ? controls.map(element => safeElement(element)) : [],
+      focus:safeElement(root.document.activeElement, true),
       viewport:{width:root.innerWidth,height:root.innerHeight}
     };
   }
-  function focus() {
+  let inputTrace = null, stopInputTrace = null;
+  function inputSnapshot() { return inputTrace ? JSON.parse(JSON.stringify(inputTrace)) : null; }
+  function stopObservation(operationId) {
+    if (operationId != null && inputTrace?.operationId !== operationId) return inputSnapshot();
+    if (stopInputTrace) stopInputTrace(); return inputSnapshot();
+  }
+  function observeKeys(element, operationId, sessionEpoch) {
+    stopObservation();
+    inputTrace = {operationId,sessionEpoch,events:[]};
+    const started = root.performance.now();
+    const receive = event => {
+      if (!['ArrowLeft','ArrowRight','Escape'].includes(event.key)) return;
+      if (inputTrace.events.length >= 12) return;
+      inputTrace.events.push({type:event.type,key:event.key,trusted:event.isTrusted,
+        elapsedMs:Math.round(root.performance.now() - started),
+        targetInsideControl:event.target === element || element.contains(event.target),
+        target:safeElement(event.target, true)});
+    };
+    root.document.addEventListener('keydown', receive, true);
+    root.document.addEventListener('keyup', receive, true);
+    const timer = root.setTimeout(() => stopObservation(), 5200);
+    stopInputTrace = () => {
+      root.document.removeEventListener('keydown', receive, true);
+      root.document.removeEventListener('keyup', receive, true);
+      root.clearTimeout(timer); stopInputTrace = null;
+    };
+  }
+  function focus(operationId, sessionEpoch) {
     const found = locate();
     if (!found.popup || found.controls.length !== 1) return {ok:false,reason:'control_missing'};
     const element = found.controls[0];
+    observeKeys(element, operationId, sessionEpoch);
     element.focus();
-    return {ok:root.document.activeElement === element || element.contains(root.document.activeElement),type:type(element)};
+    return {ok:root.document.activeElement === element || element.contains(root.document.activeElement),type:type(element),activeElement:safeElement(root.document.activeElement, true)};
   }
   function choose(optionId) {
     if (!LEVELS.includes(optionId)) return {ok:false,reason:'unsupported'};
@@ -171,11 +227,14 @@
     if (!found.popup || found.ambiguous || !found.controls.length || !found.controls.every(element => type(element) === 'option'))
       return {ok:false,reason:'options_missing'};
     const matches = found.controls.filter(element => level(element.getAttribute('aria-label') || element.textContent) === optionId);
-    if (matches.length !== 1 || matches[0].disabled || matches[0].getAttribute('aria-disabled') === 'true')
-      return {ok:false,reason:matches.length ? 'disabled' : 'unsupported'};
+    if (matches.length > 1) return {ok:false,reason:'ambiguous-option',
+      options:matches.map(element => ({id:'option-' + found.controls.indexOf(element),...safeElement(element)}))};
+    if (!matches.length) return {ok:false,reason:'unsupported'};
+    if (matches[0].disabled || matches[0].getAttribute('aria-disabled') === 'true')
+      return {ok:false,reason:'disabled'};
     matches[0].click();
     return {ok:true};
   }
-  root.MCChatModelDom = {inspect,focus,choose,level,ordinal};
+  root.MCChatModelDom = {diagnosticVersion:2,inspect,focus,choose,level,ordinal,stopObservation};
   if (typeof module !== 'undefined' && module.exports) module.exports = root.MCChatModelDom;
 })(typeof window === 'undefined' ? globalThis : window);

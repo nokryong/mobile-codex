@@ -46,7 +46,9 @@ final class ChatWebTransport {
     private String modelFailure = "";
     private String modelFailedAtStage = "";
     private JSONObject lastModelSnapshot = new JSONObject();
-    private final JSONArray modelEvents = new JSONArray();
+    private final ChatModelTrace modelTrace = new ChatModelTrace();
+    private JSONObject lastModelOperation = new JSONObject();
+    private String modelTimeoutSource = "";
     private long deadline;
     private long sendStartedAt;
     private String lastDiagnostic = "";
@@ -61,6 +63,8 @@ final class ChatWebTransport {
     @SuppressLint("SetJavaScriptEnabled")
     ChatWebTransport(Activity activity, FrameLayout root) {
         this.activity = activity;
+        if (BuildConfig.DEBUG) modelTrace.restoreFailure(activity.getSharedPreferences("chat-model-diagnostic", 0)
+            .getString("last-failure", "{}"));
         try (var source = activity.getAssets().open("chat-model-dom.js")) {
             modelDomSource = readAsset(source);
         } catch (Exception error) {
@@ -137,7 +141,7 @@ final class ChatWebTransport {
     private void inspectModel(java.util.function.Consumer<JSONObject> callback) {
         long operation = activeModelOperation;
         evaluateModel("inspect()", state -> {
-            if (operation == activeModelOperation) {
+            if (modelChanging && operation == activeModelOperation) {
                 lastModelSnapshot = state;
                 recordModelStage(modelStage, state);
             }
@@ -145,30 +149,28 @@ final class ChatWebTransport {
         });
     }
 
+    private long modelElapsed() { return Math.max(0, SystemClock.elapsedRealtime() - modelStartedAt); }
+
     private void recordModelStage(String stage, JSONObject state) {
-        JSONObject entry = new JSONObject();
-        try {
-            entry.put("stage", stage);
-            entry.put("elapsedMs", modelStartedAt == 0 ? 0 : SystemClock.elapsedRealtime() - modelStartedAt);
-            entry.put("sessionEpoch", sessionEpoch);
-            entry.put("operationId", activeModelOperation);
-            entry.put("state", state.optString("state", "unknown"));
-            entry.put("type", state.optString("type", "unknown"));
-            entry.put("level", state.optString("level", ""));
-            entry.put("position", state.optInt("position", 0));
-            entry.put("total", state.optInt("total", 0));
-            entry.put("trigger", state.optJSONObject("trigger"));
-            entry.put("control", state.optJSONObject("control"));
-            entry.put("focus", state.optJSONObject("focus"));
-            entry.put("viewFocused", page.hasFocus());
-            modelEvents.put(entry);
-            if (modelEvents.length() > 32) modelEvents.remove(0);
-        } catch (Exception ignored) {}
+        if (BuildConfig.DEBUG && modelChanging) {
+            try { state.put("viewFocused", page.hasFocus()); } catch (Exception ignored) {}
+            modelTrace.record(stage, sessionEpoch, modelElapsed(), state, null);
+        }
+    }
+
+    private void modelPhase(String stage) {
+        modelStage = stage;
+        recordModelStage(stage, lastModelSnapshot);
+    }
+
+    private void modelInput(JSONObject input) {
+        if (BuildConfig.DEBUG && modelChanging)
+            modelTrace.record(modelStage, sessionEpoch, modelElapsed(), null, input);
     }
 
     void diagnostic(Done done) {
         final boolean[] completed = {false};
-        inspectModel(state -> {
+        evaluateModel("inspect()", state -> {
             if (completed[0]) return;
             completed[0] = true;
             done.complete(modelDiagnostic(state), null);
@@ -176,11 +178,11 @@ final class ChatWebTransport {
         page.postDelayed(() -> {
             if (completed[0]) return;
             completed[0] = true;
-            done.complete(modelDiagnostic(lastModelSnapshot), null);
+            done.complete(modelDiagnostic(null), null);
         }, 1500);
     }
 
-    private JSONObject modelDiagnostic(JSONObject state) {
+    private JSONObject modelEnvironment() {
         Uri uri = Uri.parse(page.getUrl() == null ? "" : page.getUrl());
         JSONObject result = new JSONObject();
         try {
@@ -192,14 +194,23 @@ final class ChatWebTransport {
             result.put("viewWidth", page.getWidth()); result.put("viewHeight", page.getHeight());
             result.put("host", "chatgpt.com".equals(uri.getHost()) ? "chatgpt.com" : "other");
             result.put("pathKind", conversationId(page.getUrl()).isEmpty() ? "new-or-login" : "conversation");
+        } catch (Exception ignored) {}
+        return result;
+    }
+
+    private JSONObject modelDiagnostic(JSONObject state) {
+        JSONObject result = modelEnvironment();
+        try {
             result.put("sessionEpoch", sessionEpoch);
             result.put("operationId", activeModelOperation);
-            result.put("stage", modelStage);
-            result.put("target", modelTarget);
-            result.put("failure", modelFailure);
-            result.put("failedAtStage", modelFailedAtStage);
-            result.put("current", state);
-            result.put("events", modelEvents);
+            result.put("stage", modelStage); result.put("target", modelTarget);
+            result.put("failure", modelFailure); result.put("failedAtStage", modelFailedAtStage);
+            result.put("currentReadStatus", state == null ? "unavailable-timeout" : "observed");
+            result.put("currentAfterRecovery", state == null ? JSONObject.NULL : state);
+            result.put("current", state == null ? JSONObject.NULL : state); // compatibility; frozen evidence is explicitly separate
+            result.put("lastCompletedOperation", lastModelOperation);
+            result.put("lastFailedSelection", modelTrace.lastFailure());
+            result.put("events", modelTrace.events());
         } catch (Exception ignored) {}
         return result;
     }
@@ -215,7 +226,8 @@ final class ChatWebTransport {
 
     private boolean liveModel(long operation) {
         if (destroyed || !modelChanging || activeModelOperation != operation) return false;
-        if (SystemClock.elapsedRealtime() > modelDeadline) {
+        if (SystemClock.elapsedRealtime() >= modelDeadline) {
+            modelTimeoutSource = "operation-deadline";
             completeModel(operation, null, new IllegalStateException("ChatGPT 설정 확인 시간이 초과됐습니다."));
             return false;
         }
@@ -225,12 +237,20 @@ final class ChatWebTransport {
     private void completeModel(long operation, JSONObject result, Exception error) {
         if (activeModelOperation != operation || !modelChanging) return;
         Done callback = modelDone;
-        modelDone = null;
-        modelChanging = false;
-        activeModelOperation++;
-        page.clearFocus();
         modelFailedAtStage = error == null ? "" : modelStage;
         modelFailure = error == null ? "" : error.getMessage();
+        if (BuildConfig.DEBUG) {
+            modelTrace.record(modelStage, sessionEpoch, modelElapsed(), lastModelSnapshot, null);
+            lastModelOperation = modelTrace.finish(sessionEpoch, modelElapsed(), modelFailure, modelTimeoutSource);
+            if (error != null) activity.getSharedPreferences("chat-model-diagnostic", 0).edit()
+                .putString("last-failure", modelTrace.lastFailure().toString()).apply();
+        }
+        modelDone = null;
+        modelChanging = false;
+        activeModelOperation = 0;
+        // Stop the operation-scoped arrow-key observer; never attach an Android bridge to this page.
+        if (!destroyed) page.evaluateJavascript("window.MCChatModelDom?.stopObservation(" + operation + ")", null);
+        page.clearFocus();
         modelStage = error == null ? "ui-confirmed" : "failed";
         if (callback != null) callback.complete(result, error);
     }
@@ -244,10 +264,12 @@ final class ChatWebTransport {
             done.complete(null, new IllegalStateException("ChatGPT 설정을 읽을 수 없는 상태입니다.")); return;
         }
         modelChanging = true;
-        modelStartedAt = SystemClock.elapsedRealtime(); modelStage = "reading";
+        modelStartedAt = SystemClock.elapsedRealtime(); modelStage = "locate-trigger";
         modelTarget = ""; modelFailure = ""; modelFailedAtStage = "";
         modelDone = done;
         long operation = activeModelOperation = ++nextModelOperation;
+        modelTimeoutSource = ""; lastModelSnapshot = new JSONObject();
+        if (BuildConfig.DEBUG) modelTrace.begin(operation, sessionEpoch, modelTarget, modelEnvironment());
         modelDeadline = SystemClock.elapsedRealtime() + 10_000;
         scheduleModelWatchdog(operation, 10_000);
         readModelState(operation, 0);
@@ -316,10 +338,12 @@ final class ChatWebTransport {
         if (modelIndex(level) < 0) { done.complete(null, new IllegalArgumentException("지원하지 않는 Chat 모델 단계입니다.")); return; }
         if (pending != null || modelChanging) { done.complete(null, new IllegalStateException("ChatGPT 설정을 변경할 수 없는 상태입니다.")); return; }
         modelChanging = true;
-        modelStartedAt = SystemClock.elapsedRealtime(); modelStage = "opening";
+        modelStartedAt = SystemClock.elapsedRealtime(); modelStage = "locate-trigger";
         modelTarget = level; modelFailure = ""; modelFailedAtStage = "";
         modelDone = done;
         long operation = activeModelOperation = ++nextModelOperation;
+        modelTimeoutSource = ""; lastModelSnapshot = new JSONObject();
+        if (BuildConfig.DEBUG) modelTrace.begin(operation, sessionEpoch, modelTarget, modelEnvironment());
         modelDeadline = SystemClock.elapsedRealtime() + 5_000;
         scheduleModelWatchdog(operation, 5_000);
         openForSelection(operation, level, 0);
@@ -328,6 +352,7 @@ final class ChatWebTransport {
     private void scheduleModelWatchdog(long operation, long timeoutMs) {
         page.postDelayed(() -> {
             if (destroyed || !modelChanging || activeModelOperation != operation) return;
+            modelTimeoutSource = "operation-watchdog";
             completeModel(operation, null, new IllegalStateException("ChatGPT 설정 작업이 응답하지 않아 종료했습니다."));
         }, timeoutMs);
     }
@@ -335,6 +360,7 @@ final class ChatWebTransport {
     private void openForSelection(long operation, String target, int steps) {
         if (!liveModel(operation)) return;
         if (!pageLoaded) { completeModel(operation, null, new IllegalStateException("ChatGPT 페이지가 변경됐습니다.")); return; }
+        modelPhase("locate-trigger");
         inspectModel(state -> {
             if (!liveModel(operation)) return;
             String stage = state.optString("state");
@@ -349,6 +375,7 @@ final class ChatWebTransport {
 
     private void waitOpen(long operation, String target, int steps, int attempt) {
         if (!liveModel(operation)) return;
+        modelPhase("wait-menu-open");
         inspectModel(state -> {
             if (!liveModel(operation)) return;
             if ("open".equals(state.optString("state"))) { adjustModel(operation, target, steps, state); return; }
@@ -360,20 +387,22 @@ final class ChatWebTransport {
     private void adjustModel(long operation, String target, int steps, JSONObject state) {
         if (!liveModel(operation)) return;
         if (steps > 8) { modelError(operation, "모델 설정 변경 횟수를 초과했습니다."); return; }
+        modelPhase("locate-control");
         String type = state.optString("type"), current = state.optString("level");
         JSONObject control = state.optJSONObject("control");
         if ("submenu".equals(type)) {
-            modelStage = "opening-submenu";
+            modelPhase("open-submenu");
             if (control == null || control.optBoolean("disabled")) { modelError(operation, "성능 메뉴를 열 수 없습니다."); return; }
             tapModelButton(control, state.optJSONObject("viewport"));
             waitSubmenu(operation, target, steps, 0);
             return;
         }
         if ("options".equals(type)) {
-            modelStage = "selecting-option";
+            modelPhase("activate-option");
             evaluateModel("choose(" + JSONObject.quote(target) + ")", chosen -> {
                 if (!liveModel(operation)) return;
-                if (!chosen.optBoolean("ok")) { modelError(operation, "선택한 ChatGPT 옵션을 사용할 수 없습니다."); return; }
+                modelInput(chosen);
+                if (!chosen.optBoolean("ok")) { modelError(operation, "선택한 ChatGPT 옵션을 사용할 수 없습니다: " + chosen.optString("reason", "unknown")); return; }
                 waitModelChange(operation, target, current, steps + 1, 0);
             });
             return;
@@ -385,15 +414,17 @@ final class ChatWebTransport {
         if (state.optInt("total", 0) != 0 && state.optInt("total") != MODEL_LEVELS.length) {
             modelError(operation, "현재 계정의 설정 단계가 앱과 다릅니다."); return;
         }
+        modelPhase("focus-webview");
         page.requestFocus();
-        modelStage = "changing-value";
         if (!page.hasFocus()) { modelError(operation, "ChatGPT WebView가 키 입력 포커스를 받지 못했습니다."); return; }
-        evaluateModel("focus()", focus -> {
+        modelPhase("focus-control");
+        evaluateModel("focus(" + operation + "," + sessionEpoch + ")", focus -> {
             if (!liveModel(operation)) return;
+            modelInput(focus);
             if (!focus.optBoolean("ok")) { modelError(operation, "설정 요소가 키 입력 포커스를 받지 못했습니다."); return; }
             int key = modelIndex(target) > modelIndex(current) ? KeyEvent.KEYCODE_DPAD_RIGHT : KeyEvent.KEYCODE_DPAD_LEFT;
-            page.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, key));
-            page.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, key));
+            modelPhase("dispatch-key");
+            dispatchModelKey(key);
             waitModelChange(operation, target, current, steps + 1, 0);
         });
     }
@@ -412,6 +443,7 @@ final class ChatWebTransport {
 
     private void waitModelChange(long operation, String target, String before, int steps, int attempt) {
         if (!liveModel(operation)) return;
+        modelPhase("wait-value-change");
         inspectModel(state -> {
             if (!liveModel(operation)) return;
             String current = state.optString("level");
@@ -419,14 +451,15 @@ final class ChatWebTransport {
             if (modelIndex(current) >= 0 && !current.equals(before) && "open".equals(state.optString("state"))) {
                 adjustModel(operation, target, steps, state); return;
             }
-            if (attempt >= 10) { modelError(operation, "설정값 변경을 확인하지 못했습니다."); return; }
+            // Observe until the existing operation deadline; do not resend the same key.
+            if ("ambiguous".equals(state.optString("state"))) { modelError(operation, "설정 변경 뒤 컨트롤이 여러 개로 관측됐습니다."); return; }
             page.postDelayed(() -> waitModelChange(operation, target, before, steps, attempt + 1), 80);
         });
     }
 
     private void finishModelSelection(long operation, String target) {
         if (!liveModel(operation)) return;
-        modelStage = "confirming-value";
+        modelPhase("verify-value");
         inspectModel(state -> {
             if (!liveModel(operation)) return;
             String stage = state.optString("state");
@@ -434,6 +467,7 @@ final class ChatWebTransport {
                 modelError(operation, "웹 설정값이 요청한 단계와 다릅니다."); return;
             }
             if ("open".equals(stage)) {
+                modelPhase("close-menu");
                 tapModelButton(state.optJSONObject("trigger"), state.optJSONObject("viewport"));
                 waitFinalClosed(operation, target, 0);
             } else if ("closed".equals(stage)) completeModelSelection(operation, target);
@@ -443,6 +477,7 @@ final class ChatWebTransport {
 
     private void waitFinalClosed(long operation, String target, int attempt) {
         if (!liveModel(operation)) return;
+        modelPhase("wait-menu-closed");
         inspectModel(state -> {
             if (!liveModel(operation)) return;
             if ("closed".equals(state.optString("state"))) {
@@ -455,8 +490,7 @@ final class ChatWebTransport {
             }
             if (attempt == 6) {
                 page.requestFocus();
-                page.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ESCAPE));
-                page.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ESCAPE));
+                dispatchModelKey(KeyEvent.KEYCODE_ESCAPE);
             }
             if (attempt >= 12) { modelError(operation, "선택값 확인 뒤 메뉴를 닫지 못했습니다."); return; }
             page.postDelayed(() -> waitFinalClosed(operation, target, attempt + 1), 80);
@@ -474,26 +508,57 @@ final class ChatWebTransport {
         completeModel(operation, null, new IllegalStateException(message));
     }
 
-    private void tapModelButton(JSONObject element, JSONObject viewport) {
-        if (element == null || viewport == null) return;
-        JSONObject box = element.optJSONObject("box");
-        if (box == null || viewport.optDouble("width") <= 0 || viewport.optDouble("height") <= 0) return;
+    private void dispatchModelKey(int key) {
+        JSONObject input = new JSONObject();
+        boolean down = page.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, key));
+        boolean up = page.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, key));
+        try {
+            input.put("key", KeyEvent.keyCodeToString(key)); input.put("downReturned", down);
+            input.put("upReturned", up); input.put("viewFocused", page.hasFocus());
+        } catch (Exception ignored) {}
+        modelInput(input);
+    }
+
+    private String tapModelButton(JSONObject element, JSONObject viewport) {
+        String result = "dispatched";
+        JSONObject box = element == null ? null : element.optJSONObject("box");
+        if (box == null) result = "missing-element";
+        else if (viewport == null || viewport.optDouble("width", 0) <= 0 || viewport.optDouble("height", 0) <= 0
+                || page.getWidth() <= 0 || page.getHeight() <= 0) result = "invalid-viewport";
+        if (!"dispatched".equals(result)) { recordModelTap(result, false, false); return result; }
         float x = (float) ((box.optDouble("x") + box.optDouble("width") / 2) * page.getWidth() / viewport.optDouble("width"));
         float y = (float) ((box.optDouble("y") + box.optDouble("height") / 2) * page.getHeight() / viewport.optDouble("height"));
-        if (x < 0 || y < 0 || x >= page.getWidth() || y >= page.getHeight()) return;
+        if (!Float.isFinite(x) || !Float.isFinite(y) || x < 0 || y < 0 || x >= page.getWidth() || y >= page.getHeight()) {
+            recordModelTap("out-of-bounds", false, false); return "out-of-bounds";
+        }
         page.requestFocus();
+        long operation = activeModelOperation, epoch = sessionEpoch;
         long now = SystemClock.uptimeMillis();
         MotionEvent down = MotionEvent.obtain(now, now, MotionEvent.ACTION_DOWN, x, y, 0);
         down.setSource(InputDevice.SOURCE_TOUCHSCREEN);
-        page.dispatchTouchEvent(down);
+        boolean downReturned = page.dispatchTouchEvent(down);
         down.recycle();
+        recordModelTap("down-dispatched", downReturned, false);
         page.postDelayed(() -> {
             if (destroyed) return;
-            MotionEvent up = MotionEvent.obtain(now, SystemClock.uptimeMillis(), MotionEvent.ACTION_UP, x, y, 0);
+            boolean stillActive = modelChanging && operation == activeModelOperation && epoch == sessionEpoch;
+            MotionEvent up = MotionEvent.obtain(now, SystemClock.uptimeMillis(),
+                stillActive ? MotionEvent.ACTION_UP : MotionEvent.ACTION_CANCEL, x, y, 0);
             up.setSource(InputDevice.SOURCE_TOUCHSCREEN);
-            page.dispatchTouchEvent(up);
+            boolean upReturned = page.dispatchTouchEvent(up);
             up.recycle();
+            if (stillActive) recordModelTap("dispatched", downReturned, upReturned);
         }, 80);
+        return result;
+    }
+
+    private void recordModelTap(String result, boolean down, boolean up) {
+        JSONObject input = new JSONObject();
+        try {
+            input.put("tap", result); input.put("downReturned", down); input.put("upReturned", up);
+            input.put("viewFocused", page.hasFocus());
+        } catch (Exception ignored) {}
+        modelInput(input);
     }
 
     void send(String text, String requestedOption, String operationId, long revision,

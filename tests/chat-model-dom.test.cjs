@@ -150,3 +150,77 @@ test('multiple live controls are ambiguous instead of choosing the first', () =>
   const {adapter} = setup(trigger+'<div role="menu" id="settings"><div role="slider" aria-valuenow="2" aria-valuemin="0" aria-valuemax="4"></div><div role="menuitem" aria-label="성능" aria-describedby="value"></div></div><span id="value">High, 5개 중 3번째.</span>');
   assert.equal(adapter.inspect().state,'ambiguous');
 });
+
+test('Pro failure evidence separates value text, descriptions and ordinal conflict', () => {
+  const {adapter} = setup(trigger+'<div role="menu" id="settings"><div role="menuitem" aria-label="성능" aria-describedby="value hint"></div></div>'+
+    '<span id="value">Pro, 5개 중 5번째. High 다음 단계.</span><span id="hint">화살표 키로 조정합니다.</span>');
+  const state = adapter.inspect();
+  assert.equal(state.level, 'Pro');
+  assert.equal(state.levelFromText, 'High');
+  assert.equal(state.levelFromOrdinal, 'Pro');
+  assert.equal(state.levelSource, 'stepper-ordinal');
+  assert.equal(state.levelConflict, true);
+  assert.equal(state.control.valueEvidence.ariaValueText, '');
+  assert.deepEqual(Array.from(state.control.valueEvidence.descriptions),
+    ['Pro, 5개 중 5번째. High 다음 단계.', '화살표 키로 조정합니다.']);
+});
+
+test('counts remain available when entering Pro introduces a second control', () => {
+  const {adapter} = setup(trigger+'<div role="menu" id="settings"><input type="range"><div role="radio">Pro Extended</div></div>');
+  const state = adapter.inspect();
+  assert.equal(state.state,'ambiguous');
+  assert.equal(state.triggerCount,1); assert.equal(state.popupCount,1); assert.equal(state.controlCount,2);
+  assert.equal(state.controls.length,2);
+});
+
+test('Pro suboptions are ambiguous, not disabled, and preserve setting labels', () => {
+  const {w,adapter} = setup(trigger+'<div role="menu" id="settings"><div role="radio">Pro Standard</div><div role="radio">Pro Extended</div></div>');
+  let clicks = 0; w.document.querySelectorAll('[role="radio"]').forEach(e => e.addEventListener('click', () => clicks++));
+  const result = adapter.choose('Pro');
+  assert.equal(result.reason,'ambiguous-option'); assert.equal(clicks,0);
+  assert.deepEqual(Array.from(result.options, e => e.valueEvidence.displayText), ['Pro Standard','Pro Extended']);
+  assert.notEqual(result.options[0].id,result.options[1].id);
+});
+
+test('native key evidence survives script reinjection and never implies value application', () => {
+  const {w,adapter} = setup(trigger+'<div role="menu" id="settings"><input type="range" min="0" max="4" value="3"></div>');
+  assert.equal(adapter.focus(71,9).ok,true);
+  w.eval(script); // evaluateModel injects this asset on every call
+  const control = w.document.querySelector('input');
+  control.dispatchEvent(new w.KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true}));
+  control.dispatchEvent(new w.KeyboardEvent('keyup',{key:'ArrowRight',bubbles:true}));
+  const state = w.MCChatModelDom.inspect();
+  assert.equal(state.level,'X-High'); // input delivered, no official handler applied a value
+  assert.equal(state.inputObservation.operationId,71);
+  assert.equal(state.inputObservation.events.length,2);
+  assert.equal(state.inputObservation.events[0].targetInsideControl,true);
+  assert.equal(state.inputObservation.events[0].trusted,false); // synthetic DOM test only
+});
+
+test('observation distinguishes wrong receiver and captures no message or typed keys', () => {
+  const {w,adapter} = setup('<textarea id="secret">private message secret@example.com</textarea>'+trigger+
+    '<div role="menu" id="settings"><input type="range" min="0" max="4" value="3"></div>');
+  adapter.focus(72,9);
+  const text = w.document.getElementById('secret'); text.focus();
+  text.dispatchEvent(new w.KeyboardEvent('keydown',{key:'a',bubbles:true}));
+  text.dispatchEvent(new w.KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true}));
+  const state = adapter.inspect();
+  assert.equal(state.inputObservation.events.length,1);
+  assert.equal(state.inputObservation.events[0].targetInsideControl,false);
+  assert.ok(!JSON.stringify(state).includes('private message'));
+  assert.ok(!JSON.stringify(state).includes('secret@example.com'));
+  adapter.stopObservation();
+  text.dispatchEvent(new w.KeyboardEvent('keyup',{key:'ArrowRight',bubbles:true}));
+  assert.equal(adapter.inspect().inputObservation.events.length,1);
+});
+
+test('new key observation clears the previous operation and bounds settings text', () => {
+  const {w,adapter} = setup(trigger+'<div role="menu" id="settings"><input type="range" aria-valuetext="High token=SECRET email@example.com '+ 'z'.repeat(200)+'" min="0" max="4" value="2"></div>');
+  adapter.focus(1,1);
+  w.document.querySelector('input').dispatchEvent(new w.KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true}));
+  adapter.focus(2,2);
+  const state=adapter.inspect();
+  assert.equal(state.inputObservation.operationId,2); assert.equal(state.inputObservation.events.length,0);
+  const raw=state.control.valueEvidence.ariaValueText;
+  assert.ok(raw.length <= 160); assert.ok(!raw.includes('SECRET')); assert.ok(!raw.includes('email@example.com'));
+});

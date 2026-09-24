@@ -1674,9 +1674,10 @@
   on('chat-model-slider', selectChatModelLevel, 'change');
   on('chat-model-diagnostic', async () => {
     const output = $('chat-model-diagnostic-output'); output.hidden = false; output.textContent = '진단 정보를 읽는 중입니다.';
-    try { output.textContent = JSON.stringify(await call('chat.web.diagnostic'), null, 2); }
+    try { output.textContent = JSON.stringify(await call('chat.web.diagnostic'), null, 2); $('chat-model-diagnostic-copy').hidden = false; }
     catch (error) { output.textContent = error.message; }
   });
+  on('chat-model-diagnostic-copy', () => copyText($('chat-model-diagnostic-output').textContent, $('chat-model-diagnostic-copy'), '진단 복사'));
   on('scrim', () => sidebar(false)); on('new-chat', async () => newChat(''));
   ['add-project', 'choose-folder', 'composer-folder'].forEach(id => on(id, () => pickFolder()));
    const closeToolMenu = () => { if ($('tool-menu-dialog').open) close('tool-menu-dialog'); };
