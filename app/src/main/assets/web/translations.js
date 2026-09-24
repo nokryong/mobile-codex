@@ -1,5 +1,7 @@
 /* UI messages only; user/model/file content is never translated. */
 window.MobileCodexEnglish = {
+  "더 보기": "Show more",
+  "접기": "Show less",
   "Android 앱에서 실행해 주세요.": "Please run this inside the Android app.",
   "요청 시간이 초과되었습니다. 상태를 확인하고 다시 시도해 주세요.": "The request timed out. Check the status and try again.",
   "오류가 발생했습니다.": "Something went wrong.",

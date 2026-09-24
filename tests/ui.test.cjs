@@ -1093,3 +1093,31 @@ test('notification permission guidance follows the Android permission state',asy
  assert.equal(row.hidden,false);assert.equal(w.document.getElementById('notification-settings-button').textContent,'Android 알림 설정');w.document.getElementById('notification-settings-button').click();await tick();
  assert.ok(calls.some(call=>call.action==='notifications.openSettings'));permission=true;w.mobileCodexEvent('notifications.changed',{});await tick();await tick();assert.equal(row.hidden,true);
 });
+
+test('long user messages fold safely, expand and stay expanded on redraw',async()=>{
+ const {w,snapshot}=setup();await tick();
+ const text='<img src=x onerror=alert(1)>\n'+'긴 사용자 메시지 '.repeat(100);
+ const msg={id:'long-user',role:'user',text};
+ w.mobileCodexEvent('state',{...snapshot,messages:[msg,{id:'short-user',role:'user',text:'짧은 메시지'}]});
+ const d=w.document,body=d.querySelector('[data-id="long-user"] .user-message-text');
+ let toggle=d.querySelector('[data-id="long-user"] .user-message-toggle');
+ assert.equal(body.textContent,text); assert.equal(body.querySelector('img'),null);
+ assert.equal(body.classList.contains('is-collapsed'),true); assert.equal(toggle.getAttribute('aria-expanded'),'false');
+ assert.equal(d.querySelector('[data-id="short-user"] .user-message-toggle'),null);
+ toggle.click(); assert.equal(body.classList.contains('is-collapsed'),false);
+ w.mobileCodexEvent('state',{...snapshot,messages:[{...msg,status:'sent'}]});
+ toggle=d.querySelector('.user-message-toggle');assert.equal(toggle.getAttribute('aria-expanded'),'true');
+ toggle.click();assert.equal(d.querySelector('.user-message-text').classList.contains('is-collapsed'),true);
+});
+
+test('Chat sends the full long message while displaying a folded bubble',async()=>{
+ let sent=''; const {w}=setup({'chat.web.send':m=>{sent=m.args.text;return {reply:'답변',operationId:m.args.operationId};}});await tick();
+ const d=w.document;d.getElementById('mode-chat').click();await tick();
+ const text='한 줄\n'.repeat(12);d.getElementById('prompt').value=text;
+ d.getElementById('composer').dispatchEvent(new w.Event('submit',{cancelable:true}));await tick();
+ assert.equal(sent,text.trim());
+ const body=d.querySelector('.message.user .user-message-text');assert.equal(body.textContent,text.trim());
+ assert.equal(body.classList.contains('is-collapsed'),true);
+ d.querySelector('.user-message-toggle').click();assert.equal(body.classList.contains('is-collapsed'),false);
+ assert.equal(d.querySelector('.message.assistant .user-message-toggle'),null);
+});

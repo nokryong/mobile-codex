@@ -859,3 +859,9 @@ body.chat-mode .sidebar-top .brand img,body.chat-mode .sidebar-top .mobile-tag{d
 #chat-model-diagnostic{margin-top:12px}
 #chat-model-diagnostic-output{max-height:28vh;overflow:auto;text-align:left;white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px}
 @media(max-width:760px){.chat-model-sheet{width:100%;padding:18px 20px calc(20px + env(safe-area-inset-bottom))}.chat-model-track,#chat-model-slider{height:68px}#chat-model-slider::-webkit-slider-thumb{width:58px;height:58px}}
+
+/* Long user messages keep their complete text; only their visible height changes. */
+.user-message-text { white-space:pre-wrap; overflow-wrap:anywhere; }
+.user-message-text.is-collapsed { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:8; overflow:hidden; max-height:14em; }
+.user-message-toggle { display:block; min-height:44px; padding:8px 0 0; font-size:12px; color:var(--muted); text-decoration:underline; text-underline-offset:3px; }
+.user-message-toggle:focus-visible { outline:2px solid var(--focus); outline-offset:3px; border-radius:4px; }

@@ -749,7 +749,22 @@
       if (el.dataset.signature !== signature) {
         el.dataset.signature = signature;
         if (m.role === 'user') {
-          el.textContent = m.text;
+          const expanded = el.querySelector('.user-message-toggle')?.getAttribute('aria-expanded') === 'true';
+          const text = m.text || '';
+          const body = node('div', text, 'user-message-text');
+          el.replaceChildren(body);
+          if (text.length > 600 || text.split('\n').length > 8) {
+            body.classList.toggle('is-collapsed', !expanded);
+            const toggle = node('button', t(expanded ? '접기' : '더 보기'), 'user-message-toggle');
+            toggle.type = 'button'; toggle.setAttribute('aria-expanded', String(expanded));
+            toggle.addEventListener('click', () => {
+              const next = toggle.getAttribute('aria-expanded') !== 'true';
+              toggle.setAttribute('aria-expanded', String(next));
+              toggle.textContent = t(next ? '접기' : '더 보기');
+              body.classList.toggle('is-collapsed', !next);
+            });
+            el.append(toggle);
+          }
           if (chatMode && m.status === 'uncertain') el.append(node('small', '전송 상태 확인 필요', 'chat-send-status'));
           if (chatMode && m.status === 'not_sent') el.append(node('small', '전송하지 않음', 'chat-send-status'));
           if (m.attachments?.length) el.append(sentAttachments(m.attachments));
