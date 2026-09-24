@@ -128,6 +128,8 @@
       || (id === 'config-dialog' && $('config-editor').value !== configOriginal)
       || (id === 'settings-dialog' && instructionsLoaded && $('instructions-editor').value !== instructionsOriginal);
     if (dirty && !confirm(t('저장하지 않은 변경 사항을 닫을까요?'))) return;
+    // Keep the request in the queue; selecting its conversation can show it again.
+    if (id === 'request-dialog') displayedRequest = null;
     close(id);
   }
   function wireSheetGestures() {
@@ -926,6 +928,7 @@
     renderChatModelSlider(requested);
     $('chat-model-summary').textContent = requested;
     $('chat-model-status').textContent = '';
+    dismiss('chat-model-dialog');
     if (chatModelChanging) return chatModelApplyPromise;
     chatModelChanging = true;
     chatModelApplyPromise = (async () => {
@@ -942,6 +945,7 @@
             if (chatRequestedLevel === level) {
               $('chat-model-summary').textContent = '확인되지 않음';
               $('chat-model-status').textContent = error.message;
+              toast(error.message);
               break;
             }
           }
@@ -987,7 +991,7 @@
     if (chatMode) {
       try { $('prompt').value = localStorage.getItem('chat-web-draft') || ''; } catch { $('prompt').value = ''; }
       renderChatMode();
-      call('chat.web.prepare').then(result => { $('chat-model-diagnostic').hidden = !result.debug; }).catch(error => toast(error.message));
+      call('chat.web.prepare').catch(error => toast(error.message));
     } else {
       $('chat-error').hidden = true;
       render(state);
@@ -1657,13 +1661,29 @@
   window.mobileCodexBack = () => {
     if (dictationState.phase !== 'idle') { call('voice.cancel').catch(error => toast(error.message)); return true; }
     const id = dialogs.at(-1);
-    if (id) { if (id !== 'request-dialog') dismiss(id); return true; }
+    if (id) { dismiss(id); return true; }
     if (document.body.classList.contains('sidebar-open')) { sidebar(false); return true; }
     if (!$('file-panel').hidden) { $('file-panel').hidden = true; return true; }
     saveDraft(); return false;
   };
   document.querySelectorAll('dialog').forEach(d => {
+    let backdropPointer = null;
+    const onBackdrop = e => {
+      if (e.target !== d || dialogs.at(-1) !== d.id) return false;
+      const rect = d.getBoundingClientRect();
+      return e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom;
+    };
+    d.addEventListener('pointerdown', e => {
+      backdropPointer = e.isPrimary !== false && e.button === 0 && onBackdrop(e) ? e.pointerId : null;
+    });
+    d.addEventListener('pointerup', e => {
+      const outside = backdropPointer === e.pointerId && onBackdrop(e);
+      backdropPointer = null;
+      if (outside) dismiss(d.id);
+    });
+    d.addEventListener('pointercancel', () => { backdropPointer = null; });
     d.addEventListener('close', () => {
+      backdropPointer = null;
       const i = dialogs.indexOf(d.id); if (i !== -1) dialogs.splice(i, 1);
       const actionClosing = projectMenuActionClosing;
       if (d.id === 'project-actions-dialog' && projectMenuFocus && !projectMenuActionClosing) {
@@ -1675,7 +1695,7 @@
       }
       if (d.id === 'project-actions-dialog') { projectMenuActionClosing = false; if (actionClosing) projectMenuFocus = null; }
     });
-    d.addEventListener('cancel', e => { e.preventDefault(); if (d.id !== 'request-dialog') dismiss(d.id); });
+    d.addEventListener('cancel', e => { e.preventDefault(); dismiss(d.id); });
   });
   wireSheetGestures();
   document.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', () => dismiss(b.dataset.close)));
@@ -1687,12 +1707,6 @@
   on('chat-model-settings', openChatModelSlider);
   on('chat-model-slider', () => renderChatModelSlider(chatLevels[Number($('chat-model-slider').value)]), 'input');
   on('chat-model-slider', selectChatModelLevel, 'change');
-  on('chat-model-diagnostic', async () => {
-    const output = $('chat-model-diagnostic-output'); output.hidden = false; output.textContent = '진단 정보를 읽는 중입니다.';
-    try { output.textContent = JSON.stringify(await call('chat.web.diagnostic'), null, 2); $('chat-model-diagnostic-copy').hidden = false; }
-    catch (error) { output.textContent = error.message; }
-  });
-  on('chat-model-diagnostic-copy', () => copyText($('chat-model-diagnostic-output').textContent, $('chat-model-diagnostic-copy'), '진단 복사'));
   on('scrim', () => sidebar(false)); on('new-chat', async () => newChat(''));
   ['add-project', 'choose-folder', 'composer-folder'].forEach(id => on(id, () => pickFolder()));
    const closeToolMenu = () => { if ($('tool-menu-dialog').open) close('tool-menu-dialog'); };

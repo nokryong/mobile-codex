@@ -102,8 +102,10 @@ test('Chat model slider applies a verified level through the Chat web transport'
  assert.equal(slider.value,'2');
  assert.equal(slider.disabled,false);
  slider.value='3';slider.dispatchEvent(new w.Event('input'));slider.dispatchEvent(new w.Event('change'));await tick();
+ assert.equal(dialog.open,false);
  assert.equal(calls.find(m=>m.action==='chat.web.selectModel').args.level,'X-High');
  assert.equal(d.getElementById('chat-model-summary').textContent,'X-High');
+ assert.equal(dialog.querySelector('.sheet-grip, [data-close], #chat-model-diagnostic, #chat-model-diagnostic-copy, #chat-model-diagnostic-output'),null);
 });
 test('Chat slider responds immediately and queues the latest choice without locking the thumb',async()=>{
   let releaseFirst;
@@ -137,8 +139,10 @@ test('a failed Pro choice leaves the Chat slider usable for the next choice',asy
   d.getElementById('chat-model-settings').click();await tick();
   const slider=d.getElementById('chat-model-slider');
   slider.value='4';slider.dispatchEvent(new w.Event('input'));slider.dispatchEvent(new w.Event('change'));await tick();
+  assert.equal(d.getElementById('chat-model-dialog').open,false);
   assert.equal(slider.disabled,false);
   assert.match(d.getElementById('chat-model-status').textContent,/Pro 웹 설정 확인 실패/);
+  assert.match(d.getElementById('toast').textContent,/Pro 웹 설정 확인 실패/);
   slider.value='1';slider.dispatchEvent(new w.Event('input'));slider.dispatchEvent(new w.Event('change'));await tick();
   assert.equal(slider.disabled,false);
   assert.deepEqual(calls.filter(m=>m.action==='chat.web.selectModel').map(m=>m.args.level),['Pro','Medium']);
@@ -1019,6 +1023,39 @@ function sheetPointer(w, grip, type, x, y) {
  for(const [key,value] of Object.entries({pointerId:1,isPrimary:true,button:0,clientX:x,clientY:y})) Object.defineProperty(event,key,{value});
  grip.dispatchEvent(event);
 }
+function backdropPointer(w, dialog, x, y, target = dialog) {
+ dialog.getBoundingClientRect = () => ({left:20,right:320,top:200,bottom:600});
+ sheetPointer(w,target,'pointerdown',x,y);
+ sheetPointer(w,target,'pointerup',x,y);
+}
+test('outside taps dismiss sheets and centered dialogs, while inside taps stay open',async()=>{
+ const {w}=setup({}, {mobile:true});await tick();const d=w.document;
+ d.getElementById('composer-options').click();await tick();
+ const sheet=d.getElementById('options-dialog');
+ backdropPointer(w,sheet,100,300);
+ assert.equal(sheet.open,true);
+ backdropPointer(w,sheet,100,100,sheet.querySelector('.dialog-head'));
+ assert.equal(sheet.open,true);
+ backdropPointer(w,sheet,100,100);
+ assert.equal(sheet.open,false);
+ d.getElementById('settings').click();await tick();
+ const modal=d.getElementById('settings-dialog');
+ backdropPointer(w,modal,400,300);
+ assert.equal(modal.open,false);
+});
+test('outside taps respect unsaved changes and do not answer approval requests',async()=>{
+ const {w,responses}=setup({'instructions.read':()=>({content:'Saved instructions',activePath:'/private/AGENTS.md'})},{mobile:true});await tick();const d=w.document;
+ d.getElementById('settings').click();await tick();d.querySelector('[data-settings-tab="personal"]').click();await tick();
+ d.getElementById('instructions-editor').value='Unsaved edit';w.confirm=()=>false;
+ const settings=d.getElementById('settings-dialog');backdropPointer(w,settings,100,100);
+ assert.equal(settings.open,true);assert.equal(d.getElementById('instructions-editor').value,'Unsaved edit');
+ w.confirm=()=>true;backdropPointer(w,settings,100,100);assert.equal(settings.open,false);
+ w.mobileCodexEvent('server.request',{key:'approval',method:'item/commandExecution/requestApproval',params:{threadId:'t',command:'true'}});
+ const request=d.getElementById('request-dialog');assert.equal(request.open,true);
+ backdropPointer(w,request,100,100);assert.equal(request.open,false);assert.equal(responses.length,0);
+ w.mobileCodexEvent('state',{ready:true,busy:false,permissions:'workspace-write',models:[],messages:[],sessions:[],account:{type:'chatgpt'},workspace:{selected:true,name:'Project'},cwd:'/test/project',threadId:'t',status:'연결됨'});
+ assert.equal(request.open,true);
+});
 test('mobile sheet drag closes through the existing unsaved-instructions guard',async()=>{
  const {w}=setup({'instructions.read':()=>({content:'Saved instructions',activePath:'/private/AGENTS.md'})},{mobile:true});await tick();const d=w.document;
  d.getElementById('settings').click();await tick();d.querySelector('[data-settings-tab="personal"]').click();await tick();
