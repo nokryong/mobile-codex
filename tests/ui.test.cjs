@@ -91,6 +91,18 @@ test('Chat switch routes the same composer to ordinary Chat and restores the Cod
  d.getElementById('mode-codex').click();await tick();
  assert.equal(d.body.classList.contains('chat-mode'),false);
 });
+test('Chat model slider applies a verified level through the Chat web transport',async()=>{
+ const {w,calls}=setup({'chat.web.modelState':()=>({level:'High'}),'chat.web.selectModel':m=>({level:m.args.level})});await tick();
+ const d=w.document;d.getElementById('mode-chat').click();await tick();
+ d.getElementById('chat-model-settings').click();await tick();
+ const dialog=d.getElementById('chat-model-dialog'),slider=d.getElementById('chat-model-slider');
+ assert.equal(dialog.open,true);
+ assert.equal(slider.value,'2');
+ assert.equal(slider.disabled,false);
+ slider.value='3';slider.dispatchEvent(new w.Event('input'));slider.dispatchEvent(new w.Event('change'));await tick();
+ assert.equal(calls.find(m=>m.action==='chat.web.selectModel').args.level,'X-High');
+ assert.equal(d.getElementById('chat-model-summary').textContent,'X-High');
+});
 test('failed Chat verification keeps the draft and shows an error outside the assistant transcript',async()=>{
  const {w,calls}=setup({'chat.web.send':()=>{throw new Error('대화 주소를 찾지 못했습니다. [화면=첫 화면]');}});await tick();
  const d=w.document;d.getElementById('mode-chat').click();await tick();

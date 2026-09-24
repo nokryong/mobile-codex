@@ -3,6 +3,7 @@ package dev.mobilecodex.app;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.net.Uri;
+import android.view.KeyEvent;
 import android.webkit.CookieManager;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
@@ -23,6 +24,7 @@ final class ChatWebTransport {
     private boolean clicked;
     private boolean inserting;
     private boolean pageLoaded;
+    private boolean modelChanging;
     private long deadline;
     private long sendStartedAt;
     private String lastDiagnostic = "";
@@ -69,7 +71,94 @@ final class ChatWebTransport {
         page.loadUrl("https://chatgpt.com/");
     }
 
+    private static final String[] MODEL_LEVELS = {"Instant", "Medium", "High", "X-High", "Pro"};
+
+    private static int modelIndex(String level) {
+        for (int index = 0; index < MODEL_LEVELS.length; index++)
+            if (MODEL_LEVELS[index].equals(level)) return index;
+        return -1;
+    }
+
+    private static String modelButtonScript() {
+        return "[...document.querySelectorAll('button[aria-haspopup=menu]')]"
+            + ".find(e=>/^(Instant|Medium|High|X-High|Pro)$/.test((e.textContent||'').trim()))";
+    }
+
+    void modelState(Done done) {
+        if (pending != null || modelChanging) { done.complete(null, new IllegalStateException("ChatGPT 설정을 변경할 수 없는 상태입니다.")); return; }
+        if (!pageLoaded) { done.complete(null, new IllegalStateException("ChatGPT 웹 화면을 불러오는 중입니다.")); return; }
+        page.evaluateJavascript("(function(){const b=" + modelButtonScript() + ";return b?(b.textContent||'').trim():''})()", raw -> {
+            String level = jsString(raw);
+            if (modelIndex(level) < 0) done.complete(null, new IllegalStateException("ChatGPT 웹의 모델 설정을 읽지 못했습니다. 로그인 상태를 확인해 주세요."));
+            else {
+                JSONObject result = new JSONObject();
+                try { result.put("level", level); } catch (Exception ignored) {}
+                done.complete(result, null);
+            }
+        });
+    }
+
+    void selectModel(String level, Done done) {
+        if (modelIndex(level) < 0) { done.complete(null, new IllegalArgumentException("지원하지 않는 Chat 모델 단계입니다.")); return; }
+        if (pending != null || modelChanging) { done.complete(null, new IllegalStateException("ChatGPT 설정을 변경할 수 없는 상태입니다.")); return; }
+        if (!pageLoaded) { done.complete(null, new IllegalStateException("ChatGPT 웹 화면을 불러오는 중입니다.")); return; }
+        modelChanging = true;
+        String open = "(function(){const b=" + modelButtonScript() + ";if(!b)return 'missing';"
+            + "if(b.getAttribute('aria-expanded')!=='true')b.click();return 'opened'})()";
+        page.evaluateJavascript(open, raw -> {
+            if (!"opened".equals(jsString(raw))) { finishModel(done, null, new IllegalStateException("ChatGPT 모델 선택 버튼을 찾지 못했습니다.")); return; }
+            page.postDelayed(() -> adjustModel(level, done, 0), 350);
+        });
+    }
+
+    private void adjustModel(String target, Done done, int steps) {
+        if (steps > 6) { finishModel(done, null, new IllegalStateException("ChatGPT 모델 선택을 확인하지 못했습니다.")); return; }
+        String inspect = "(function(){const s=document.querySelector('[role=slider],input[type=range]');"
+            + "const b=" + modelButtonScript() + ";if(!s)return JSON.stringify({error:'slider_missing'});"
+            + "return JSON.stringify({value:s.getAttribute('aria-valuetext')||s.getAttribute('aria-label')||'',"
+            + "button:(b?.textContent||'').trim()})})()";
+        page.evaluateJavascript(inspect, raw -> {
+            JSONObject state;
+            try { state = new JSONObject(jsString(raw)); }
+            catch (Exception error) { finishModel(done, null, new IllegalStateException("ChatGPT 모델 선택 상태를 읽지 못했습니다.")); return; }
+            if ("slider_missing".equals(state.optString("error"))) {
+                finishModel(done, null, new IllegalStateException("ChatGPT 모델 슬라이더를 열지 못했습니다.")); return;
+            }
+            String current = levelFromSlider(state.optString("value"));
+            if (current.isEmpty()) current = state.optString("button");
+            int currentIndex = modelIndex(current);
+            if (currentIndex < 0) { finishModel(done, null, new IllegalStateException("현재 ChatGPT 모델 단계를 확인하지 못했습니다.")); return; }
+            if (target.equals(current)) {
+                JSONObject result = new JSONObject();
+                try { result.put("level", target); } catch (Exception ignored) {}
+                finishModel(done, result, null);
+                return;
+            }
+            int key = modelIndex(target) > currentIndex ? KeyEvent.KEYCODE_DPAD_RIGHT : KeyEvent.KEYCODE_DPAD_LEFT;
+            page.evaluateJavascript("(function(){const s=document.querySelector('[role=slider],input[type=range]');if(s)s.focus();return !!s})()", focused -> {
+                if (!"true".equals(focused)) { finishModel(done, null, new IllegalStateException("ChatGPT 모델 슬라이더에 초점을 맞추지 못했습니다.")); return; }
+                page.requestFocus();
+                page.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, key));
+                page.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, key));
+                page.postDelayed(() -> adjustModel(target, done, steps + 1), 300);
+            });
+        });
+    }
+
+    private static String levelFromSlider(String value) {
+        if (value == null) return "";
+        for (String level : MODEL_LEVELS)
+            if (value.startsWith(level)) return level;
+        return "";
+    }
+
+    private void finishModel(Done done, JSONObject result, Exception error) {
+        modelChanging = false;
+        done.complete(result, error);
+    }
+
     void send(String text, Done done) {
+        if (modelChanging) { done.complete(null, new IllegalStateException("ChatGPT 모델 설정을 변경하는 중입니다.")); return; }
         if (pending != null) { done.complete(null, new IllegalStateException("일반 Chat 답변을 기다리는 중입니다.")); return; }
         if (text == null || text.trim().isEmpty()) { done.complete(null, new IllegalArgumentException("메시지를 입력해 주세요.")); return; }
         pending = done;

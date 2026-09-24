@@ -567,6 +567,15 @@ public final class MainActivity extends Activity implements Engine.Ui {
                     runOnUiThread(() -> { try { chatWeb().send(text, (result, error) -> respond(id, result, error)); }
                         catch (Exception e) { respond(id, null, e); } }); return;
                 }
+                if (action.equals("chat.web.modelState")) {
+                    runOnUiThread(() -> { try { chatWeb().modelState((result, error) -> respond(id, result, error)); }
+                        catch (Exception e) { respond(id, null, e); } }); return;
+                }
+                if (action.equals("chat.web.selectModel")) {
+                    String level = args.getString("level");
+                    runOnUiThread(() -> { try { chatWeb().selectModel(level, (result, error) -> respond(id, result, error)); }
+                        catch (Exception e) { respond(id, null, e); } }); return;
+                }
                 if (action.equals("ui.storageAccess")) {
                     runOnUiThread(() -> {
                         try {

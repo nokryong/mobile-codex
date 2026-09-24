@@ -18,6 +18,8 @@
   let chatMessages = [];
   try { const saved = JSON.parse(localStorage.getItem('chat-web-messages') || '[]'); if (Array.isArray(saved)) { const failed = new Set(saved.filter(x => x.id?.endsWith('-error')).map(x => x.id.slice(0, -6))); chatMessages = saved.filter(x => !failed.has(x.id) && !x.id?.endsWith('-error')).slice(-100); } } catch {}
   let chatModel = localStorage.getItem('chat-web-model') || '';
+  const chatLevels = ['Instant', 'Medium', 'High', 'X-High', 'Pro'];
+  let chatConfirmedLevel = '', chatModelChanging = false;
   let characterState = {folderName:'', folderConfigured:false, selectedPackId:'builtin', packs:[{id:'builtin',name:'Builtin',valid:true,icons:{}}]};
   let instructionsOriginal = '', instructionsLoaded = false, instructionsSaving = false, devtoolsCheckResult = null, devtoolsCheckSummary = '', devtoolsChecking = false, usageLoading = false, accountActionStatus = {text:'', error:false};
   let resetCredits = null, resetCreditBusy = false, resetCreditScope = '', resetCreditIdempotencyKey = '', resetCreditSelectedId = '', usageGeneration = 0;
@@ -857,6 +859,50 @@
     current.setAttribute('aria-current', 'page');
     row.append(current); list.append(row);
   }
+  function renderChatModelSlider(level) {
+    const index = Math.max(0, chatLevels.indexOf(level));
+    const slider = $('chat-model-slider');
+    slider.value = String(index);
+    slider.style.setProperty('--chat-progress', `${index * 25}%`);
+    $('chat-model-level').textContent = `${chatLevels[index]} 추론 수준`;
+    document.querySelectorAll('.chat-model-ticks i').forEach((tick, i) => tick.dataset.active = String(i <= index));
+  }
+  async function openChatModelSlider() {
+    if (chatBusy) throw new Error('ChatGPT 답변을 기다리는 중에는 모델을 바꿀 수 없습니다.');
+    show('chat-model-dialog');
+    $('chat-model-slider').disabled = true;
+    $('chat-model-status').textContent = '현재 ChatGPT 설정을 확인하는 중입니다.';
+    try {
+      const result = await call('chat.web.modelState');
+      if (!chatLevels.includes(result?.level)) throw new Error('현재 ChatGPT 모델 단계를 읽지 못했습니다.');
+      chatConfirmedLevel = result.level;
+      renderChatModelSlider(chatConfirmedLevel);
+      $('chat-model-summary').textContent = chatConfirmedLevel;
+      $('chat-model-status').textContent = '눈금을 움직여 Chat 모델을 선택하세요.';
+      $('chat-model-slider').disabled = false;
+    } catch (error) { $('chat-model-status').textContent = error.message; }
+  }
+  async function selectChatModelLevel() {
+    if (chatModelChanging) return;
+    const requested = chatLevels[Number($('chat-model-slider').value)];
+    chatModelChanging = true;
+    $('chat-model-slider').disabled = true;
+    $('chat-model-status').textContent = `${requested} 적용 중…`;
+    try {
+      const result = await call('chat.web.selectModel', {level: requested});
+      if (result?.level !== requested) throw new Error('ChatGPT 웹의 모델 설정이 바뀌었는지 확인하지 못했습니다.');
+      chatConfirmedLevel = requested;
+      $('chat-model-summary').textContent = requested;
+      $('chat-model-status').textContent = `${requested} 선택 확인됨`;
+      renderChatModelSlider(requested);
+    } catch (error) {
+      renderChatModelSlider(chatConfirmedLevel || 'High');
+      $('chat-model-status').textContent = error.message;
+    } finally {
+      chatModelChanging = false;
+      $('chat-model-slider').disabled = !chatConfirmedLevel;
+    }
+  }
   function renderChatMode() {
     renderModeChrome();
     $('header-project').textContent = 'Chat';
@@ -867,7 +913,7 @@
     $('welcome-description').textContent = '일반 ChatGPT 대화입니다. 아래 입력창에서 보내고 답변을 받습니다.';
     $('prompt').placeholder = 'ChatGPT에게 물어보세요';
     $('prompt').setAttribute('aria-label', 'ChatGPT에게 질문');
-    $('chat-model-summary').textContent = chatModel || 'Chat 모델 설정';
+    $('chat-model-summary').textContent = chatConfirmedLevel || chatModel || 'Chat 모델 설정';
     $('activity').hidden = !chatBusy;
     $('activity-text').textContent = 'ChatGPT 답변 기다리는 중';
     $('stop').hidden = true;
@@ -1584,7 +1630,9 @@
   on('mode-chat', () => switchMode('chat'));
   on('mode-codex', () => switchMode('codex'));
   on('chat-login', () => call('ui.chatWebProbe'));
-  on('chat-model-settings', () => call('ui.chatWebProbe'));
+  on('chat-model-settings', openChatModelSlider);
+  on('chat-model-slider', () => renderChatModelSlider(chatLevels[Number($('chat-model-slider').value)]), 'input');
+  on('chat-model-slider', selectChatModelLevel, 'change');
   on('scrim', () => sidebar(false)); on('new-chat', async () => newChat(''));
   ['add-project', 'choose-folder', 'composer-folder'].forEach(id => on(id, () => pickFolder()));
    const closeToolMenu = () => { if ($('tool-menu-dialog').open) close('tool-menu-dialog'); };
@@ -1615,7 +1663,7 @@
         if (!result.reply || !result.conversationId) throw new Error('ChatGPT 답변과 대화 저장을 확인하지 못했습니다.');
         chatMessages.push({id:id + '-reply', role:'assistant', text:result.reply, model:result.model || ''});
         chatModel = result.model || chatModel;
-        $('chat-model-summary').textContent = chatModel || 'Chat 모델 설정';
+        $('chat-model-summary').textContent = chatConfirmedLevel || chatModel || 'Chat 모델 설정';
         try { localStorage.setItem('chat-web-model', chatModel); } catch {}
         persistChatMessages();
         if (chatMode && $('prompt').value === value) { $('prompt').value = ''; saveDraft(); }

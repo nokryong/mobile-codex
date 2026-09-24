@@ -842,3 +842,16 @@ body.chat-mode #show-tools,body.chat-mode #account-button{display:none!important
 body.chat-mode .sidebar-top .brand img,body.chat-mode .sidebar-top .mobile-tag{display:none}
 @media(max-width:760px){.mode-switch button{min-width:67px;min-height:38px;padding:7px 11px}.topbar-left{max-width:calc(50% - 77px)}body.chat-mode #header-project{display:none}}
 @media(max-width:360px){.mode-switch button{min-width:57px;padding:6px 8px;font-size:12px}}
+.chat-model-sheet{width:min(520px,100%);max-width:100%;margin:auto auto 0;padding:22px 24px calc(24px + env(safe-area-inset-bottom));border-radius:28px 28px 0 0;text-align:center}
+.chat-model-sheet .dialog-head{justify-content:center;position:relative;margin:4px 0 28px}
+.chat-model-sheet .dialog-head h2{font-size:22px;font-weight:600}
+.chat-model-sheet .dialog-head .icon-button{position:absolute;right:0;top:50%;transform:translateY(-50%)}
+.chat-model-track{position:relative;height:76px}
+#chat-model-slider{appearance:none;-webkit-appearance:none;position:absolute;inset:0;width:100%;height:76px;margin:0;border:10px solid var(--bg);border-radius:999px;background:linear-gradient(to right,#3b82f6 var(--chat-progress,50%),var(--pill) var(--chat-progress,50%));cursor:pointer;z-index:1}
+#chat-model-slider::-webkit-slider-thumb{appearance:none;-webkit-appearance:none;width:64px;height:64px;border:5px solid #3b82f6;border-radius:50%;background:#fff;box-shadow:0 1px 4px #0002}
+#chat-model-slider:disabled{cursor:wait;opacity:.6}
+.chat-model-ticks{position:absolute;inset:0 42px;display:flex;align-items:center;justify-content:space-between;pointer-events:none;z-index:2}
+.chat-model-ticks i{width:12px;height:12px;border-radius:50%;background:#b9bdc3}
+.chat-model-ticks i[data-active="true"]{background:#78adfb}
+#chat-model-status{min-height:22px;margin:16px 0 0;font-size:12px;line-height:1.5}
+@media(max-width:760px){.chat-model-sheet{width:100%;padding:18px 20px calc(20px + env(safe-area-inset-bottom))}.chat-model-track,#chat-model-slider{height:68px}#chat-model-slider::-webkit-slider-thumb{width:58px;height:58px}}

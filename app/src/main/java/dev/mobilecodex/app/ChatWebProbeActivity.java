@@ -84,16 +84,6 @@ public final class ChatWebProbeActivity extends Activity {
         requeryButton = new Button(this); requeryButton.setText("같은 대화 서버 재조회");
         requeryButton.setEnabled(false); requeryButton.setOnClickListener(v -> requeryConversation());
         root.addView(requeryButton);
-        Button inspectModel = new Button(this); inspectModel.setText("모델 UI 검사");
-        inspectModel.setOnClickListener(v -> page.evaluateJavascript(
-            "(function(){const b=[...document.querySelectorAll('button')].find(e=>/^(Instant|Medium|High|X-High|Pro)$/.test((e.textContent||'').trim()));"
-                + "if(b&&b.getAttribute('aria-expanded')!=='true')b.click();"
-                + "setTimeout(()=>{const s=document.querySelector('[role=slider],input[type=range],[aria-valuenow]');"
-                + "window.__mcModelInspection=JSON.stringify({button:b?.outerHTML.slice(0,700),slider:s?.outerHTML.slice(0,1000),parent:s?.parentElement?.outerHTML.slice(0,1100),"
-                + "levels:[...document.querySelectorAll('[role=menuitem],button')].filter(e=>/^(Instant|Medium|High|X-High|Pro)$/.test((e.textContent||'').trim())).map(e=>e.outerHTML.slice(0,250))})},350);return 'started'})()",
-            raw -> page.postDelayed(() -> page.evaluateJavascript("window.__mcModelInspection||'pending'",
-                inspected -> stage("모델 UI: " + javascriptString(inspected))), 500)));
-        root.addView(inspectModel);
         root.addView(page, new LinearLayout.LayoutParams(-1, 0, 1));
         LinearLayout composer = new LinearLayout(this);
         input = new EditText(this); input.setSingleLine(false); input.setMinLines(1); input.setMaxLines(3);
