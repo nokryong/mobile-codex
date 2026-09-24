@@ -26,30 +26,36 @@ test('repairs switch after SPA sidebar remount and does not touch message links'
  box.remove();const next=w.document.createElement('div');next.innerHTML=fixture;w.document.body.append(next);await tick();
  assert.equal(w.document.querySelectorAll('#mc-chat-mode-switch').length,1);
 });
-test('hides official Chat/Work pair while keeping app switch and other controls',()=>{
+test('keeps the official Chat/Work pair visible and leaves its selection alone',()=>{
  const w=setup(header+fixture),d=w.document;
- assert.equal(d.querySelector('.segmented').hasAttribute('data-mc-hidden-official-mode-switch'),true);
- assert.equal(w.getComputedStyle(d.querySelector('.segmented')).display,'none');
+ assert.equal(d.querySelector('.segmented').hasAttribute('data-mc-hidden-official-mode-switch'),false);
+ assert.notEqual(w.getComputedStyle(d.querySelector('.segmented')).display,'none');
  assert.ok(d.getElementById('mc-chat-mode-switch'));
  assert.equal(d.querySelector('header > button').textContent,'Share');
  assert.equal(d.querySelector('textarea').value,'draft unchanged');
 });
-test('hides a newly mounted official switch without hiding unrelated or hidden pairs',async()=>{
- const w=setup('<div hidden><button>Chat</button><button>Work</button></div>'+fixture),d=w.document;
- assert.equal(d.querySelector('[hidden]').hasAttribute('data-mc-hidden-official-mode-switch'),false);
- const wrapper=d.createElement('div');wrapper.innerHTML=header;d.body.prepend(wrapper);await tick();
- assert.equal(d.querySelector('.segmented').hasAttribute('data-mc-hidden-official-mode-switch'),true);
- assert.equal(d.querySelectorAll('#mc-chat-mode-switch').length,1);
+test('uses the same compact switch spacing and label size as Codex',()=>{
+ const w=setup(),group=w.document.getElementById('mc-chat-mode-switch');
+ const groupStyle=w.getComputedStyle(group),buttonStyle=w.getComputedStyle(group.querySelector('button'));
+ assert.equal(groupStyle.width,'112px');
+ assert.equal(groupStyle.paddingTop,'1px');
+ assert.equal(groupStyle.borderTopWidth,'0px');
+ assert.equal(groupStyle.fontSize,'13px');
+ assert.equal(buttonStyle.minHeight,'40px');
+ assert.equal(buttonStyle.paddingTop,'0px');
 });
-test('returns an active official Work tab to Chat before hiding that pair',async()=>{
+test('does not change an active official Work tab',()=>{
  const html=header.replace('<button><span>Chat</span>','<button aria-selected="false"><span>Chat</span>').replace('<button><span>Work</span>','<button aria-selected="true"><span>Work</span>');
  const w=setup(html+fixture),d=w.document,group=d.querySelector('.segmented');
- assert.equal(group.hasAttribute('data-mc-hidden-official-mode-switch'),false);
  const [chat,work]=group.querySelectorAll('button');
- chat.addEventListener('click',()=>{chat.setAttribute('aria-selected','true');work.setAttribute('aria-selected','false');});
- w.__mcChatCustom.refresh();await tick();
- assert.equal(group.hasAttribute('data-mc-hidden-official-mode-switch'),true);
- assert.equal(chat.getAttribute('aria-selected'),'true');
+ assert.equal(group.hasAttribute('data-mc-hidden-official-mode-switch'),false);
+ assert.equal(chat.getAttribute('aria-selected'),'false');
+ assert.equal(work.getAttribute('aria-selected'),'true');
+});
+test('restores a Chat/Work control hidden by the previous injection',()=>{
+ const old=header.replace('class="segmented"','class="segmented" data-mc-hidden-official-mode-switch');
+ const w=setup(old+fixture);
+ assert.equal(w.document.querySelector('.segmented').hasAttribute('data-mc-hidden-official-mode-switch'),false);
 });
 test('does not inject into authentication or unrelated origins',()=>{
  for(const url of ['https://auth.openai.com/','https://evil.test/']) {
