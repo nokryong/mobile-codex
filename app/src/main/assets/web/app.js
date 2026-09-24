@@ -844,6 +844,8 @@
     $('new-chat').setAttribute('aria-label', chatMode ? '새 Chat 대화' : '새 Codex 대화');
     $('chat-model-settings').hidden = !chatMode;
     $('composer-options').hidden = chatMode;
+    if (chatMode) $('composer').classList.add('composer-expanded');
+    else if (!$('composer').contains(document.activeElement)) $('composer').classList.remove('composer-expanded');
   }
   function renderChatSidebar() {
     const list = $('chat-sessions'); list.replaceChildren();
@@ -1661,7 +1663,7 @@
   let autocompleteTimer; $('prompt').addEventListener('input', () => { saveDraft(); sizeComposer(); clearTimeout(autocompleteTimer); hideAutocomplete(); if (chatMode) return; if (/[@$]$/.test($('prompt').value.slice(0, $('prompt').selectionStart))) queryAutocomplete(); else autocompleteTimer = setTimeout(queryAutocomplete, 120); });
   $('prompt').addEventListener('focus', () => { if (following) frame(scrollLatest); });
   $('composer').addEventListener('focusin', () => $('composer').classList.add('composer-expanded'));
-  $('composer').addEventListener('focusout', () => frame(() => { if (! $('composer').contains(document.activeElement)) $('composer').classList.remove('composer-expanded'); }));
+  $('composer').addEventListener('focusout', () => frame(() => { if (!chatMode && !$('composer').contains(document.activeElement)) $('composer').classList.remove('composer-expanded'); }));
   $('composer').addEventListener('click', e => { if (! $('composer').classList.contains('composer-expanded') && e.target === $('composer')) $('prompt').focus(); });
   $('prompt').addEventListener('click', () => { if (!chatMode) queryAutocomplete(); });
   $('chat-scroll').addEventListener('scroll', () => {

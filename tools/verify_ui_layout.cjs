@@ -96,7 +96,9 @@ async function checkModeSwitch(page,width,theme) {
  await page.locator('#mode-chat').click();
  assert.equal(await page.locator('body').evaluate(el=>el.classList.contains('chat-mode')),true);
  assert.equal(await page.locator('#mode-chat').getAttribute('aria-pressed'),'true');
- assert.equal(await page.locator('#chat-model-settings').isVisible(),true);
+ const chatModelVisible=await page.locator('#chat-model-settings').isVisible();
+ const chatModelDetails=await page.locator('#chat-model-settings').evaluate(el=>({hidden:el.hidden,display:getComputedStyle(el).display,bounds:el.getBoundingClientRect().toJSON(),parentDisplay:getComputedStyle(el.parentElement).display,body:document.body.className}));
+ assert.equal(chatModelVisible,true,JSON.stringify(chatModelDetails));
  assert.equal(await page.locator('#composer-options').isVisible(),false);
  await page.locator('.topbar .sidebar-toggle').click();await page.waitForTimeout(180);
  assert.equal(await page.locator('#chat-sidebar').isVisible(),true);
