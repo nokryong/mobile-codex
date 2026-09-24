@@ -556,8 +556,14 @@ public final class MainActivity extends Activity implements Engine.Ui {
                     }); return;
                 }
                 if (action.equals("chat.web.prepare")) {
-                    runOnUiThread(() -> { try { chatWeb(); respond(id, obj("ok", true), null); }
+                    runOnUiThread(() -> { try { chatWeb(); respond(id, obj("ok", true, "debug", BuildConfig.DEBUG, "buildSha", BuildConfig.SOURCE_SHA), null); }
                         catch (Exception e) { respond(id, null, e); } }); return;
+                }
+                if (action.equals("chat.web.diagnostic")) {
+                    runOnUiThread(() -> { try {
+                        if (!BuildConfig.DEBUG) throw new IllegalStateException("진단 화면은 debug 빌드에서만 사용할 수 있습니다.");
+                        chatWeb().diagnostic((result, error) -> respond(id, result, error));
+                    } catch (Exception e) { respond(id, null, e); } }); return;
                 }
                 if (action.equals("chat.web.new")) {
                     runOnUiThread(() -> { try { chatWeb().newChat(); respond(id, obj("ok", true), null); }
@@ -565,7 +571,10 @@ public final class MainActivity extends Activity implements Engine.Ui {
                 }
                 if (action.equals("chat.web.send")) {
                     String text = args.getString("text");
-                    runOnUiThread(() -> { try { chatWeb().send(text, (result, error) -> respond(id, result, error)); }
+                    String option = args.optString("requestedOptionId", "");
+                    String operationId = args.optString("operationId", "");
+                    long revision = args.optLong("selectionRevision", 0);
+                    runOnUiThread(() -> { try { chatWeb().send(text, option, operationId, revision, (result, error) -> respond(id, result, error)); }
                         catch (Exception e) { respond(id, null, e); } }); return;
                 }
                 if (action.equals("chat.web.modelState")) {

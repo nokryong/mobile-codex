@@ -56,7 +56,7 @@ test('submit is cancelled synchronously and calls native with chosen model and e
  assert.equal(calls.find(m=>m.action==='chat.send').args.text,'실제 파일 수정');
 });
 test('Chat switch routes the same composer to ordinary Chat and restores the Codex draft',async()=>{
- const {w,calls,snapshot}=setup({'chat.web.send':()=>({reply:'일반 Chat 답변',conversationId:'11111111-1111-1111-1111-111111111111',model:'gpt-5-6-thinking'})});await tick();
+ const {w,calls,snapshot}=setup({'chat.web.send':m=>({operationId:m.args.operationId,reply:'일반 Chat 답변',conversationId:'11111111-1111-1111-1111-111111111111',model:'gpt-5-6-thinking'})});await tick();
  w.mobileCodexEvent('state',snapshot);
  const d=w.document,prompt=d.getElementById('prompt');prompt.value='Codex 초안';prompt.dispatchEvent(new w.Event('input'));
  d.getElementById('mode-chat').click();await tick();
@@ -74,7 +74,7 @@ test('Chat switch routes the same composer to ordinary Chat and restores the Cod
  assert.equal(calls.filter(x=>x.action==='chat.send').length,0);
  assert.match(d.getElementById('messages').textContent,/일반 Chat 질문.*일반 Chat 답변/s);
  assert.equal(d.getElementById('chat-sessions').textContent,'일반 Chat 질문');
- assert.equal(d.getElementById('chat-model-summary').textContent,'gpt-5-6-thinking');
+ assert.equal(d.getElementById('chat-model-summary').textContent,'확인되지 않음');
  w.mobileCodexEvent('state',{...snapshot,busy:true});
  d.getElementById('mode-codex').click();await tick();
  assert.equal(d.body.classList.contains('chat-mode'),false);
@@ -122,6 +122,7 @@ test('failed Chat verification keeps the draft and shows an error outside the as
  assert.equal(calls.filter(x=>x.action==='chat.web.send').length,1);
  assert.equal(prompt.value,'아 난넝');
  assert.equal(d.querySelectorAll('#messages .message.assistant').length,0);
+ assert.match(d.getElementById('messages').textContent,/아 난넝.*전송 상태 확인 필요/s);
  assert.match(d.getElementById('chat-error').textContent,/대화 주소를 찾지 못했습니다/);
  d.getElementById('mode-codex').click();await tick();
  assert.equal(d.body.classList.contains('chat-mode'),false);

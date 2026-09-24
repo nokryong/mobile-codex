@@ -854,4 +854,6 @@ body.chat-mode .sidebar-top .brand img,body.chat-mode .sidebar-top .mobile-tag{d
 .chat-model-ticks i{width:12px;height:12px;border-radius:50%;background:#b9bdc3}
 .chat-model-ticks i[data-active="true"]{background:#78adfb}
 #chat-model-status{min-height:22px;margin:16px 0 0;font-size:12px;line-height:1.5}
+#chat-model-diagnostic{margin-top:12px}
+#chat-model-diagnostic-output{max-height:28vh;overflow:auto;text-align:left;white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px}
 @media(max-width:760px){.chat-model-sheet{width:100%;padding:18px 20px calc(20px + env(safe-area-inset-bottom))}.chat-model-track,#chat-model-slider{height:68px}#chat-model-slider::-webkit-slider-thumb{width:58px;height:58px}}
