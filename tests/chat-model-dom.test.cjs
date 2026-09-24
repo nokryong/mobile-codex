@@ -91,6 +91,13 @@ test('finds a composer model button without aria-haspopup when the menu is close
   assert.equal(adapter.inspect().trigger.label,'Pro');
 });
 
+test('finds a nearby model button outside the prompt form', () => {
+  const {adapter} = setup('<form><div id="prompt-textarea"></div><button type="button">Send</button></form>'+
+    '<button aria-haspopup="menu">High</button>');
+  assert.equal(adapter.inspect().state,'closed');
+  assert.equal(adapter.inspect().level,'High');
+});
+
 test('finds the unique composer menu trigger when its visible label is absent from DOM text', () => {
   const {adapter} = setup('<button aria-haspopup="menu">Other menu</button><div id="prompt-textarea" data-far></div>'+
     '<button aria-haspopup="menu" data-far aria-expanded="false"></button>');

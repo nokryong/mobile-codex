@@ -56,29 +56,25 @@
     const buttons = [...root.document.querySelectorAll('button,[role="button"]')].filter(button =>
       visible(button) && !button.closest('[role="menu"],[role="dialog"],[role="listbox"]'));
     const form = prompt?.closest('form');
-    const inComposerForm = buttons.filter(button => form?.contains(button));
-    const candidates = inComposerForm.length ? inComposerForm : buttons;
-    const named = candidates
+    const nearComposer = button => {
+      const box = button.getBoundingClientRect();
+      return !!form?.contains(button) || !!promptBox && Math.abs(box.top - promptBox.top) <= 180
+        || box.top >= root.innerHeight - 180 && box.bottom <= root.innerHeight + 20;
+    };
+    const named = buttons
       .filter(button => {
         const label = settingLabel(button);
         const hasPopup = !!button.getAttribute('aria-haspopup');
-        if (hasPopup && (/추론\s*수준|reasoning\s*(level|effort)|performance/i.test(label) || level(label))) return true;
-        if (!level(label) || !promptBox) return false;
-        const box = button.getBoundingClientRect();
-        const sameForm = !!form && form.contains(button);
-        const nearComposer = Math.abs(box.top - promptBox.top) <= 180 && Math.abs(box.left - promptBox.left) <= root.innerWidth;
-        return sameForm || nearComposer;
+        if (hasPopup && (/추론\s*수준|reasoning\s*(level|effort)|performance/i.test(label) || level(label)))
+          return !promptBox || nearComposer(button);
+        return !!level(label) && !!promptBox && nearComposer(button);
       });
     if (named.length) return named;
     // Some ChatGPT builds render the visible model label outside the button's
     // DOM text. Only accept a unique menu trigger next to the composer.
-    return candidates.filter(button => {
+    return buttons.filter(button => {
       if (button.getAttribute('aria-haspopup') !== 'menu') return false;
-      const box = button.getBoundingClientRect();
-      const sameForm = !!form && form.contains(button);
-      const nearComposer = promptBox && Math.abs(box.top - promptBox.top) <= 180;
-      const bottomComposer = box.top >= root.innerHeight - 180 && box.bottom <= root.innerHeight + 20;
-      return sameForm || nearComposer || bottomComposer;
+      return nearComposer(button);
     });
   }
   function type(element) {
