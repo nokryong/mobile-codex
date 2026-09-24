@@ -53,25 +53,29 @@
   function triggers() {
     const prompt = root.document.querySelector('#prompt-textarea,[data-testid="prompt-textarea"]');
     const promptBox = prompt?.getBoundingClientRect();
-    const buttons = [...root.document.querySelectorAll('button,[role="button"]')].filter(visible);
-    const named = buttons
+    const buttons = [...root.document.querySelectorAll('button,[role="button"]')].filter(button =>
+      visible(button) && !button.closest('[role="menu"],[role="dialog"],[role="listbox"]'));
+    const form = prompt?.closest('form');
+    const inComposerForm = buttons.filter(button => form?.contains(button));
+    const candidates = inComposerForm.length ? inComposerForm : buttons;
+    const named = candidates
       .filter(button => {
         const label = settingLabel(button);
         const hasPopup = !!button.getAttribute('aria-haspopup');
         if (hasPopup && (/추론\s*수준|reasoning\s*(level|effort)|performance/i.test(label) || level(label))) return true;
         if (!level(label) || !promptBox) return false;
         const box = button.getBoundingClientRect();
-        const sameForm = !!prompt.closest('form') && prompt.closest('form').contains(button);
+        const sameForm = !!form && form.contains(button);
         const nearComposer = Math.abs(box.top - promptBox.top) <= 180 && Math.abs(box.left - promptBox.left) <= root.innerWidth;
         return sameForm || nearComposer;
       });
     if (named.length) return named;
     // Some ChatGPT builds render the visible model label outside the button's
     // DOM text. Only accept a unique menu trigger next to the composer.
-    return buttons.filter(button => {
+    return candidates.filter(button => {
       if (button.getAttribute('aria-haspopup') !== 'menu') return false;
       const box = button.getBoundingClientRect();
-      const sameForm = !!prompt?.closest('form') && prompt.closest('form').contains(button);
+      const sameForm = !!form && form.contains(button);
       const nearComposer = promptBox && Math.abs(box.top - promptBox.top) <= 180;
       const bottomComposer = box.top >= root.innerHeight - 180 && box.bottom <= root.innerHeight + 20;
       return sameForm || nearComposer || bottomComposer;
@@ -132,6 +136,9 @@
     const position = ordinal(details);
     const buttonLevel = found.button ? level(settingLabel(found.button)) : '';
     let current = control ? level(control.getAttribute('aria-valuetext') || details || control.textContent) : '';
+    if (control && type(control) === 'stepper' && position?.total === LEVELS.length
+        && position.position >= 1 && position.position <= LEVELS.length)
+      current = LEVELS[position.position - 1];
     if (options) {
       const checked = controls.filter(element => element.getAttribute('aria-checked') === 'true' || element.getAttribute('aria-selected') === 'true');
       if (checked.length === 1) current = level(checked[0].getAttribute('aria-label') || checked[0].textContent);

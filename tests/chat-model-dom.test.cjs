@@ -117,6 +117,22 @@ test('reads the visible model value even when a generic aria-label is present', 
   assert.equal(adapter.inspect().level,'Pro');
 });
 
+test('does not mistake a Pro submenu button for the composer model trigger', () => {
+  const {adapter} = setup('<form><div id="prompt-textarea"></div><button aria-haspopup="menu">Medium</button></form>'+
+    '<div role="menu"><button aria-haspopup="menu">Pro</button><div role="menuitem" aria-label="성능" aria-describedby="value hint"></div></div>'+
+    '<span id="value">Medium, 5개 중 2번째.</span><span id="hint">화살표 키로 조정합니다.</span>');
+  assert.equal(adapter.inspect().state,'open');
+  assert.equal(adapter.inspect().trigger.label,'Medium');
+  assert.equal(adapter.inspect().level,'Medium');
+});
+
+test('reads the fifth step as Pro even when its description mentions High', () => {
+  const {adapter} = setup(trigger+'<div role="menu" id="settings"><div role="menuitem" aria-label="성능" aria-describedby="value hint"></div></div>'+
+    '<span id="value">Pro, 5개 중 5번째. High 다음 단계.</span><span id="hint">화살표 키로 조정합니다.</span>');
+  assert.equal(adapter.inspect().type,'stepper');
+  assert.equal(adapter.inspect().level,'Pro');
+});
+
 test('disabled and unavailable options fail closed', () => {
   const {adapter} = setup(trigger+'<div role="menu" id="settings"><div role="menuitemradio" aria-disabled="true">Pro</div></div>');
   assert.equal(adapter.choose('Pro').reason,'disabled');

@@ -42,6 +42,10 @@ final class ChatWebTransport {
     private boolean destroyed;
     private long modelStartedAt;
     private String modelStage = "idle";
+    private String modelTarget = "";
+    private String modelFailure = "";
+    private String modelFailedAtStage = "";
+    private JSONObject lastModelSnapshot = new JSONObject();
     private final JSONArray modelEvents = new JSONArray();
     private long deadline;
     private long sendStartedAt;
@@ -131,7 +135,14 @@ final class ChatWebTransport {
     }
 
     private void inspectModel(java.util.function.Consumer<JSONObject> callback) {
-        evaluateModel("inspect()", state -> { recordModelStage(modelStage, state); callback.accept(state); });
+        long operation = activeModelOperation;
+        evaluateModel("inspect()", state -> {
+            if (operation == activeModelOperation) {
+                lastModelSnapshot = state;
+                recordModelStage(modelStage, state);
+            }
+            callback.accept(state);
+        });
     }
 
     private void recordModelStage(String stage, JSONObject state) {
@@ -156,26 +167,41 @@ final class ChatWebTransport {
     }
 
     void diagnostic(Done done) {
+        final boolean[] completed = {false};
         inspectModel(state -> {
-            Uri uri = Uri.parse(page.getUrl() == null ? "" : page.getUrl());
-            JSONObject result = new JSONObject();
-            try {
-                result.put("buildSha", BuildConfig.SOURCE_SHA);
-                result.put("androidApi", Build.VERSION.SDK_INT);
-                var webview = WebView.getCurrentWebViewPackage();
-                result.put("webViewVersion", webview == null ? "unknown" : webview.versionName);
-                result.put("locale", activity.getResources().getConfiguration().getLocales().get(0).toLanguageTag());
-                result.put("viewWidth", page.getWidth()); result.put("viewHeight", page.getHeight());
-                result.put("host", "chatgpt.com".equals(uri.getHost()) ? "chatgpt.com" : "other");
-                result.put("pathKind", conversationId(page.getUrl()).isEmpty() ? "new-or-login" : "conversation");
-                result.put("sessionEpoch", sessionEpoch);
-                result.put("operationId", activeModelOperation);
-                result.put("stage", modelStage);
-                result.put("current", state);
-                result.put("events", modelEvents);
-            } catch (Exception ignored) {}
-            done.complete(result, null);
+            if (completed[0]) return;
+            completed[0] = true;
+            done.complete(modelDiagnostic(state), null);
         });
+        page.postDelayed(() -> {
+            if (completed[0]) return;
+            completed[0] = true;
+            done.complete(modelDiagnostic(lastModelSnapshot), null);
+        }, 1500);
+    }
+
+    private JSONObject modelDiagnostic(JSONObject state) {
+        Uri uri = Uri.parse(page.getUrl() == null ? "" : page.getUrl());
+        JSONObject result = new JSONObject();
+        try {
+            result.put("buildSha", BuildConfig.SOURCE_SHA);
+            result.put("androidApi", Build.VERSION.SDK_INT);
+            var webview = WebView.getCurrentWebViewPackage();
+            result.put("webViewVersion", webview == null ? "unknown" : webview.versionName);
+            result.put("locale", activity.getResources().getConfiguration().getLocales().get(0).toLanguageTag());
+            result.put("viewWidth", page.getWidth()); result.put("viewHeight", page.getHeight());
+            result.put("host", "chatgpt.com".equals(uri.getHost()) ? "chatgpt.com" : "other");
+            result.put("pathKind", conversationId(page.getUrl()).isEmpty() ? "new-or-login" : "conversation");
+            result.put("sessionEpoch", sessionEpoch);
+            result.put("operationId", activeModelOperation);
+            result.put("stage", modelStage);
+            result.put("target", modelTarget);
+            result.put("failure", modelFailure);
+            result.put("failedAtStage", modelFailedAtStage);
+            result.put("current", state);
+            result.put("events", modelEvents);
+        } catch (Exception ignored) {}
+        return result;
     }
 
     private void evaluateModel(String command, java.util.function.Consumer<JSONObject> callback) {
@@ -203,6 +229,8 @@ final class ChatWebTransport {
         modelChanging = false;
         activeModelOperation++;
         page.clearFocus();
+        modelFailedAtStage = error == null ? "" : modelStage;
+        modelFailure = error == null ? "" : error.getMessage();
         modelStage = error == null ? "ui-confirmed" : "failed";
         if (callback != null) callback.complete(result, error);
     }
@@ -217,9 +245,11 @@ final class ChatWebTransport {
         }
         modelChanging = true;
         modelStartedAt = SystemClock.elapsedRealtime(); modelStage = "reading";
+        modelTarget = ""; modelFailure = ""; modelFailedAtStage = "";
         modelDone = done;
         long operation = activeModelOperation = ++nextModelOperation;
         modelDeadline = SystemClock.elapsedRealtime() + 10_000;
+        scheduleModelWatchdog(operation, 10_000);
         readModelState(operation, 0);
     }
 
@@ -256,11 +286,11 @@ final class ChatWebTransport {
             }
             if ("open".equals(state.optString("state")) && "submenu".equals(state.optString("type")) && !openedSubmenu) {
                 tapModelButton(state.optJSONObject("control"), state.optJSONObject("viewport"));
-                page.postDelayed(() -> readOpenedModelState(operation, attempt + 1, true), 150);
+                page.postDelayed(() -> readOpenedModelState(operation, attempt + 1, true), 80);
                 return;
             }
             if (attempt >= 15) { modelError(operation, "ChatGPT 설정 메뉴에서 현재 값을 읽지 못했습니다."); return; }
-            page.postDelayed(() -> readOpenedModelState(operation, attempt + 1, openedSubmenu), 150);
+            page.postDelayed(() -> readOpenedModelState(operation, attempt + 1, openedSubmenu), 80);
         });
     }
 
@@ -270,7 +300,7 @@ final class ChatWebTransport {
             if (!liveModel(operation)) return;
             if ("closed".equals(state.optString("state"))) { completeModelRead(operation, level); return; }
             if (attempt >= 12) { modelError(operation, "설정 메뉴를 닫지 못했습니다."); return; }
-            page.postDelayed(() -> waitClosedAfterRead(operation, level, attempt + 1), 150);
+            page.postDelayed(() -> waitClosedAfterRead(operation, level, attempt + 1), 80);
         });
     }
 
@@ -287,10 +317,19 @@ final class ChatWebTransport {
         if (pending != null || modelChanging) { done.complete(null, new IllegalStateException("ChatGPT 설정을 변경할 수 없는 상태입니다.")); return; }
         modelChanging = true;
         modelStartedAt = SystemClock.elapsedRealtime(); modelStage = "opening";
+        modelTarget = level; modelFailure = ""; modelFailedAtStage = "";
         modelDone = done;
         long operation = activeModelOperation = ++nextModelOperation;
-        modelDeadline = SystemClock.elapsedRealtime() + 20_000;
+        modelDeadline = SystemClock.elapsedRealtime() + 5_000;
+        scheduleModelWatchdog(operation, 5_000);
         openForSelection(operation, level, 0);
+    }
+
+    private void scheduleModelWatchdog(long operation, long timeoutMs) {
+        page.postDelayed(() -> {
+            if (destroyed || !modelChanging || activeModelOperation != operation) return;
+            completeModel(operation, null, new IllegalStateException("ChatGPT 설정 작업이 응답하지 않아 종료했습니다."));
+        }, timeoutMs);
     }
 
     private void openForSelection(long operation, String target, int steps) {
@@ -314,7 +353,7 @@ final class ChatWebTransport {
             if (!liveModel(operation)) return;
             if ("open".equals(state.optString("state"))) { adjustModel(operation, target, steps, state); return; }
             if (attempt >= 15) { modelError(operation, "ChatGPT 설정 메뉴가 열리지 않았습니다."); return; }
-            page.postDelayed(() -> waitOpen(operation, target, steps, attempt + 1), 150);
+            page.postDelayed(() -> waitOpen(operation, target, steps, attempt + 1), 80);
         });
     }
 
@@ -367,7 +406,7 @@ final class ChatWebTransport {
                 adjustModel(operation, target, steps, state); return;
             }
             if (attempt >= 12) { modelError(operation, "성능 하위 메뉴가 열리지 않았습니다."); return; }
-            page.postDelayed(() -> waitSubmenu(operation, target, steps, attempt + 1), 150);
+            page.postDelayed(() -> waitSubmenu(operation, target, steps, attempt + 1), 80);
         });
     }
 
@@ -381,7 +420,7 @@ final class ChatWebTransport {
                 adjustModel(operation, target, steps, state); return;
             }
             if (attempt >= 10) { modelError(operation, "설정값 변경을 확인하지 못했습니다."); return; }
-            page.postDelayed(() -> waitModelChange(operation, target, before, steps, attempt + 1), 150);
+            page.postDelayed(() -> waitModelChange(operation, target, before, steps, attempt + 1), 80);
         });
     }
 
@@ -414,7 +453,7 @@ final class ChatWebTransport {
             if ("closed".equals(state.optString("state"))) { reopenForVerification(operation, target); return; }
             if (attempt == 6) { page.requestFocus(); page.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ESCAPE)); page.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ESCAPE)); }
             if (attempt >= 15) { modelError(operation, "설정 메뉴를 닫지 못했습니다."); return; }
-            page.postDelayed(() -> waitClosed(operation, target, attempt + 1), 150);
+            page.postDelayed(() -> waitClosed(operation, target, attempt + 1), 80);
         });
     }
 
@@ -434,7 +473,7 @@ final class ChatWebTransport {
             if (!liveModel(operation)) return;
             if ("open".equals(state.optString("state"))) { verifyModelSelection(operation, target, 1); return; }
             if (attempt >= 15) { modelError(operation, "설정 메뉴 재조회에 실패했습니다."); return; }
-            page.postDelayed(() -> waitReopened(operation, target, attempt + 1), 150);
+            page.postDelayed(() -> waitReopened(operation, target, attempt + 1), 80);
         });
     }
 
@@ -454,7 +493,7 @@ final class ChatWebTransport {
                 return;
             }
             if (attempt >= 12) { modelError(operation, "선택값 확인 뒤 메뉴를 닫지 못했습니다."); return; }
-            page.postDelayed(() -> waitFinalClosed(operation, target, attempt + 1), 150);
+            page.postDelayed(() -> waitFinalClosed(operation, target, attempt + 1), 80);
         });
     }
 
