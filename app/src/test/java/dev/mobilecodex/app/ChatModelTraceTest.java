@@ -49,4 +49,25 @@ public class ChatModelTraceTest {
         trace.begin(2, 1, "High", new JSONObject());
         assertEquals(0, trace.events().length());
     }
+    @Test public void recoveryFailureKeepsFirstCauseAndRejectsOldKeyEvidence() throws Exception {
+        ChatModelTrace trace = new ChatModelTrace();
+        trace.begin(8, 2, "Pro", new JSONObject());
+        trace.record("wait-menu-closed", 2, 900, new JSONObject().put("state", "ambiguous"), null);
+        trace.finish(2, 1000, "close failed", "");
+        trace.begin(13, 2, "High", new JSONObject());
+        JSONObject old = new JSONObject().put("operationId", 8).put("sessionEpoch", 2);
+        trace.record("locate-trigger", 2, 6, new JSONObject().put("inputObservation", old), null);
+        JSONObject last = trace.finish(2, 10, "ambiguous", "");
+        assertFalse(last.getJSONObject("finalSnapshot").has("inputObservation"));
+        assertFalse(trace.events().getJSONObject(0).getJSONObject("snapshot").has("inputObservation"));
+        assertEquals(8, trace.firstFailure().getLong("operationId"));
+        assertEquals(13, trace.lastFailure().getLong("operationId"));
+        ChatModelTrace restored = new ChatModelTrace();
+        restored.restoreFailure(trace.savedFailures());
+        assertEquals(8, restored.firstFailure().getLong("operationId"));
+        restored.begin(14, 2, "High", new JSONObject()); restored.finish(2, 10, "", "");
+        assertEquals(8, restored.firstFailure().getLong("operationId"));
+        restored.begin(15, 2, "Pro", new JSONObject()); restored.finish(2, 10, "new failure", "");
+        assertEquals(15, restored.firstFailure().getLong("operationId"));
+    }
 }

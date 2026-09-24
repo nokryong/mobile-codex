@@ -206,9 +206,11 @@ final class ChatWebTransport {
             result.put("stage", modelStage); result.put("target", modelTarget);
             result.put("failure", modelFailure); result.put("failedAtStage", modelFailedAtStage);
             result.put("currentReadStatus", state == null ? "unavailable-timeout" : "observed");
+            if (state != null) state.remove("inputObservation"); // key evidence belongs to a completed operation
             result.put("currentAfterRecovery", state == null ? JSONObject.NULL : state);
             result.put("current", state == null ? JSONObject.NULL : state); // compatibility; frozen evidence is explicitly separate
             result.put("lastCompletedOperation", lastModelOperation);
+            result.put("firstFailedSelection", modelTrace.firstFailure());
             result.put("lastFailedSelection", modelTrace.lastFailure());
             result.put("events", modelTrace.events());
         } catch (Exception ignored) {}
@@ -242,8 +244,8 @@ final class ChatWebTransport {
         if (BuildConfig.DEBUG) {
             modelTrace.record(modelStage, sessionEpoch, modelElapsed(), lastModelSnapshot, null);
             lastModelOperation = modelTrace.finish(sessionEpoch, modelElapsed(), modelFailure, modelTimeoutSource);
-            if (error != null) activity.getSharedPreferences("chat-model-diagnostic", 0).edit()
-                .putString("last-failure", modelTrace.lastFailure().toString()).apply();
+            activity.getSharedPreferences("chat-model-diagnostic", 0).edit()
+                .putString("last-failure", modelTrace.savedFailures()).apply();
         }
         modelDone = null;
         modelChanging = false;

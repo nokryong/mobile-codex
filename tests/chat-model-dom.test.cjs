@@ -224,3 +224,27 @@ test('new key observation clears the previous operation and bounds settings text
   const raw=state.control.valueEvidence.ariaValueText;
   assert.ok(raw.length <= 160); assert.ok(!raw.includes('SECRET')); assert.ok(!raw.includes('email@example.com'));
 });
+
+test('live 6Pro composer label remains unique beside the attachment menu', () => {
+  const {adapter} = setup('<form><div id="prompt-textarea"></div>'+
+    '<button data-testid="composer-plus-btn" aria-label="파일 등 추가" aria-haspopup="menu"></button>'+
+    '<button aria-haspopup="menu" aria-expanded="false"><span>6</span><span>Pro</span></button></form>');
+  const state = adapter.inspect();
+  assert.equal(state.state,'closed'); assert.equal(state.level,'Pro'); assert.equal(state.triggerCount,1);
+  assert.equal(state.triggerCandidates[0].valueEvidence.displayText,'6Pro');
+  assert.equal(adapter.level('Profile'),''); assert.equal(adapter.level('Project'),'');
+});
+
+test('X-High to adjacent-span 6Pro stays readable after closing the menu', () => {
+  const {w,adapter} = setup('<form><div id="prompt-textarea"></div>'+
+    '<button data-testid="composer-plus-btn" aria-haspopup="menu"></button>'+
+    '<button id="model" aria-haspopup="menu" aria-controls="settings">X-High</button></form>'+
+    '<div role="menu" id="settings"><div role="menuitem" tabindex="0" aria-label="성능" aria-describedby="value"></div></div>'+
+    '<span id="value">X-High, 5개 중 4번째. 화살표 키로 조정합니다.</span>');
+  assert.equal(adapter.inspect().level,'X-High');
+  w.document.getElementById('value').textContent='Pro, 5개 중 5번째. 화살표 키로 조정합니다.';
+  w.document.getElementById('model').innerHTML='<span>6</span><span>Pro</span>';
+  assert.equal(adapter.inspect().level,'Pro');
+  w.document.getElementById('settings').hidden=true;
+  assert.equal(adapter.inspect().state,'closed'); assert.equal(adapter.inspect().level,'Pro');
+});

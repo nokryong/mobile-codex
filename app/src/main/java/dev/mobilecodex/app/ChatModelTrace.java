@@ -8,6 +8,8 @@ final class ChatModelTrace {
     private JSONObject operation = new JSONObject();
     private JSONObject snapshot = new JSONObject();
     private JSONObject failure = new JSONObject();
+    private JSONObject firstFailure = new JSONObject();
+    private boolean incidentActive;
     private JSONArray events = new JSONArray();
     private String stage = "idle";
     private String previousSignature = "";
@@ -16,7 +18,12 @@ final class ChatModelTrace {
         try { return new JSONObject(value.toString()); } catch (Exception ignored) { return new JSONObject(); }
     }
     void restoreFailure(String saved) {
-        try { failure = new JSONObject(saved); } catch (Exception ignored) { failure = new JSONObject(); }
+        try {
+            JSONObject data = new JSONObject(saved);
+            failure = data.has("lastFailure") ? data.getJSONObject("lastFailure") : data;
+            firstFailure = data.has("firstFailure") ? data.getJSONObject("firstFailure") : copy(failure);
+            incidentActive = data.optBoolean("incidentActive", failure.length() > 0);
+        } catch (Exception ignored) { failure = new JSONObject(); firstFailure = new JSONObject(); incidentActive = false; }
     }
     void begin(long id, long epoch, String target, JSONObject environment) {
         operation = copy(environment); snapshot = new JSONObject(); events = new JSONArray();
@@ -28,7 +35,14 @@ final class ChatModelTrace {
     }
     void record(String nextStage, long epoch, long elapsed, JSONObject state, JSONObject input) {
         stage = nextStage;
-        if (state != null) snapshot = copy(state);
+        if (state != null) {
+            state = copy(state);
+            JSONObject observation = state.optJSONObject("inputObservation");
+            if (observation != null && (observation.optLong("operationId", -1) != operation.optLong("operationId")
+                    || observation.optLong("sessionEpoch", -1) != operation.optLong("startSessionEpoch")))
+                state.remove("inputObservation");
+            snapshot = copy(state);
+        }
         try {
             JSONObject entry = new JSONObject();
             entry.put("stage", stage); entry.put("sessionEpoch", epoch);
@@ -52,10 +66,25 @@ final class ChatModelTrace {
             result.put("lastSnapshotBeforeFailure", error.isEmpty() ? JSONObject.NULL : copy(snapshot));
             result.put("finalSnapshot", copy(snapshot)); result.put("events", new JSONArray(events.toString()));
         } catch (Exception ignored) {}
-        if (!error.isEmpty() && !operation.optString("target").isEmpty()) failure = copy(result);
+        if (!operation.optString("target").isEmpty()) {
+            if (!error.isEmpty()) {
+                failure = copy(result);
+                if (!incidentActive) firstFailure = copy(result);
+                incidentActive = true;
+            } else incidentActive = false;
+        }
         return result;
     }
     JSONObject lastFailure() { return copy(failure); }
+    JSONObject firstFailure() { return copy(firstFailure); }
+    String savedFailures() {
+        JSONObject result = new JSONObject();
+        try {
+            result.put("firstFailure", copy(firstFailure)); result.put("lastFailure", copy(failure));
+            result.put("incidentActive", incidentActive);
+        } catch (Exception ignored) {}
+        return result.toString();
+    }
     JSONArray events() {
         try { return new JSONArray(events.toString()); } catch (Exception ignored) { return new JSONArray(); }
     }

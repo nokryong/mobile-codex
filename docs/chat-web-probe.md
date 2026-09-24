@@ -78,3 +78,27 @@ are skipped. Default/main checks remain full. Targeted local DOM regressions:
 `node --test tests/chat-model-dom.test.cjs`. Frozen-trace JVM regressions:
 `./gradlew testDebugUnitTest --tests dev.mobilecodex.app.ChatModelTraceTest`
 (where an Android/JDK build environment is available).
+
+## Device finding: compact Pro button label
+
+On installed build `23f86eedd8d8` (API 36, WebView 153.0.8010.36, ko-KR),
+operation 13 targeting High failed at `locate-trigger` in 10ms with two trigger
+candidates and no open popup. Its nested key evidence belonged to operation 8;
+it was not evidence that operation 13 sent a key. The initial Pro failure had
+been overwritten by later selection failures.
+
+A read-only DevTools inspection of the actual sending WebView found the
+composer attachment trigger (`composer-plus-btn`) and the model button with
+literal DOM text `6Pro`. The old Pro regex required whitespace before `Pro`,
+so it rejected `6Pro` and fell back to both composer menu buttons. This explains
+the ambiguous-trigger state and subsequent selection failures. Running the
+updated adapter in an isolated read-only scope against the same live document
+changed the result from `ambiguous / 2 candidates` to `closed / Pro / 1 candidate`.
+No menu click or message send was performed in this check. Actual setting
+changes still need verification with the new installed build.
+
+The parser now accepts a numeric model prefix adjacent to Pro and excludes the
+observed attachment trigger. Diagnostic snapshots retain bounded trigger
+candidates, filter key observations by operation and epoch, and keep the first
+failure in a chain separately from the latest recovery failure. A successful
+selection ends that failure chain without deleting its first failure record.

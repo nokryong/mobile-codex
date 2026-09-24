@@ -1,7 +1,7 @@
 /* Runs only inside the authenticated ChatGPT WebView. Never reads credentials or messages. */
 (function (root) {
   'use strict';
-  if (root.MCChatModelDom?.diagnosticVersion === 2) return;
+  if (root.MCChatModelDom?.diagnosticVersion === 3) return;
   const LEVELS = ['Instant', 'Medium', 'High', 'X-High', 'Pro'];
   const normalize = value => String(value || '').normalize('NFKC').replace(/\s+/g, ' ').trim();
   function level(value) {
@@ -10,7 +10,7 @@
     if (/(?:즉시|빠름|Instant)/i.test(text)) return 'Instant';
     if (/(?:중간|Medium)/i.test(text)) return 'Medium';
     if (/(?:높음|High)/i.test(text)) return 'High';
-    if (/(?:^|\s)Pro(?:$|\s|,)/i.test(text)) return 'Pro';
+    if (/(?:^|[\s\d])Pro(?:$|\s|,)/i.test(text)) return 'Pro';
     return '';
   }
   function visible(element) {
@@ -71,7 +71,7 @@
     const prompt = root.document.querySelector('#prompt-textarea,[data-testid="prompt-textarea"]');
     const promptBox = prompt?.getBoundingClientRect();
     const buttons = [...root.document.querySelectorAll('button,[role="button"]')].filter(button =>
-      visible(button) && !button.closest('[role="menu"],[role="dialog"],[role="listbox"]'));
+      visible(button) && button.getAttribute('data-testid') !== 'composer-plus-btn' && !button.closest('[role="menu"],[role="dialog"],[role="listbox"]'));
     const form = prompt?.closest('form');
     const nearComposer = button => {
       const box = button.getBoundingClientRect();
@@ -145,6 +145,7 @@
     const found = locate();
     const context = {triggerCount:found.buttons.length, popupCount:found.popupCount,
       activePopupCount:found.activePopupCount, controlCount:found.controlCount,
+      triggerCandidates:found.buttons.slice(0, 6).map(element => safeElement(element)),
       inputObservation:inputSnapshot(), focus:safeElement(root.document.activeElement, true)};
     if (found.ambiguous) return {...context,state:'ambiguous'};
     const controls = found.controls, kinds = controls.map(type);
@@ -235,6 +236,6 @@
     matches[0].click();
     return {ok:true};
   }
-  root.MCChatModelDom = {diagnosticVersion:2,inspect,focus,choose,level,ordinal,stopObservation};
+  root.MCChatModelDom = {diagnosticVersion:3,inspect,focus,choose,level,ordinal,stopObservation};
   if (typeof module !== 'undefined' && module.exports) module.exports = root.MCChatModelDom;
 })(typeof window === 'undefined' ? globalThis : window);
