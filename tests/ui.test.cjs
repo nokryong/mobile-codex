@@ -467,6 +467,39 @@ test('autocomplete resolves actual file and app mentions plus structured skills 
  assert.deepEqual(sent.mentions,[{name:'README.md',path:'README.md'}]);assert.deepEqual(sent.skills,[{name:'review',path:'/skills/review'}]);
 });
 
+test('clicking the prompt preserves file search text and opens the root for bare @',async()=>{
+ const {w,calls}=setup({
+  'files.search':()=>({entries:[{name:'README.md',path:'README.md'}]}),
+  'files.list':()=>({entries:[{name:'src',path:'src',directory:true}]}),
+ });await tick();const d=w.document,p=d.getElementById('prompt');
+ p.value='@README';p.setSelectionRange(p.value.length,p.value.length);p.click();await tick();
+ assert.deepEqual(calls.filter(c=>c.action==='files.search').map(c=>c.args),[{query:'README'}]);
+ assert.equal(calls.some(c=>c.action==='files.list'),false);
+ assert.match(d.getElementById('autocomplete').textContent,/README.md/);
+ assert.equal(p.value,'@README');
+ p.value='@';p.setSelectionRange(1,1);p.click();await tick();
+ assert.deepEqual(calls.filter(c=>c.action==='files.list').map(c=>c.args),[{path:''}]);
+ assert.match(d.getElementById('autocomplete').textContent,/src\//);
+ assert.equal(calls.some(c=>c.action==='chat.send'),false);
+});
+
+test('clicking the prompt keeps the skill query filtered and selectable',async()=>{
+ const {w,calls}=setup({rpc:m=>m.args.method==='skills/list'?{data:[{skills:[
+  {name:'review',path:'/skills/review'},
+  {name:'deploy',path:'/skills/deploy'},
+  {name:'review-disabled',path:'/skills/disabled',enabled:false},
+ ]}]}:{data:[]}});await tick();const d=w.document,p=d.getElementById('prompt');
+ p.value='$re';p.setSelectionRange(p.value.length,p.value.length);p.click();await tick();
+ const labels=[...d.querySelectorAll('.autocomplete-item strong')].map(el=>el.textContent);
+ assert.ok(labels.includes('$review'));
+ assert.equal(labels.includes('$deploy'),false);
+ assert.equal(labels.includes('$review-disabled'),false);
+ assert.equal(p.value,'$re');
+ [...d.querySelectorAll('.autocomplete-item')].find(el=>el.querySelector('strong').textContent==='$review').click();await tick();
+ assert.equal(p.value,'$review ');
+ assert.equal(calls.some(c=>c.action==='files.list'||c.action==='chat.send'),false);
+});
+
 test('picker result lands in its original workspace draft after the user switches projects',async()=>{
  let finish;const {w,snapshot}=setup({'attachments.pick':()=>new Promise(resolve=>finish=resolve)});await tick();
  w.mobileCodexEvent('state',{...snapshot,workspace:{selected:true,key:'one',name:'One'},threadId:'t'});w.document.getElementById('add-attachment').click();await tick();

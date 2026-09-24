@@ -1596,7 +1596,7 @@
   $('composer').addEventListener('focusin', () => $('composer').classList.add('composer-expanded'));
   $('composer').addEventListener('focusout', () => frame(() => { if (!$('composer').contains(document.activeElement)) $('composer').classList.remove('composer-expanded'); }));
   $('composer').addEventListener('click', e => { if (! $('composer').classList.contains('composer-expanded') && e.target === $('composer')) $('prompt').focus(); });
-  $('prompt').addEventListener('click', queryAutocomplete);
+  $('prompt').addEventListener('click', () => queryAutocomplete());
   $('chat-scroll').addEventListener('scroll', () => {
     const area = $('chat-scroll'); following = area.scrollHeight - area.scrollTop - area.clientHeight < 80;
     $('jump-latest').hidden = following || !state.messages.length;
