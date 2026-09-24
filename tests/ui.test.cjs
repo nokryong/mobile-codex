@@ -1094,20 +1094,14 @@ test('notification permission guidance follows the Android permission state',asy
  assert.ok(calls.some(call=>call.action==='notifications.openSettings'));permission=true;w.mobileCodexEvent('notifications.changed',{});await tick();await tick();assert.equal(row.hidden,true);
 });
 
-test('long user messages fold safely, expand and stay expanded on redraw',async()=>{
+test('Codex user messages stay fully visible even when long',async()=>{
  const {w,snapshot}=setup();await tick();
  const text='<img src=x onerror=alert(1)>\n'+'긴 사용자 메시지 '.repeat(100);
- const msg={id:'long-user',role:'user',text};
- w.mobileCodexEvent('state',{...snapshot,messages:[msg,{id:'short-user',role:'user',text:'짧은 메시지'}]});
- const d=w.document,body=d.querySelector('[data-id="long-user"] .user-message-text');
- let toggle=d.querySelector('[data-id="long-user"] .user-message-toggle');
+ w.mobileCodexEvent('state',{...snapshot,messages:[{id:'long-user',role:'user',text}]});
+ const body=w.document.querySelector('[data-id="long-user"] .user-message-text');
  assert.equal(body.textContent,text); assert.equal(body.querySelector('img'),null);
- assert.equal(body.classList.contains('is-collapsed'),true); assert.equal(toggle.getAttribute('aria-expanded'),'false');
- assert.equal(d.querySelector('[data-id="short-user"] .user-message-toggle'),null);
- toggle.click(); assert.equal(body.classList.contains('is-collapsed'),false);
- w.mobileCodexEvent('state',{...snapshot,messages:[{...msg,status:'sent'}]});
- toggle=d.querySelector('.user-message-toggle');assert.equal(toggle.getAttribute('aria-expanded'),'true');
- toggle.click();assert.equal(d.querySelector('.user-message-text').classList.contains('is-collapsed'),true);
+ assert.equal(body.classList.contains('is-collapsed'),false);
+ assert.equal(w.document.querySelector('.user-message-toggle'),null);
 });
 
 test('Chat sends the full long message while displaying a folded bubble',async()=>{

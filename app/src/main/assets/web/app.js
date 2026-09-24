@@ -753,7 +753,7 @@
           const text = m.text || '';
           const body = node('div', text, 'user-message-text');
           el.replaceChildren(body);
-          if (text.length > 600 || text.split('\n').length > 8) {
+          if (chatMode && (text.length > 600 || text.split('\n').length > 8)) {
             body.classList.toggle('is-collapsed', !expanded);
             const toggle = node('button', t(expanded ? '접기' : '더 보기'), 'user-message-toggle');
             toggle.type = 'button'; toggle.setAttribute('aria-expanded', String(expanded));
