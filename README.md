@@ -34,9 +34,9 @@ Mobile Codex is an independent Android client built around the Codex app-server.
 
 ## Chat and Codex
 
-Switch with **Chat / Codex** below the sidebar logo. Chat uses the app's own composer and message view; the signed-in official web client handles delivery. Open **ChatGPT sign-in**, complete authentication, then choose **Return to Chat**. This session is separate from Codex sign-in.
+Switch with **Chat / Codex** beside the sidebar logo. Sign into ChatGPT on its official web page when needed. Chat's web session is separate from Codex sign-in.
 
-Chat defaults to Instant. The reasoning slider closes after selection. Long user messages can be expanded or collapsed. Setting failures are reported rather than silently sending with another selection. Chat currently supports text delivery and the current conversation's local view; full web-history synchronization and Chat attachments are not yet supported.
+Chat opens the official ChatGPT website in an app WebView. Its own model picker, conversation history, projects and composer work directly on the web session. A compact Chat/Codex switch beside the sidebar logo returns to the preserved Codex screen. Only the mode switch and assistant icon renderer are injected; the app does not recreate or automate Chat's model selection. Public icon images come from the owner's Firebase Storage bucket with an app-private cache and a packaged fallback. Login/verification stay on the official page, and remote content never receives the app's Native bridge. WebView microphone/camera capture and browser-only features may require further support; file selection uses Android's system picker.
 
 ## Features
 
@@ -62,7 +62,7 @@ You need an **ARM64 device running Android 10 or later**, an up-to-date Android 
 
 ### Download the APK
 
-Open [Releases](https://github.com/nokryong/mobile-codex/releases) and download **`mobile-codex-0.1.27-alpha-arm64.apk`** from the release assets. Open the APK and follow Android’s installation prompts. If requested, allow installation from the app you used to download/open it.
+Open [Releases](https://github.com/nokryong/mobile-codex/releases) and download **`mobile-codex-0.1.28-alpha-arm64.apk`** from the release assets. Open the APK and follow Android’s installation prompts. If requested, allow installation from the app you used to download/open it.
 
 New app versions are published automatically after the `main` workflow passes its tests, builds, and original-key signature verification. Alpha versions are marked as prereleases. A published version is never silently replaced; maintainers must increment both `versionName` and `versionCode` for the next release.
 

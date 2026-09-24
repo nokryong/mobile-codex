@@ -58,161 +58,44 @@ test('submit is cancelled synchronously and calls native with chosen model and e
  assert.equal(e.defaultPrevented,true);await tick();
  assert.equal(calls.find(m=>m.action==='chat.send').args.text,'실제 파일 수정');
 });
-test('Chat switch routes the same composer to ordinary Chat and restores the Codex draft',async()=>{
- const {w,calls,snapshot}=setup({'chat.web.send':m=>({operationId:m.args.operationId,uiConfirmedSetting:m.args.requestedOptionId,reply:'일반 Chat 답변',conversationId:'11111111-1111-1111-1111-111111111111',model:'gpt-5-6-thinking'})});await tick();
- w.mobileCodexEvent('state',snapshot);
- const d=w.document,prompt=d.getElementById('prompt');prompt.value='Codex 초안';prompt.dispatchEvent(new w.Event('input'));
+test('Chat opens official WebView without replacing Codex state, draft or model',async()=>{
+ const {w,calls,snapshot}=setup();await tick();
+ w.mobileCodexEvent('state',{...snapshot,busy:true,messages:[{id:'a',role:'assistant',text:'Codex answer'}]});
+ const d=w.document;d.getElementById('prompt').value='Codex draft';
+ d.getElementById('prompt').dispatchEvent(new w.Event('input'));
  d.getElementById('mode-chat').click();await tick();
- assert.equal(d.getElementById('mode-chat').getAttribute('aria-pressed'),'true');
- assert.equal(d.getElementById('mode-codex').getAttribute('aria-pressed'),'false');
- assert.equal(d.body.classList.contains('chat-mode'),true);
- assert.ok(d.querySelector('#sidebar .sidebar-top + .mode-switch'));
+ assert.equal(calls.filter(m=>m.action==='ui.chat.open').length,1);
+ assert.equal(calls.filter(m=>m.action.startsWith('chat.web.')).length,0);
+ assert.equal(d.getElementById('prompt').value,'Codex draft');
+ assert.equal(d.body.classList.contains('chat-mode'),false);
+ assert.match(d.getElementById('messages').textContent,/Codex answer/);
+ assert.equal(d.getElementById('mode-codex').getAttribute('aria-pressed'),'true');
+ assert.ok(d.querySelector('.sidebar-top .brand + .mode-switch'));
  assert.equal(d.querySelector('.topbar .mode-switch'),null);
- assert.equal(d.getElementById('sidebar-brand-name').textContent,'ChatGPT');
- assert.equal(d.getElementById('chat-sessions').textContent,'새 Chat 대화');
- assert.equal(d.getElementById('chat-model-settings').hidden,false);
- assert.equal(d.getElementById('composer-options').hidden,true);
- assert.equal(d.getElementById('composer').classList.contains('composer-expanded'),true);
- assert.equal(prompt.value,'');
- prompt.value='일반 Chat 질문';d.getElementById('composer').dispatchEvent(new w.Event('submit',{cancelable:true}));await tick();
- assert.equal(calls.filter(x=>x.action==='chat.web.send').length,1);
- assert.equal(calls.find(x=>x.action==='chat.web.send').args.requestedOptionId,'Instant');
- assert.equal(calls.filter(x=>x.action==='chat.send').length,0);
- assert.match(d.getElementById('messages').textContent,/일반 Chat 질문.*일반 Chat 답변/s);
- assert.equal(d.getElementById('chat-sessions').textContent,'일반 Chat 질문');
- assert.equal(d.getElementById('chat-model-summary').textContent,'Instant');
- w.mobileCodexEvent('state',{...snapshot,busy:true});
- d.getElementById('mode-codex').click();await tick();
- assert.equal(d.body.classList.contains('chat-mode'),false);
- assert.equal(d.getElementById('mode-codex').getAttribute('aria-pressed'),'true');
- assert.equal(d.getElementById('mode-chat').getAttribute('aria-pressed'),'false');
- assert.equal(d.getElementById('sidebar-brand-name').textContent,'Codex');
- assert.equal(d.getElementById('activity-text').textContent,'Codex 답변 기다리는 중');
- assert.equal(d.getElementById('header-project').textContent,'Project');
- assert.equal(d.getElementById('chat-model-settings').hidden,true);
- assert.equal(d.getElementById('composer-options').hidden,false);
- assert.equal(d.getElementById('composer').classList.contains('composer-expanded'),true);
- assert.equal(prompt.value,'Codex 초안');
- assert.doesNotMatch(d.getElementById('messages').textContent,/일반 Chat 답변/);
- d.getElementById('mode-chat').click();await tick();
- assert.match(d.getElementById('messages').textContent,/일반 Chat 질문.*일반 Chat 답변/s);
- d.getElementById('mode-codex').click();await tick();
- assert.equal(d.body.classList.contains('chat-mode'),false);
 });
-test('Chat model slider applies a verified level through the Chat web transport',async()=>{
- const {w,calls}=setup({'chat.web.modelState':()=>({level:'High'}),'chat.web.selectModel':m=>({level:m.args.level})});await tick();
- const d=w.document;d.getElementById('mode-chat').click();await tick();
- d.getElementById('chat-model-settings').click();await tick();
- const dialog=d.getElementById('chat-model-dialog'),slider=d.getElementById('chat-model-slider');
- assert.equal(dialog.open,true);
- assert.equal(slider.value,'0');
- assert.equal(slider.disabled,false);
- slider.value='3';slider.dispatchEvent(new w.Event('input'));slider.dispatchEvent(new w.Event('change'));await tick();
- assert.equal(dialog.open,false);
- assert.equal(calls.find(m=>m.action==='chat.web.selectModel').args.level,'X-High');
- assert.equal(d.getElementById('chat-model-summary').textContent,'X-High');
- assert.equal(dialog.querySelector('.sheet-grip, [data-close], #chat-model-diagnostic, #chat-model-diagnostic-copy, #chat-model-diagnostic-output'),null);
+test('Chat opening failure leaves Codex usable and reports the failure',async()=>{
+ const {w}=setup({'ui.chat.open':()=>{throw new Error('open failed');}});await tick();
+ w.document.getElementById('mode-chat').click();await tick();
+ assert.equal(w.document.body.classList.contains('chat-mode'),false);
+ assert.match(w.document.getElementById('toast').textContent,/open failed/);
 });
-test('Chat slider responds immediately and queues the latest choice without locking the thumb',async()=>{
-  let releaseFirst;
-  const first = new Promise(resolve => { releaseFirst = resolve; });
-  let selections = 0;
-  const {w,calls}=setup({'chat.web.modelState':()=>({level:'Medium'}),
-    'chat.web.selectModel':async m=>{ selections++; if(selections===1) await first; return {level:m.args.level}; }});
-  await tick();
-  const d=w.document;d.getElementById('mode-chat').click();await tick();
-  d.getElementById('chat-model-settings').click();await tick();
-  const slider=d.getElementById('chat-model-slider');
-  slider.value='2';slider.dispatchEvent(new w.Event('input'));slider.dispatchEvent(new w.Event('change'));
-  await Promise.resolve();
-  assert.equal(d.getElementById('chat-model-level').textContent,'High 추론 수준');
-  assert.equal(d.getElementById('chat-model-summary').textContent,'High');
-  assert.equal(slider.disabled,false);
-  assert.doesNotMatch(d.getElementById('chat-model-status').textContent,/적용 중/);
-  slider.value='4';slider.dispatchEvent(new w.Event('input'));slider.dispatchEvent(new w.Event('change'));
-  await tick();
-  assert.equal(d.getElementById('chat-model-level').textContent,'Pro 추론 수준');
-  assert.equal(slider.disabled,false);
-  assert.equal(calls.filter(m=>m.action==='chat.web.selectModel').length,1);
-  releaseFirst();await tick();
-  assert.deepEqual(calls.filter(m=>m.action==='chat.web.selectModel').map(m=>m.args.level),['High','Pro']);
-});
-test('a failed Pro choice leaves the Chat slider usable for the next choice',async()=>{
-  const {w,calls}=setup({'chat.web.modelState':()=>({level:'High'}),
-    'chat.web.selectModel':m=>{ if(m.args.level==='Pro') throw new Error('Pro 웹 설정 확인 실패'); return {level:m.args.level}; }});
-  await tick();
-  const d=w.document;d.getElementById('mode-chat').click();await tick();
-  d.getElementById('chat-model-settings').click();await tick();
-  const slider=d.getElementById('chat-model-slider');
-  slider.value='4';slider.dispatchEvent(new w.Event('input'));slider.dispatchEvent(new w.Event('change'));await tick();
-  assert.equal(d.getElementById('chat-model-dialog').open,false);
-  assert.equal(slider.disabled,false);
-  assert.match(d.getElementById('chat-model-status').textContent,/Pro 웹 설정 확인 실패/);
-  assert.match(d.getElementById('toast').textContent,/Pro 웹 설정 확인 실패/);
-  slider.value='1';slider.dispatchEvent(new w.Event('input'));slider.dispatchEvent(new w.Event('change'));await tick();
-  assert.equal(slider.disabled,false);
-  assert.deepEqual(calls.filter(m=>m.action==='chat.web.selectModel').map(m=>m.args.level),['Pro','Medium']);
-});
-test('Chat send waits for its selected level instead of sending the previous level',async()=>{
-  let releaseSelection;
-  const selection = new Promise(resolve => { releaseSelection = resolve; });
-  const {w,calls}=setup({'chat.web.modelState':()=>({level:'Medium',sessionEpoch:2}),
-    'chat.web.selectModel':async m=>{ await selection; return {level:m.args.level,sessionEpoch:2}; },
-    'chat.web.send':m=>({operationId:m.args.operationId,uiConfirmedSetting:m.args.requestedOptionId,
-      reply:'확인',conversationId:'11111111-1111-1111-1111-111111111111'})});
-  await tick();
-  const d=w.document;d.getElementById('mode-chat').click();await tick();
-  d.getElementById('chat-model-settings').click();await tick();
-  const slider=d.getElementById('chat-model-slider');
-  slider.value='2';slider.dispatchEvent(new w.Event('input'));slider.dispatchEvent(new w.Event('change'));await tick();
-  d.getElementById('chat-model-dialog').close();
-  d.getElementById('prompt').value='설정 확인 후 전송';
-  d.getElementById('composer').dispatchEvent(new w.Event('submit',{cancelable:true}));await tick();
-  assert.equal(calls.filter(m=>m.action==='chat.web.send').length,0);
-  releaseSelection();await tick();
-  assert.equal(calls.filter(m=>m.action==='chat.web.send').length,1);
-  assert.equal(calls.find(m=>m.action==='chat.web.send').args.requestedOptionId,'High');
-});
-test('Chat slider opens on Instant without waiting for the web session to be read',async()=>{
- const {w,calls}=setup({'chat.web.modelState':()=>{throw new Error('화면 준비 중');},'chat.web.selectModel':m=>({level:m.args.level})});await tick();
- const d=w.document;d.getElementById('mode-chat').click();await tick();
- d.getElementById('chat-model-settings').click();await tick();
- const slider=d.getElementById('chat-model-slider');assert.equal(slider.disabled,false);
- assert.equal(slider.value,'0');
- assert.equal(calls.some(m=>m.action==='chat.web.modelState'),false);
- slider.value='3';slider.dispatchEvent(new w.Event('input'));slider.dispatchEvent(new w.Event('change'));await tick();
- assert.equal(calls.find(m=>m.action==='chat.web.selectModel').args.level,'X-High');
- assert.equal(d.getElementById('chat-model-summary').textContent,'X-High');
-});
-test('failed Chat verification keeps the draft and shows an error outside the assistant transcript',async()=>{
- const {w,calls}=setup({'chat.web.send':()=>{throw new Error('대화 주소를 찾지 못했습니다. [화면=첫 화면]');}});await tick();
- const d=w.document;d.getElementById('mode-chat').click();await tick();
- const prompt=d.getElementById('prompt');prompt.value='아 난넝';d.getElementById('composer').dispatchEvent(new w.Event('submit',{cancelable:true}));await tick();
- assert.equal(calls.filter(x=>x.action==='chat.web.send').length,1);
- assert.equal(prompt.value,'아 난넝');
- assert.equal(d.querySelectorAll('#messages .message.assistant').length,0);
- assert.match(d.getElementById('messages').textContent,/아 난넝.*전송 상태 확인 필요/s);
- assert.match(d.getElementById('chat-error').textContent,/대화 주소를 찾지 못했습니다/);
- d.getElementById('mode-codex').click();await tick();
- assert.equal(d.body.classList.contains('chat-mode'),false);
- assert.equal(d.getElementById('mode-codex').getAttribute('aria-pressed'),'true');
- assert.equal(d.getElementById('chat-error').hidden,true);
- assert.equal(d.getElementById('header-project').textContent,'Project');
-});
-test('an uncertain Chat send is rechecked without sending the message again',async()=>{
- const conversationId='6ab46e59-8b48-83e8-beb2-04c61e1e5345';
- const {w,calls}=setup({'chat.web.send':m=>({status:'needs_reconciliation',operationId:m.args.operationId,
-   conversationId,sentAtSeconds:1790210700,observedUserMessageId:'2ab46e59-8b48-83e8-beb2-04c61e1e5345'}),
-   'chat.web.reconcile':m=>({operationId:m.args.operationId,conversationId,reply:'서버에 저장된 답변'})});await tick();
- const d=w.document;d.getElementById('mode-chat').click();await tick();
- d.getElementById('prompt').value='같은 질문';d.getElementById('composer').dispatchEvent(new w.Event('submit',{cancelable:true}));await tick();
- assert.equal(d.getElementById('chat-reconcile').hidden,false);
- assert.equal(d.querySelectorAll('#messages .message.assistant').length,0);
- d.getElementById('chat-reconcile').click();await tick();
- assert.equal(calls.filter(m=>m.action==='chat.web.send').length,1);
- assert.equal(calls.filter(m=>m.action==='chat.web.reconcile').length,1);
- assert.match(d.getElementById('messages').textContent,/서버에 저장된 답변/);
- assert.equal(d.getElementById('chat-reconcile').hidden,true);
+test('sidebar sections collapse independently and restore their state',async()=>{
+ const {w,snapshot}=setup();await tick();const d=w.document;
+ d.getElementById('toggle-projects').click();await tick();
+ assert.equal(d.getElementById('projects').hidden,true);
+ assert.equal(d.getElementById('sessions').hidden,false);
+ w.mobileCodexEvent('state',snapshot);
+ assert.equal(d.getElementById('projects').hidden,true);
+ d.getElementById('toggle-history').click();await tick();
+ assert.equal(d.getElementById('sessions').hidden,true);
+ d.getElementById('toggle-projects').click();await tick();
+ assert.equal(d.getElementById('projects').hidden,false);
+ assert.equal(d.getElementById('toggle-projects').getAttribute('aria-expanded'),'true');
+ assert.equal(d.querySelector('.topbar .sidebar-toggle use').getAttribute('href'),'#i-menu');
+ assert.equal(d.querySelector('#files-toggle use').getAttribute('href'),'#i-panel');
+ for(const id of ['new-chat','projects','sessions','show-tools','account-button']) assert.ok(d.getElementById(id).closest('.sidebar-scroll'));
+ const restored=setup({}, {drafts:{'sidebar-section-sessions':'collapsed'}});await tick();
+ assert.equal(restored.w.document.getElementById('sessions').hidden,true);
 });
 test('composer exposes approval review beside the model without changing file access',async()=>{
  const {w,calls,snapshot}=setup({'approvals.set':()=>({ok:true})});await tick();
@@ -1146,16 +1029,4 @@ test('Codex user messages stay fully visible even when long',async()=>{
  assert.equal(body.textContent,text); assert.equal(body.querySelector('img'),null);
  assert.equal(body.classList.contains('is-collapsed'),false);
  assert.equal(w.document.querySelector('.user-message-toggle'),null);
-});
-
-test('Chat sends the full long message while displaying a folded bubble',async()=>{
- let sent=''; const {w}=setup({'chat.web.send':m=>{sent=m.args.text;return {reply:'답변',operationId:m.args.operationId};}});await tick();
- const d=w.document;d.getElementById('mode-chat').click();await tick();
- const text='한 줄\n'.repeat(12);d.getElementById('prompt').value=text;
- d.getElementById('composer').dispatchEvent(new w.Event('submit',{cancelable:true}));await tick();
- assert.equal(sent,text.trim());
- const body=d.querySelector('.message.user .user-message-text');assert.equal(body.textContent,text.trim());
- assert.equal(body.classList.contains('is-collapsed'),true);
- d.querySelector('.user-message-toggle').click();assert.equal(body.classList.contains('is-collapsed'),false);
- assert.equal(d.querySelector('.message.assistant .user-message-toggle'),null);
 });

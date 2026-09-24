@@ -21,3 +21,7 @@ Original Mobile Codex code and original artwork are GPL-3.0-only (see LICENSE), 
 Python, Node.js, Git, and their runtime libraries are pinned in `tools/devtools-lock.json`. These components have different upstream licenses, including permissive and copyleft terms. The preparation scripts preserve package license notices in the APK. `devtools-corresponding-source.zip` accompanies releases with upstream source archives, pinned Termux build recipes, patches, packaging scripts, and their notices. `SOURCES.json` maps each source archive to its original URL and SHA-256. Keep the corresponding sources and notices available when redistributing an APK.
 
 App license notices are also packaged under `assets/legal/`.
+
+## Chat icon vocabulary and renderer adaptation
+
+The Chat WebView icon renderer uses the vocabulary and category mappings from nokryong/ChatGPT-DCCon-Renderer-Optimized, userscript.js at commit 98e9aee413c2ff6a91531f46f4a92da008b19a95, integrated at the same repository owner's request. Source: https://github.com/nokryong/ChatGPT-DCCon-Renderer-Optimized. Public icon artwork is read from the owner's Firebase Storage bucket with the existing packaged artwork as fallback. No Firebase authentication credentials or SDK are bundled.

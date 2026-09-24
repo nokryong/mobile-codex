@@ -1,0 +1,11 @@
+# Visible Chat surface (0.1.28-alpha)
+
+Chat now opens `ChatWebActivity`, a visible official ChatGPT WebView. `FLAG_ACTIVITY_REORDER_TO_FRONT` retains both this Activity and MainActivity when switching. Ordinary Chat uses the official composer, model picker and history. The legacy `ChatWebTransport` and stored local transcript remain for compatibility/reference but are not called by the mode switch or main composer.
+
+Only two packaged scripts run on exact `https://chatgpt.com` pages: `chat-web-custom.js` adds a compact sidebar logo-adjacent mode switch; `chat-icon-renderer.js` renders assistant icon tokens. The page's colors, sidebar scrolling, sections and model controls are unchanged. Authentication pages receive neither script. There is no Android JavaScript interface on the remote WebView. The one intercepted `mobilecodex://mode/codex` main-frame link only reopens MainActivity. External HTTPS links use the system handler. System insets are handled once by SafeWebViewLayout.
+
+`ChatIconStore` serves an allowlisted set of PNG filenames. It requests public images only from the configured Firebase Storage bucket, with no WebView cookies or auth headers copied. Responses have PNG signature, dimensions and 8 MiB checks. Refreshes run in the background; a cached or packaged image is shown immediately. Its private cache expires after a day; failures use the already-packaged artwork. No remote JavaScript is fetched at runtime.
+
+Android Back first closes a detected sidebar, then navigates web history or returns to Codex. A native fallback header provides Codex and reload actions during loading/login or load errors, and hides after the official page loads. Android Back remains a return path if the web sidebar structure changes. System file selection is connected. Microphone/camera capture and other browser-dependent features are not claimed as verified.
+
+Verification: jsdom fixtures cover switch injection, SPA replacement, no changes to web composer/history, non-ChatGPT origin rejection, icon rendering, repeated injection and failed image fallback. Android unit tests cover URL boundaries. CI runs packaged layout checks and build/lint. These tests do not constitute a live signed-in ChatGPT WebView test. Phone control was disabled during implementation.

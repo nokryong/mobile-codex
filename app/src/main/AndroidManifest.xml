@@ -37,7 +37,7 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-        <activity android:name=".ChatWebLoginActivity" android:exported="false"
+        <activity android:name=".ChatWebActivity" android:exported="false"
             android:windowSoftInputMode="adjustResize" />
         <receiver android:name=".CodexNotificationReceiver" android:exported="false" />
         <activity android:name=".VoiceInputActivity" android:exported="false"

@@ -15,6 +15,7 @@
   <svg class="symbols" aria-hidden="true" xmlns="http://www.w3.org/2000/svg"><defs>
     <symbol id="i-code" viewBox="0 0 24 24"><path d="m8 6-6 6 6 6m8-12 6 6-6 6m-3-15-2 18"/></symbol>
     <symbol id="i-panel" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/></symbol>
+    <symbol id="i-menu" viewBox="0 0 24 24"><path d="M5 8h14M5 16h14"/></symbol>
     <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
     <symbol id="i-edit" viewBox="0 0 24 24"><path d="m15 4 5 5M4 20l5-1L21 7a2 2 0 0 0-5-5L4 14v6Z"/></symbol>
     <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></symbol>
@@ -37,20 +38,19 @@
   </defs></svg>
   <div id="scrim" class="scrim" hidden></div>
   <aside id="sidebar" class="sidebar">
-    <div class="sidebar-top"><div class="brand"><img src="codex-logo.png" alt="Mobile Codex"><span id="sidebar-brand-name">Codex</span><span class="mobile-tag">mobile</span></div><button class="icon-button sidebar-toggle" aria-label="사이드바 접기"><svg><use href="#i-panel"/></svg></button></div>
-    <div class="mode-switch" role="group" aria-label="대화 모드"><button id="mode-chat" type="button" aria-pressed="false">Chat</button><button id="mode-codex" type="button" aria-pressed="true">Codex</button></div>
-    <button id="new-chat" class="nav-button"><svg><use href="#i-edit"/></svg>새 대화<span class="keyhint">+</span></button>
+    <div class="sidebar-top"><div class="sidebar-identity"><div class="brand"><img src="codex-logo.png" alt="Mobile Codex"><span id="sidebar-brand-name" class="sr-only">Codex</span><span class="mobile-tag" aria-hidden="true">mobile</span></div><div class="mode-switch" role="group" aria-label="대화 모드"><button id="mode-chat" type="button" aria-pressed="false">Chat</button><button id="mode-codex" type="button" aria-pressed="true">Codex</button></div></div><button class="icon-button sidebar-toggle" aria-label="사이드바 접기"><svg><use href="#i-menu"/></svg></button></div>
     <div class="sidebar-scroll">
-    <div class="section-title"><span>프로젝트</span><button id="add-project" class="icon-button" aria-label="프로젝트 추가"><svg><use href="#i-plus"/></svg></button></div>
+    <button id="new-chat" class="nav-button"><svg><use href="#i-edit"/></svg>새 대화<span class="keyhint">+</span></button>
+    <div class="section-title"><span>프로젝트</span><span class="section-actions"><button id="add-project" class="icon-button" aria-label="프로젝트 추가"><svg><use href="#i-plus"/></svg></button><button id="toggle-projects" class="icon-button section-toggle" type="button" aria-label="프로젝트 접기" aria-controls="projects" aria-expanded="true"><svg><use href="#i-down"/></svg></button></span></div>
     <span id="project-label" hidden>폴더 선택</span><div id="projects" class="projects" aria-label="프로젝트 목록"></div>
-    <div class="section-title history-title">일반 대화</div>
+    <div class="section-title history-title"><span>일반 대화</span><button id="toggle-history" class="icon-button section-toggle" type="button" aria-label="일반 대화 접기" aria-controls="sessions" aria-expanded="true"><svg><use href="#i-down"/></svg></button></div>
     <div id="sessions" class="sessions"><p class="sidebar-empty">대화를 시작하면 여기에 표시됩니다.</p></div>
     <div id="chat-sidebar"><div class="section-title">현재 Chat 대화</div><div id="chat-sessions" class="sessions" aria-label="현재 Chat 대화"></div></div>
-    </div>
     <div class="sidebar-bottom"><button id="show-tools" class="nav-button" aria-haspopup="dialog" aria-controls="tool-menu-dialog"><svg><use href="#i-settings"/></svg>도구</button><button id="settings" class="nav-button"><svg><use href="#i-settings"/></svg>설정</button><button id="chat-login" class="nav-button" type="button"><svg><use href="#i-chevron-right"/></svg>ChatGPT 로그인</button><button id="account-button" class="account-button" aria-haspopup="dialog" aria-controls="settings-dialog"><span id="quota-ring" class="quota-ring" style="--remaining:0" role="img" aria-label="사용 한도 정보 없음"><span id="quota-ring-value">–</span></span><span class="quota-copy"><strong id="quota-percent">계정 연결</strong><small id="quota-caption">ChatGPT로 로그인</small></span><svg class="account-chevron"><use href="#i-chevron-right"/></svg></button></div>
+    </div>
   </aside>
   <main class="main">
-    <header class="topbar"><div class="topbar-left"><button class="icon-button sidebar-toggle" aria-label="사이드바 열기"><svg><use href="#i-panel"/></svg></button><span id="header-project">새 대화</span><span class="topbar-divider">/</span><span id="header-title">Mobile Codex</span></div><button id="files-toggle" class="outline-button"><svg><use href="#i-panel"/></svg><span>파일</span></button></header>
+    <header class="topbar"><div class="topbar-left"><button class="icon-button sidebar-toggle" aria-label="사이드바 열기"><svg><use href="#i-menu"/></svg></button><span id="header-project">새 대화</span><span class="topbar-divider">/</span><span id="header-title">Mobile Codex</span></div><button id="files-toggle" class="outline-button"><svg><use href="#i-panel"/></svg><span>파일</span></button></header>
     <div class="workspace-body">
       <section class="conversation">
         <div id="chat-scroll" class="chat-scroll">

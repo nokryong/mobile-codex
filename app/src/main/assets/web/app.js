@@ -14,7 +14,7 @@
   let dictationState = {phase:'idle'}, dictationTimer = null;
   let voiceStarting = false, voiceActive = false, voiceRecoveryGeneration = 0;
   let chatIconsEnabled = localStorage.getItem('chat-icons') !== 'off', activityIcon = 'thinking';
-  let chatMode = localStorage.getItem('conversation-mode') === 'chat', chatBusy = false, composerPinned = false;
+  let chatMode = false, chatBusy = false, composerPinned = false;
   let chatMessages = [];
   try { const saved = JSON.parse(localStorage.getItem('chat-web-messages') || '[]'); if (Array.isArray(saved)) { const failed = new Set(saved.filter(x => x.id?.endsWith('-error')).map(x => x.id.slice(0, -6))); chatMessages = saved.filter(x => !failed.has(x.id) && !x.id?.endsWith('-error')).slice(-100); } } catch {}
   let chatModel = localStorage.getItem('chat-web-model') || '';
@@ -958,6 +958,11 @@
     renderDraftContext();
     drawMessages(); updateSend(); sizeComposer();
   }
+  async function openChatSurface() {
+    saveDraft();
+    try { await call('ui.chat.open'); sidebar(false); }
+    catch (error) { toast(error.message); }
+  }
   function switchMode(mode) {
     const next = mode === 'chat';
     if (chatMode === next) return;
@@ -1682,12 +1687,23 @@
   document.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', () => dismiss(b.dataset.close)));
   document.querySelectorAll('.sidebar-toggle').forEach(b => b.addEventListener('click', () => { if (matchMedia('(max-width:760px)').matches) sidebar(!document.body.classList.contains('sidebar-open')); else document.body.classList.toggle('sidebar-collapsed'); }));
   document.querySelectorAll('[data-prompt]').forEach(b => b.addEventListener('click', () => { $('prompt').value = b.dataset.prompt; saveDraft(); sizeComposer(); $('prompt').focus(); }));
-  on('mode-chat', () => switchMode('chat'));
-  on('mode-codex', () => switchMode('codex'));
+  on('mode-chat', openChatSurface);
+  on('mode-codex', () => sidebar(false));
   on('chat-login', () => call('ui.chatLogin'));
   on('chat-model-settings', openChatModelSlider);
   on('chat-model-slider', () => renderChatModelSlider(chatLevels[Number($('chat-model-slider').value)]), 'input');
   on('chat-model-slider', selectChatModelLevel, 'change');
+  for (const [buttonId, listId] of [['toggle-projects','projects'], ['toggle-history','sessions']]) {
+    const button = $(buttonId), list = $(listId);
+    const key = 'sidebar-section-' + listId;
+    const apply = expanded => {
+      button.setAttribute('aria-expanded', String(expanded));
+      button.setAttribute('aria-label', (listId === 'projects' ? '프로젝트 ' : '일반 대화 ') + (expanded ? '접기' : '펼치기'));
+      list.hidden = !expanded;
+    };
+    apply(localStorage.getItem(key) !== 'collapsed');
+    on(buttonId, () => { const expanded = button.getAttribute('aria-expanded') !== 'true'; apply(expanded); localStorage.setItem(key, expanded ? 'expanded' : 'collapsed'); });
+  }
   on('scrim', () => sidebar(false)); on('new-chat', async () => newChat(''));
   ['add-project', 'choose-folder', 'composer-folder'].forEach(id => on(id, () => pickFolder()));
    const closeToolMenu = () => { if ($('tool-menu-dialog').open) close('tool-menu-dialog'); };
@@ -1852,7 +1868,8 @@
   on('approval-mode', () => setApprovalMode($('approval-mode').value), 'change');
   document.querySelectorAll('input[name="permission"]').forEach(r => r.addEventListener('change', () => setPermissionMode(r.value).catch(error => toast(error.message))));
   ensureCharacterPackUi(); ensureNotificationSettings(); ensureChatLoginUi();
-  if (chatMode) { chatMode = false; switchMode('chat'); }
+  // Ordinary Chat now lives in the official WebView; old local transcripts remain stored.
+  localStorage.setItem('conversation-mode', 'codex');
   on('connect', () => startLogin(false)); on('account-button', openAccountSettings); on('settings', () => { ensureCharacterPackUi(); ensureNotificationSettings(); show('settings-dialog'); sidebar(false); if (!characterState.folderConfigured && characterState.packs.length <= 1) loadCharacterPacks(); });
   document.querySelectorAll('[data-settings-tab]').forEach(tab => tab.addEventListener('click', () => {
     const selected = tab.dataset.settingsTab; selectSettingsTab(selected);
