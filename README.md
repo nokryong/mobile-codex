@@ -26,7 +26,7 @@ The APK-opening app may separately require **Allow from this source**. Menu name
 
 Mobile Codex is an independent Android client built around the Codex app-server. It bundles an Android port of Codex, Python, Node.js, and Git, so you do not need to install Termux or keep a separate PC server running.
 
-**0.1.27 alpha** · **ARM64 / Android 10+** · Created by [nokryong](https://github.com/nokryong)
+**0.1.28 alpha** · **ARM64 / Android 10+** · Created by [nokryong](https://github.com/nokryong)
 
 [Download APK](https://github.com/nokryong/mobile-codex/releases) · [Builds](https://github.com/nokryong/mobile-codex/actions/workflows/android.yml) · [Report an issue](https://github.com/nokryong/mobile-codex/issues)
 
