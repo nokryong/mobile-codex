@@ -65,6 +65,8 @@ test('Chat switch routes the same composer to ordinary Chat and restores the Cod
  assert.equal(d.body.classList.contains('chat-mode'),true);
  assert.equal(d.getElementById('sidebar-brand-name').textContent,'ChatGPT');
  assert.equal(d.getElementById('chat-sessions').textContent,'새 Chat 대화');
+ assert.equal(d.getElementById('chat-model-settings').hidden,false);
+ assert.equal(d.getElementById('composer-options').hidden,true);
  assert.equal(prompt.value,'');
  prompt.value='일반 Chat 질문';d.getElementById('composer').dispatchEvent(new w.Event('submit',{cancelable:true}));await tick();
  assert.equal(calls.filter(x=>x.action==='chat.web.send').length,1);
@@ -78,6 +80,8 @@ test('Chat switch routes the same composer to ordinary Chat and restores the Cod
  assert.equal(d.getElementById('mode-chat').getAttribute('aria-pressed'),'false');
  assert.equal(d.getElementById('sidebar-brand-name').textContent,'Codex');
  assert.equal(d.getElementById('header-project').textContent,'Project');
+ assert.equal(d.getElementById('chat-model-settings').hidden,true);
+ assert.equal(d.getElementById('composer-options').hidden,false);
  assert.equal(prompt.value,'Codex 초안');
  assert.doesNotMatch(d.getElementById('messages').textContent,/일반 Chat 답변/);
  d.getElementById('mode-chat').click();await tick();

@@ -842,6 +842,8 @@
     $('mode-codex').setAttribute('aria-pressed', String(!chatMode));
     $('sidebar-brand-name').textContent = chatMode ? 'ChatGPT' : 'Codex';
     $('new-chat').setAttribute('aria-label', chatMode ? '새 Chat 대화' : '새 Codex 대화');
+    $('chat-model-settings').hidden = !chatMode;
+    $('composer-options').hidden = chatMode;
   }
   function renderChatSidebar() {
     const list = $('chat-sessions'); list.replaceChildren();
