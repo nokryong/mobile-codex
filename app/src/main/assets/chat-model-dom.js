@@ -21,6 +21,11 @@
     return normalize((element.getAttribute('aria-describedby') || '').split(/\s+/)
       .map(id => id && root.document.getElementById(id)?.textContent || '').join(' '));
   }
+  function settingLabel(element) {
+    const labelled = (element.getAttribute('aria-labelledby') || '').split(/\s+/)
+      .map(id => id && root.document.getElementById(id)?.textContent || '').join(' ');
+    return normalize([element.getAttribute('aria-label'), labelled, element.textContent, description(element)].join(' '));
+  }
   function ordinal(value) {
     const text = normalize(value);
     let match = text.match(/(\d+)\s*개\s*중\s*(\d+)\s*번째/);
@@ -34,7 +39,7 @@
     const attr = name => element.getAttribute(name) || '';
     return {
       tag:element.tagName.toLowerCase(), role:attr('role'),
-      label:level(attr('aria-label') || element.textContent) || (/성능|Performance/i.test(normalize(attr('aria-label') || element.textContent)) ? 'performance' : 'unknown'),
+      label:level(settingLabel(element)) || (/성능|Performance/i.test(settingLabel(element)) ? 'performance' : 'unknown'),
       haspopup:attr('aria-haspopup'), expanded:attr('aria-expanded'), controls:!!attr('aria-controls'),
       checked:attr('aria-checked'), selected:attr('aria-selected'),
       min:attr('aria-valuemin'), max:attr('aria-valuemax'), now:attr('aria-valuenow'),
@@ -48,9 +53,10 @@
   function triggers() {
     const prompt = root.document.querySelector('#prompt-textarea,[data-testid="prompt-textarea"]');
     const promptBox = prompt?.getBoundingClientRect();
-    return [...root.document.querySelectorAll('button,[role="button"]')].filter(visible)
+    const buttons = [...root.document.querySelectorAll('button,[role="button"]')].filter(visible);
+    const named = buttons
       .filter(button => {
-        const label = normalize([button.getAttribute('aria-label'), button.textContent, description(button)].join(' '));
+        const label = settingLabel(button);
         const hasPopup = !!button.getAttribute('aria-haspopup');
         if (hasPopup && (/추론\s*수준|reasoning\s*(level|effort)|performance/i.test(label) || level(label))) return true;
         if (!level(label) || !promptBox) return false;
@@ -59,6 +65,17 @@
         const nearComposer = Math.abs(box.top - promptBox.top) <= 180 && Math.abs(box.left - promptBox.left) <= root.innerWidth;
         return sameForm || nearComposer;
       });
+    if (named.length) return named;
+    // Some ChatGPT builds render the visible model label outside the button's
+    // DOM text. Only accept a unique menu trigger next to the composer.
+    return buttons.filter(button => {
+      if (button.getAttribute('aria-haspopup') !== 'menu') return false;
+      const box = button.getBoundingClientRect();
+      const sameForm = !!prompt?.closest('form') && prompt.closest('form').contains(button);
+      const nearComposer = promptBox && Math.abs(box.top - promptBox.top) <= 180;
+      const bottomComposer = box.top >= root.innerHeight - 180 && box.bottom <= root.innerHeight + 20;
+      return sameForm || nearComposer || bottomComposer;
+    });
   }
   function type(element) {
     const role = element.getAttribute('role') || '';
@@ -113,7 +130,7 @@
     const control = controls.length === 1 ? controls[0] : null;
     const details = control ? description(control) : '';
     const position = ordinal(details);
-    const buttonLevel = found.button ? level(found.button.textContent) : '';
+    const buttonLevel = found.button ? level(settingLabel(found.button)) : '';
     let current = control ? level(control.getAttribute('aria-valuetext') || details || control.textContent) : '';
     if (options) {
       const checked = controls.filter(element => element.getAttribute('aria-checked') === 'true' || element.getAttribute('aria-selected') === 'true');

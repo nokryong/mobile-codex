@@ -443,7 +443,10 @@ final class ChatWebTransport {
         inspectModel(state -> {
             if (!liveModel(operation)) return;
             if ("closed".equals(state.optString("state"))) {
-                if (!target.equals(state.optString("level"))) { modelError(operation, "메뉴를 닫은 뒤 선택값이 유지되지 않았습니다."); return; }
+                String closedLevel = state.optString("level");
+                if (!closedLevel.isEmpty() && !target.equals(closedLevel)) {
+                    modelError(operation, "메뉴를 닫은 뒤 선택값이 유지되지 않았습니다."); return;
+                }
                 JSONObject result = new JSONObject();
                 try { result.put("level", target); result.put("sessionEpoch", sessionEpoch); result.put("verification", "ui-confirmed"); }
                 catch (Exception ignored) {}

@@ -91,6 +91,32 @@ test('finds a composer model button without aria-haspopup when the menu is close
   assert.equal(adapter.inspect().trigger.label,'Pro');
 });
 
+test('finds the unique composer menu trigger when its visible label is absent from DOM text', () => {
+  const {adapter} = setup('<button aria-haspopup="menu">Other menu</button><div id="prompt-textarea" data-far></div>'+
+    '<button aria-haspopup="menu" data-far aria-expanded="false"></button>');
+  const state = adapter.inspect();
+  assert.equal(state.state,'closed');
+  assert.equal(state.trigger.haspopup,'menu');
+  assert.equal(state.level,'');
+});
+
+test('does not guess among multiple unnamed composer menu triggers', () => {
+  const {adapter} = setup('<div id="prompt-textarea" data-far></div>'+
+    '<button aria-haspopup="menu" data-far></button><button aria-haspopup="menu" data-far></button>');
+  assert.equal(adapter.inspect().state,'ambiguous');
+});
+
+test('reads a model label referenced by aria-labelledby', () => {
+  const {adapter} = setup('<span id="model-name">6 Pro</span><button aria-haspopup="menu" aria-labelledby="model-name"></button>');
+  assert.equal(adapter.inspect().level,'Pro');
+});
+
+test('reads the visible model value even when a generic aria-label is present', () => {
+  const {adapter} = setup('<button aria-haspopup="menu" aria-label="모델 선택">6 Pro</button>');
+  assert.equal(adapter.inspect().state,'closed');
+  assert.equal(adapter.inspect().level,'Pro');
+});
+
 test('disabled and unavailable options fail closed', () => {
   const {adapter} = setup(trigger+'<div role="menu" id="settings"><div role="menuitemradio" aria-disabled="true">Pro</div></div>');
   assert.equal(adapter.choose('Pro').reason,'disabled');
