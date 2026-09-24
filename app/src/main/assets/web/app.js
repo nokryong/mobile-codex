@@ -14,7 +14,7 @@
   let dictationState = {phase:'idle'}, dictationTimer = null;
   let voiceStarting = false, voiceActive = false, voiceRecoveryGeneration = 0;
   let chatIconsEnabled = localStorage.getItem('chat-icons') !== 'off', activityIcon = 'thinking';
-  let chatMode = localStorage.getItem('conversation-mode') === 'chat', chatBusy = false;
+  let chatMode = localStorage.getItem('conversation-mode') === 'chat', chatBusy = false, composerPinned = false;
   let chatMessages = [];
   try { const saved = JSON.parse(localStorage.getItem('chat-web-messages') || '[]'); if (Array.isArray(saved)) { const failed = new Set(saved.filter(x => x.id?.endsWith('-error')).map(x => x.id.slice(0, -6))); chatMessages = saved.filter(x => !failed.has(x.id) && !x.id?.endsWith('-error')).slice(-100); } } catch {}
   let chatModel = localStorage.getItem('chat-web-model') || '';
@@ -844,7 +844,7 @@
     $('new-chat').setAttribute('aria-label', chatMode ? '새 Chat 대화' : '새 Codex 대화');
     $('chat-model-settings').hidden = !chatMode;
     $('composer-options').hidden = chatMode;
-    if (chatMode) $('composer').classList.add('composer-expanded');
+    if (chatMode || composerPinned) $('composer').classList.add('composer-expanded');
     else if (!$('composer').contains(document.activeElement)) $('composer').classList.remove('composer-expanded');
   }
   function renderChatSidebar() {
@@ -882,6 +882,7 @@
     if (chatMode === next) return;
     saveDraft();
     chatMode = next;
+    composerPinned = true;
     try { localStorage.setItem('conversation-mode', chatMode ? 'chat' : 'codex'); } catch {}
     renderModeChrome();
     $('messages').replaceChildren(); following = true;
@@ -1663,7 +1664,7 @@
   let autocompleteTimer; $('prompt').addEventListener('input', () => { saveDraft(); sizeComposer(); clearTimeout(autocompleteTimer); hideAutocomplete(); if (chatMode) return; if (/[@$]$/.test($('prompt').value.slice(0, $('prompt').selectionStart))) queryAutocomplete(); else autocompleteTimer = setTimeout(queryAutocomplete, 120); });
   $('prompt').addEventListener('focus', () => { if (following) frame(scrollLatest); });
   $('composer').addEventListener('focusin', () => $('composer').classList.add('composer-expanded'));
-  $('composer').addEventListener('focusout', () => frame(() => { if (!chatMode && !$('composer').contains(document.activeElement)) $('composer').classList.remove('composer-expanded'); }));
+  $('composer').addEventListener('focusout', () => frame(() => { if (!chatMode && !composerPinned && !$('composer').contains(document.activeElement)) $('composer').classList.remove('composer-expanded'); }));
   $('composer').addEventListener('click', e => { if (! $('composer').classList.contains('composer-expanded') && e.target === $('composer')) $('prompt').focus(); });
   $('prompt').addEventListener('click', () => { if (!chatMode) queryAutocomplete(); });
   $('chat-scroll').addEventListener('scroll', () => {
