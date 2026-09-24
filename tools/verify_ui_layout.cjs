@@ -116,7 +116,8 @@ async function checkModeSwitch(page,width,theme) {
  await page.locator('.topbar .sidebar-toggle').click();await page.waitForTimeout(180);
  assert.equal(await page.locator('#chat-sidebar').isVisible(),false);
  assert.equal(await page.locator('#projects').isVisible(),true);
- assert.equal(await page.locator('#sessions').isVisible(),true);
+ assert.notEqual(await page.locator('#sessions').evaluate(el=>getComputedStyle(el).display),'none');
+ assert.equal(await page.locator('#projects .session').isVisible(),true);
  assert.equal(await page.locator('#account-button').isVisible(),true);
  assert.equal(await page.locator('#chat-login').isVisible(),false);
  await page.screenshot({path:path.join(output,`codex-return-sidebar-${width}-${theme}.png`)});
