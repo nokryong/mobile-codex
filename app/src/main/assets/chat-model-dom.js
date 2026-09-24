@@ -46,7 +46,7 @@
     };
   }
   function triggers() {
-    return [...root.document.querySelectorAll('button[aria-haspopup="menu"]')].filter(visible)
+    return [...root.document.querySelectorAll('button[aria-haspopup], [role="button"][aria-haspopup]')].filter(visible)
       .filter(button => {
         const label = normalize([button.getAttribute('aria-label'), button.textContent, description(button)].join(' '));
         return !!level(label) || /추론\s*수준|reasoning\s*(level|effort)|performance/i.test(label);
@@ -70,16 +70,30 @@
   }
   function locate() {
     const buttons = triggers();
+    const button = buttons.length === 1 ? buttons[0] : null;
     const popups = [...root.document.querySelectorAll('[role="menu"],[role="dialog"],[role="listbox"]')].filter(visible);
     const candidates = popups.map(popup => ({popup,controls:[...popup.querySelectorAll('[role="slider"],input[type="range"],[role="menuitemradio"],[role="radio"],[role="menuitem"]')].filter(relevant)}))
       .filter(entry => entry.controls.length);
+    const linkedIds = new Set((button?.getAttribute('aria-controls') || '').split(/\s+/).filter(Boolean));
+    if (linkedIds.size) {
+      let size;
+      do {
+        size = linkedIds.size;
+        for (const entry of candidates.filter(item => linkedIds.has(item.popup.id)))
+          for (const element of entry.controls) {
+            const id = element.getAttribute('aria-controls');
+            if (id) linkedIds.add(id);
+          }
+      } while (linkedIds.size > size);
+    }
+    const linked = candidates.filter(entry => linkedIds.has(entry.popup.id));
+    const relevantPopups = linked.length ? linked : candidates;
     // Ignore an ancestor popup when an open child contains the same control.
-    const leaves = candidates.filter(entry => !candidates.some(other => other !== entry && entry.popup.contains(other.popup)));
+    const leaves = relevantPopups.filter(entry => !relevantPopups.some(other => other !== entry && entry.popup.contains(other.popup)));
     const controlledIds = new Set(leaves.flatMap(entry => entry.controls.map(element => element.getAttribute('aria-controls')).filter(Boolean)));
     const childPopups = leaves.filter(entry => controlledIds.has(entry.popup.id));
     const active = childPopups.length === 1 ? childPopups : leaves;
     const scoped = active.length === 1 ? active[0] : null;
-    const button = buttons.length === 1 ? buttons[0] : null;
     return {button, buttons, popup:scoped?.popup || null, controls:scoped?.controls || [], ambiguous:buttons.length > 1 || active.length > 1};
   }
   function inspect() {

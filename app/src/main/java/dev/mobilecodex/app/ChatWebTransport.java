@@ -234,13 +234,52 @@ final class ChatWebTransport {
             if (!liveModel(operation)) return;
             String level = state.optString("level", "");
             if (modelIndex(level) >= 0 && ("closed".equals(state.optString("state")) || "open".equals(state.optString("state")))) {
-                JSONObject result = new JSONObject();
-                try { result.put("level", level); result.put("sessionEpoch", sessionEpoch); result.put("verification", "ui-confirmed"); }
-                catch (Exception ignored) {}
-                completeModel(operation, result, null);
+                completeModelRead(operation, level);
+            } else if ("closed".equals(state.optString("state")) && state.optJSONObject("trigger") != null) {
+                modelStage = "reading-open-menu";
+                tapModelButton(state.optJSONObject("trigger"), state.optJSONObject("viewport"));
+                readOpenedModelState(operation, 0, false);
             } else if (attempt < 40) page.postDelayed(() -> readModelState(operation, attempt + 1), 200);
             else completeModel(operation, null, new IllegalStateException("ChatGPT 모델 설정을 확인하지 못했습니다."));
         });
+    }
+
+    private void readOpenedModelState(long operation, int attempt, boolean openedSubmenu) {
+        if (!liveModel(operation)) return;
+        inspectModel(state -> {
+            if (!liveModel(operation)) return;
+            if ("open".equals(state.optString("state")) && modelIndex(state.optString("level")) >= 0) {
+                String level = state.optString("level");
+                tapModelButton(state.optJSONObject("trigger"), state.optJSONObject("viewport"));
+                waitClosedAfterRead(operation, level, 0);
+                return;
+            }
+            if ("open".equals(state.optString("state")) && "submenu".equals(state.optString("type")) && !openedSubmenu) {
+                tapModelButton(state.optJSONObject("control"), state.optJSONObject("viewport"));
+                page.postDelayed(() -> readOpenedModelState(operation, attempt + 1, true), 150);
+                return;
+            }
+            if (attempt >= 15) { modelError(operation, "ChatGPT 설정 메뉴에서 현재 값을 읽지 못했습니다."); return; }
+            page.postDelayed(() -> readOpenedModelState(operation, attempt + 1, openedSubmenu), 150);
+        });
+    }
+
+    private void waitClosedAfterRead(long operation, String level, int attempt) {
+        if (!liveModel(operation)) return;
+        inspectModel(state -> {
+            if (!liveModel(operation)) return;
+            if ("closed".equals(state.optString("state"))) { completeModelRead(operation, level); return; }
+            if (attempt >= 12) { modelError(operation, "설정 메뉴를 닫지 못했습니다."); return; }
+            page.postDelayed(() -> waitClosedAfterRead(operation, level, attempt + 1), 150);
+        });
+    }
+
+    private void completeModelRead(long operation, String level) {
+        JSONObject result = new JSONObject();
+        try { result.put("level", level); result.put("sessionEpoch", sessionEpoch);
+            result.put("verification", "ui-confirmed"); }
+        catch (Exception ignored) {}
+        completeModel(operation, result, null);
     }
 
     void selectModel(String level, Done done) {

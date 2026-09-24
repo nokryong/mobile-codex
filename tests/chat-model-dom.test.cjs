@@ -31,6 +31,14 @@ test('ignores a hidden old menu', () => {
   assert.equal(adapter.inspect().type,'submenu');
 });
 
+test('uses the popup linked to the setting button when another popup is visible', () => {
+  const {adapter} = setup(trigger+'<div role="menu" id="unrelated"><div role="menuitemradio">Pro</div></div>'+
+    '<div role="menu" id="settings"><div role="menuitem" aria-label="성능" aria-describedby="value hint"></div></div>'+
+    '<span id="value">High, 5개 중 3번째.</span><span id="hint">화살표 키로 조정합니다.</span>');
+  assert.equal(adapter.inspect().type,'stepper');
+  assert.equal(adapter.inspect().level,'High');
+});
+
 test('submenu opener is not treated as a slider', () => {
   const {adapter} = setup(trigger+'<div role="menu" id="settings"><div role="menuitem" aria-haspopup="menu">성능</div></div>');
   assert.equal(adapter.inspect().type,'submenu');
