@@ -26,11 +26,17 @@ APK를 여는 앱에서 **이 출처 허용**을 별도로 요구할 수 있습�
 
 Codex 데스크톱의 작업 방식을 모바일로 옮기는 개인용 클라이언트입니다. Codex 실행 엔진과 Python·Node.js·Git을 APK에 포함해, Termux 설치나 별도 PC 서버 없이 기기에서 바로 작업할 수 있습니다.
 
-**0.1.25 alpha** · **ARM64 / Android 10 이상** · 제작 [nokryong](https://github.com/nokryong)
+**0.1.27 alpha** · **ARM64 / Android 10 이상** · 제작 [nokryong](https://github.com/nokryong)
 
 [APK 다운로드](https://github.com/nokryong/mobile-codex/releases) · [개발 빌드](https://github.com/nokryong/mobile-codex/actions/workflows/android.yml) · [문제 제보](https://github.com/nokryong/mobile-codex/issues)
 
 > OpenAI 공식 앱이 아닌 개인 프로젝트입니다. 모델 추론에는 인터넷과 Codex를 사용할 수 있는 계정이 필요합니다. Codex 프로세스와 파일·명령 도구는 Android 기기에서 실행합니다.
+
+## 일반 Chat과 Codex
+
+사이드바 로고 아래의 **Chat / Codex**로 전환합니다. 일반 Chat은 앱 자체 입력창과 대화 화면을 사용하고, **ChatGPT 로그인**에서 연결한 공식 웹 세션이 전송을 처리합니다. 로그인 화면에서 인증을 마친 뒤 **Chat으로 돌아가기**를 누르세요. Codex 계정 로그인과는 별개입니다.
+
+Chat 기본 모델은 Instant입니다. 추론 슬라이더는 선택 즉시 닫히며, 긴 사용자 메시지는 펼치거나 접을 수 있습니다. 모델 적용 실패는 표시되며 다른 설정으로 조용히 전송하지 않습니다. 일반 Chat은 현재 텍스트 전송과 현재 대화의 로컬 표시를 지원합니다. 전체 웹 대화 목록 동기화와 Chat 첨부 기능은 아직 지원하지 않습니다.
 
 ## 주요 기능
 
@@ -60,7 +66,7 @@ Codex 데스크톱의 작업 방식을 모바일로 옮기는 개인용 클라�
 
 | Actions 산출물 | 용도 |
 | --- | --- |
-| **`mobile-codex-update-assets`** | **설치할 때 받을 파일.** ZIP을 풀면 `mobile-codex-0.1.25-alpha-arm64.apk`와 검증 파일이 나옵니다. |
+| **`mobile-codex-update-assets`** | **설치할 때 받을 파일.** ZIP을 풀면 `mobile-codex-0.1.27-alpha-arm64.apk`와 검증 파일이 나옵니다. |
 | `mobile-codex-arm64-debug` | APK·런타임 정보·개발 도구의 대응 소스를 함께 담은 큰 묶음입니다. |
 | `check-reports` | 테스트·Lint 결과와 브라우저 화면 검사·스크린샷입니다. 설치 파일은 없습니다. |
 

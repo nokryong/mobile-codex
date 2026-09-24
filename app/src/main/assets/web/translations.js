@@ -1,5 +1,13 @@
 /* UI messages only; user/model/file content is never translated. */
 window.MobileCodexEnglish = {
+  "ChatGPT 로그인": "ChatGPT sign-in",
+  "Chat으로 돌아가기": "Return to Chat",
+  "공식 ChatGPT 페이지에서 로그인과 인증을 완료한 뒤 Chat으로 돌아가세요. Codex 로그인과 별도로 연결됩니다.": "Sign in and complete verification on the official ChatGPT page, then return to Chat. This sign-in is separate from Codex.",
+  "페이지를 불러오지 못했습니다. 연결을 확인하고 다시 시도해 주세요.": "Could not load the page. Check your connection and try again.",
+  "일반 Chat은 ChatGPT 웹 계정으로 연결됩니다. Codex 로그인과 별도로 로그인하거나 계정을 확인하세요.": "Chat connects through your ChatGPT web account. Sign in or check your account separately from Codex.",
+  "ChatGPT 로그인 열기": "Open ChatGPT sign-in",
+  "다시 시도": "Try again",
+
   "더 보기": "Show more",
   "접기": "Show less",
   "Android 앱에서 실행해 주세요.": "Please run this inside the Android app.",

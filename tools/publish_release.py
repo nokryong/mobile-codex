@@ -56,6 +56,9 @@ def publish():
                  '`devtools-corresponding-source.zip` contains pinned development-tool sources, patches, and build recipes. '
                  'The JSON manifest and SHA-256 file describe the verified APK. Third-party licenses are retained.\n\n'
                  f'Build commit: `{commit}`\n')
+        changes = Path('docs/releases') / (version + '.md')
+        if changes.is_file():
+            notes = changes.read_text(encoding='utf-8').rstrip() + '\n\n' + notes
         with tempfile.TemporaryDirectory() as directory:
             body = Path(directory) / 'release.md'; body.write_text(notes)
             args = ['release','create',tag,'--repo',repo,'--target',commit,'--title',f'Mobile Codex {version}','--notes-file',str(body),'--draft']

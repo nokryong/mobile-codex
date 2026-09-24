@@ -1,4 +1,18 @@
-# General Chat send experiment on Android
+# General Chat transport and historical Android probe
+
+## Shipped UI (0.1.27-alpha)
+
+The app's Chat mode uses its own composer and reply view, backed by `ChatWebTransport`.
+`ChatWebLoginActivity` opens the official page solely for sign-in, verification, and
+account access. It has a Return to Chat button, system/keyboard insets, loading feedback,
+and retry on page failure. The old probe activity, diagnostic log, test composer,
+and server-requery button were removed from the shipped UI. Settings → Account and
+the Chat sidebar open the same login screen. Neither remote WebView exposes `Native`.
+
+## Historical experiment (before the shipped UI)
+
+The following observations describe earlier experimental builds, not current controls.
+
 
 The installed Codex CLI (`0.155.1`) and its generated app-server schema expose
 Codex `thread/*` and `turn/*` requests, but no ordinary ChatGPT Chat send

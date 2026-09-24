@@ -19,7 +19,7 @@
   try { const saved = JSON.parse(localStorage.getItem('chat-web-messages') || '[]'); if (Array.isArray(saved)) { const failed = new Set(saved.filter(x => x.id?.endsWith('-error')).map(x => x.id.slice(0, -6))); chatMessages = saved.filter(x => !failed.has(x.id) && !x.id?.endsWith('-error')).slice(-100); } } catch {}
   let chatModel = localStorage.getItem('chat-web-model') || '';
   const chatLevels = ['Instant', 'Medium', 'High', 'X-High', 'Pro'];
-  let chatConfirmedLevel = '', chatConfirmedEpoch = null, chatModelChanging = false, chatModelApplyPromise = null, chatRequestedLevel = '', chatSelectionRevision = 0;
+  let chatConfirmedLevel = '', chatConfirmedEpoch = null, chatModelChanging = false, chatModelApplyPromise = null, chatRequestedLevel = 'Instant', chatSelectionRevision = 0;
   let characterState = {folderName:'', folderConfigured:false, selectedPackId:'builtin', packs:[{id:'builtin',name:'Builtin',valid:true,icons:{}}]};
   let instructionsOriginal = '', instructionsLoaded = false, instructionsSaving = false, devtoolsCheckResult = null, devtoolsCheckSummary = '', devtoolsChecking = false, usageLoading = false, accountActionStatus = {text:'', error:false};
   let resetCredits = null, resetCreditBusy = false, resetCreditScope = '', resetCreditIdempotencyKey = '', resetCreditSelectedId = '', usageGeneration = 0;
@@ -65,14 +65,14 @@
     window.refreshNotificationSettings = refreshNotificationSettings;
     refreshNotificationSettings();
   }
-  function ensureChatWebProbeUi() {
-    const panel = document.querySelector('[data-settings-panel="advanced"]');
-    if (!panel || $('chat-web-probe')) return;
+  function ensureChatLoginUi() {
+    const panel = document.querySelector('[data-settings-panel="account"]');
+    if (!panel || $('chat-account-login')) return;
     const section = node('section', null, 'character-pack-card');
-    section.append(node('h4', t('일반 Chat 전송 실험')),
-      node('p', t('폰 안의 WebView에서 공식 ChatGPT 페이지를 엽니다. 로그인과 검증은 직접 완료해야 합니다. 앱 입력창에서 보내는 경로를 시험하며, 동작은 아직 검증되지 않았습니다.'), 'muted'));
-    const open = button(t('전송 실험 열기'), () => call('ui.chatWebProbe'));
-    open.id = 'chat-web-probe'; section.append(open); panel.append(section);
+    section.append(node('h4', t('ChatGPT 로그인')),
+      node('p', t('일반 Chat은 ChatGPT 웹 계정으로 연결됩니다. Codex 로그인과 별도로 로그인하거나 계정을 확인하세요.'), 'muted'));
+    const open = button(t('ChatGPT 로그인 열기'), () => call('ui.chatLogin'));
+    open.id = 'chat-account-login'; section.append(open); panel.append(section);
   }
   function characterPack(value) { const packs = Array.isArray(value?.packs) ? value.packs : characterState.packs; return packs.find(pack => pack.id === (value?.selectedPackId || characterState.selectedPackId)) || packs.find(pack => pack.id === 'builtin') || packs[0]; }
   function characterVisualKey() { const pack = characterPack(); return characterState.selectedPackId + ':' + JSON.stringify(pack?.icons || {}); }
@@ -894,32 +894,12 @@
     $('chat-model-level').textContent = index >= 0 ? `${level} 추론 수준` : '추론 수준 확인되지 않음';
     document.querySelectorAll('.chat-model-ticks i').forEach((tick, i) => tick.dataset.active = String(index >= 0 && i <= index));
   }
-  async function openChatModelSlider() {
+  function openChatModelSlider() {
     if (chatBusy) throw new Error('ChatGPT 답변을 기다리는 중에는 모델을 바꿀 수 없습니다.');
     show('chat-model-dialog');
-    if (chatModelChanging) {
-      renderChatModelSlider(chatRequestedLevel);
-      $('chat-model-status').textContent = '';
-      return;
-    }
-    $('chat-model-slider').disabled = true;
-    $('chat-model-status').textContent = '현재 ChatGPT 설정을 확인하는 중입니다.';
-    try {
-      const result = await call('chat.web.modelState');
-      if (!chatLevels.includes(result?.level)) throw new Error('현재 ChatGPT 모델 단계를 읽지 못했습니다.');
-      chatConfirmedLevel = result.level;
-      chatConfirmedEpoch = result.sessionEpoch ?? null;
-      renderChatModelSlider(chatConfirmedLevel);
-      $('chat-model-summary').textContent = chatConfirmedLevel;
-      $('chat-model-status').textContent = '눈금을 움직여 Chat 모델을 선택하세요.';
-      $('chat-model-slider').disabled = false;
-    } catch (error) {
-      chatConfirmedLevel = ''; chatConfirmedEpoch = null;
-      renderChatModelSlider('');
-      $('chat-model-summary').textContent = '확인되지 않음';
-      $('chat-model-status').textContent = `${error.message} 눈금을 선택하면 다시 시도합니다.`;
-      $('chat-model-slider').disabled = false;
-    }
+    renderChatModelSlider(chatRequestedLevel);
+    $('chat-model-slider').disabled = false;
+    $('chat-model-status').textContent = '';
   }
   function selectChatModelLevel() {
     const requested = chatLevels[Number($('chat-model-slider').value)];
@@ -943,7 +923,7 @@
           } catch (error) {
             chatConfirmedLevel = ''; chatConfirmedEpoch = null;
             if (chatRequestedLevel === level) {
-              $('chat-model-summary').textContent = '확인되지 않음';
+              $('chat-model-summary').textContent = chatRequestedLevel;
               $('chat-model-status').textContent = error.message;
               toast(error.message);
               break;
@@ -967,7 +947,7 @@
     $('welcome-description').textContent = '일반 ChatGPT 대화입니다. 아래 입력창에서 보내고 답변을 받습니다.';
     $('prompt').placeholder = 'ChatGPT에게 물어보세요';
     $('prompt').setAttribute('aria-label', 'ChatGPT에게 질문');
-    $('chat-model-summary').textContent = chatConfirmedLevel || '확인되지 않음';
+    $('chat-model-summary').textContent = chatRequestedLevel;
     $('activity').hidden = !chatBusy;
     $('activity-text').textContent = 'ChatGPT 답변 기다리는 중';
     $('stop').hidden = true;
@@ -982,6 +962,7 @@
     const next = mode === 'chat';
     if (chatMode === next) return;
     saveDraft();
+    sidebar(false);
     chatMode = next;
     if (chatMode) { chatConfirmedLevel = ''; chatConfirmedEpoch = null; }
     composerPinned = true;
@@ -1007,7 +988,7 @@
   async function newChat(workspaceKey) {
     if (chatMode) {
       if (chatBusy) throw new Error('ChatGPT 답변을 기다리는 중입니다.');
-      await call('chat.web.new'); chatConfirmedLevel = ''; chatConfirmedEpoch = null; chatRequestedLevel = ''; chatMessages = []; persistChatMessages();
+      await call('chat.web.new'); chatConfirmedLevel = ''; chatConfirmedEpoch = null; chatRequestedLevel = 'Instant'; chatMessages = []; persistChatMessages();
       $('prompt').value = ''; saveDraft(); renderChatMode(); $('chat-error').hidden = true; sidebar(false); return;
     }
     await call('chat.new', {workspaceKey:workspaceKey || ''}); sidebar(false);
@@ -1703,7 +1684,7 @@
   document.querySelectorAll('[data-prompt]').forEach(b => b.addEventListener('click', () => { $('prompt').value = b.dataset.prompt; saveDraft(); sizeComposer(); $('prompt').focus(); }));
   on('mode-chat', () => switchMode('chat'));
   on('mode-codex', () => switchMode('codex'));
-  on('chat-login', () => call('ui.chatWebProbe'));
+  on('chat-login', () => call('ui.chatLogin'));
   on('chat-model-settings', openChatModelSlider);
   on('chat-model-slider', () => renderChatModelSlider(chatLevels[Number($('chat-model-slider').value)]), 'input');
   on('chat-model-slider', selectChatModelLevel, 'change');
@@ -1733,7 +1714,7 @@
         try { await chatModelApplyPromise; }
         finally { chatBusy = false; updateSend(); }
       }
-      if (requestedOptionId && (chatConfirmedLevel !== requestedOptionId || chatRequestedLevel !== requestedOptionId)) {
+      if (chatRequestedLevel !== requestedOptionId) {
         $('chat-error').textContent = '선택한 ChatGPT 설정이 확인되지 않아 전송하지 않았습니다. 설정을 다시 확인해 주세요.';
         $('chat-error').hidden = false;
         return;
@@ -1765,7 +1746,7 @@
         if (!result.reply || !result.conversationId) throw new Error('ChatGPT 답변과 대화 저장을 확인하지 못했습니다.');
         chatMessages.push({id:id + '-reply', role:'assistant', text:result.reply, model:result.model || ''});
         chatModel = result.model || chatModel;
-        $('chat-model-summary').textContent = chatConfirmedLevel || '확인되지 않음';
+        $('chat-model-summary').textContent = chatRequestedLevel;
         try { localStorage.setItem('chat-web-model', chatModel); } catch {}
         persistChatMessages();
         if (chatMode && $('prompt').value === value) { $('prompt').value = ''; saveDraft(); }
@@ -1870,7 +1851,7 @@
   on('permissions', () => setPermissionMode($('permissions').value), 'change');
   on('approval-mode', () => setApprovalMode($('approval-mode').value), 'change');
   document.querySelectorAll('input[name="permission"]').forEach(r => r.addEventListener('change', () => setPermissionMode(r.value).catch(error => toast(error.message))));
-  ensureCharacterPackUi(); ensureNotificationSettings(); ensureChatWebProbeUi();
+  ensureCharacterPackUi(); ensureNotificationSettings(); ensureChatLoginUi();
   if (chatMode) { chatMode = false; switchMode('chat'); }
   on('connect', () => startLogin(false)); on('account-button', openAccountSettings); on('settings', () => { ensureCharacterPackUi(); ensureNotificationSettings(); show('settings-dialog'); sidebar(false); if (!characterState.folderConfigured && characterState.packs.length <= 1) loadCharacterPacks(); });
   document.querySelectorAll('[data-settings-tab]').forEach(tab => tab.addEventListener('click', () => {

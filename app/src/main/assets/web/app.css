@@ -826,9 +826,10 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-vis
   *,*::before,*::after { animation:none!important; transition:none!important; scroll-behavior:auto!important; }
   :is(.icon-button,.primary-button,.secondary-button,.send-button,.context-button,.nav-button,.suggestions button,.project-button):active:not(:disabled),.suggestions button:hover { transform:none; }
 }
-/* The mode control stays centered independently of the title and file action. */
-.mode-switch{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);display:flex;gap:3px;padding:4px;border-radius:999px;background:var(--pill);border:1px solid var(--border);z-index:1}
-.mode-switch button{min-width:76px;min-height:36px;border-radius:999px;padding:7px 15px;font-size:13px;font-weight:600;color:var(--muted)}
+/* Compact provider switch below the sidebar brand. */
+.mode-switch{display:flex;flex:none;align-self:flex-start;width:176px;max-width:100%;gap:2px;padding:3px;margin:0 7px 12px;border-radius:999px;background:var(--pill);border:1px solid var(--border)}
+.mode-switch button{flex:1;min-width:0;min-height:44px;border-radius:999px;padding:6px 10px;font-size:12px;font-weight:600;color:var(--muted)}
+.topbar-left{flex:1;min-width:0;max-width:none}
 .mode-switch button[aria-pressed="true"]{background:var(--bg);color:var(--text);box-shadow:0 1px 5px #0002}
 .chat-error{max-width:780px;margin:12px auto;padding:12px 15px;border:1px solid var(--danger);border-radius:12px;color:var(--danger);background:var(--bg);font-size:13px;line-height:1.6;overflow-wrap:anywhere}
 .chat-reconcile{display:block;max-width:780px;margin:8px auto 12px}
@@ -841,9 +842,6 @@ body:not(.chat-mode) #chat-model-settings{display:none!important}
 body.chat-mode #chat-sidebar{display:block!important}
 body.chat-mode #chat-login{display:flex!important}
 body.chat-mode #show-tools,body.chat-mode #account-button{display:none!important}
-body.chat-mode .sidebar-top .brand img,body.chat-mode .sidebar-top .mobile-tag{display:none}
-@media(max-width:760px){.mode-switch button{min-width:67px;min-height:38px;padding:7px 11px}.topbar-left{max-width:calc(50% - 77px)}body.chat-mode #header-project{display:none}}
-@media(max-width:360px){.mode-switch button{min-width:57px;padding:6px 8px;font-size:12px}}
 .chat-model-sheet{width:min(520px,100%);max-width:100%;margin:auto auto 0;padding:22px 24px calc(24px + env(safe-area-inset-bottom));border-radius:28px 28px 0 0;text-align:center}
 .chat-model-sheet .dialog-head{justify-content:center;position:relative;margin:4px 0 28px}
 .chat-model-sheet .dialog-head h2{font-size:22px;font-weight:600}
@@ -854,6 +852,7 @@ body.chat-mode .sidebar-top .brand img,body.chat-mode .sidebar-top .mobile-tag{d
 .chat-model-ticks{position:absolute;inset:0 42px;display:flex;align-items:center;justify-content:space-between;pointer-events:none;z-index:2}
 .chat-model-ticks i{width:12px;height:12px;border-radius:50%;background:#b9bdc3}
 .chat-model-ticks i[data-active="true"]{background:#78adfb}
+#chat-model-status:empty{display:none}
 #chat-model-status{min-height:22px;margin:16px 0 0;font-size:12px;line-height:1.5}
 @media(max-width:760px){.chat-model-sheet{width:100%;padding:18px 20px calc(20px + env(safe-area-inset-bottom))}.chat-model-track,#chat-model-slider{height:68px}#chat-model-slider::-webkit-slider-thumb{width:58px;height:58px}}
 

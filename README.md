@@ -26,11 +26,17 @@ The APK-opening app may separately require **Allow from this source**. Menu name
 
 Mobile Codex is an independent Android client built around the Codex app-server. It bundles an Android port of Codex, Python, Node.js, and Git, so you do not need to install Termux or keep a separate PC server running.
 
-**0.1.25 alpha** · **ARM64 / Android 10+** · Created by [nokryong](https://github.com/nokryong)
+**0.1.27 alpha** · **ARM64 / Android 10+** · Created by [nokryong](https://github.com/nokryong)
 
 [Download APK](https://github.com/nokryong/mobile-codex/releases) · [Builds](https://github.com/nokryong/mobile-codex/actions/workflows/android.yml) · [Report an issue](https://github.com/nokryong/mobile-codex/issues)
 
 > This is not an official OpenAI app. Model inference requires an internet connection and an account with Codex access. The Codex process and file/command tools run on your Android device.
+
+## Chat and Codex
+
+Switch with **Chat / Codex** below the sidebar logo. Chat uses the app's own composer and message view; the signed-in official web client handles delivery. Open **ChatGPT sign-in**, complete authentication, then choose **Return to Chat**. This session is separate from Codex sign-in.
+
+Chat defaults to Instant. The reasoning slider closes after selection. Long user messages can be expanded or collapsed. Setting failures are reported rather than silently sending with another selection. Chat currently supports text delivery and the current conversation's local view; full web-history synchronization and Chat attachments are not yet supported.
 
 ## Features
 
@@ -56,7 +62,7 @@ You need an **ARM64 device running Android 10 or later**, an up-to-date Android 
 
 ### Download the APK
 
-Open [Releases](https://github.com/nokryong/mobile-codex/releases) and download **`mobile-codex-0.1.25-alpha-arm64.apk`** from the release assets. Open the APK and follow Android’s installation prompts. If requested, allow installation from the app you used to download/open it.
+Open [Releases](https://github.com/nokryong/mobile-codex/releases) and download **`mobile-codex-0.1.27-alpha-arm64.apk`** from the release assets. Open the APK and follow Android’s installation prompts. If requested, allow installation from the app you used to download/open it.
 
 New app versions are published automatically after the `main` workflow passes its tests, builds, and original-key signature verification. Alpha versions are marked as prereleases. A published version is never silently replaced; maintainers must increment both `versionName` and `versionCode` for the next release.
 

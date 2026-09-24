@@ -41,13 +41,16 @@ test('every wired control exists and initial state renders safely',async()=>{
  assert.match(w.document.getElementById('messages').textContent,/<script>/);
  assert.equal(w.document.getElementById('project-label').textContent,'Project');
 });
-test('advanced settings opens the in-app Chat web transport probe',async()=>{
+test('account and Chat sidebar open official sign-in without experiment controls',async()=>{
  const {w,calls}=setup();await tick();
- const button=w.document.getElementById('chat-web-probe');
+ const button=w.document.getElementById('chat-account-login');
  assert.ok(button);
  button.click();await tick();
- assert.equal(calls.filter(call=>call.action==='ui.chatWebProbe').length,1);
- assert.match(w.document.querySelector('[data-settings-panel="advanced"]').textContent,/동작은 아직 검증되지 않았습니다/);
+ assert.equal(calls.filter(call=>call.action==='ui.chatLogin').length,1);
+ assert.ok(w.document.querySelector('[data-settings-panel="account"] #chat-account-login'));
+ assert.doesNotMatch(w.document.body.textContent,/전송 실험|동작은 아직 검증되지 않았습니다/);
+ w.document.getElementById('chat-login').click();await tick();
+ assert.equal(calls.filter(call=>call.action==='ui.chatLogin').length,2);
 });
 test('submit is cancelled synchronously and calls native with chosen model and effort',async()=>{
  const {w,calls}=setup();await tick();w.document.getElementById('prompt').value='실제 파일 수정';
@@ -56,13 +59,15 @@ test('submit is cancelled synchronously and calls native with chosen model and e
  assert.equal(calls.find(m=>m.action==='chat.send').args.text,'실제 파일 수정');
 });
 test('Chat switch routes the same composer to ordinary Chat and restores the Codex draft',async()=>{
- const {w,calls,snapshot}=setup({'chat.web.send':m=>({operationId:m.args.operationId,reply:'일반 Chat 답변',conversationId:'11111111-1111-1111-1111-111111111111',model:'gpt-5-6-thinking'})});await tick();
+ const {w,calls,snapshot}=setup({'chat.web.send':m=>({operationId:m.args.operationId,uiConfirmedSetting:m.args.requestedOptionId,reply:'일반 Chat 답변',conversationId:'11111111-1111-1111-1111-111111111111',model:'gpt-5-6-thinking'})});await tick();
  w.mobileCodexEvent('state',snapshot);
  const d=w.document,prompt=d.getElementById('prompt');prompt.value='Codex 초안';prompt.dispatchEvent(new w.Event('input'));
  d.getElementById('mode-chat').click();await tick();
  assert.equal(d.getElementById('mode-chat').getAttribute('aria-pressed'),'true');
  assert.equal(d.getElementById('mode-codex').getAttribute('aria-pressed'),'false');
  assert.equal(d.body.classList.contains('chat-mode'),true);
+ assert.ok(d.querySelector('#sidebar .sidebar-top + .mode-switch'));
+ assert.equal(d.querySelector('.topbar .mode-switch'),null);
  assert.equal(d.getElementById('sidebar-brand-name').textContent,'ChatGPT');
  assert.equal(d.getElementById('chat-sessions').textContent,'새 Chat 대화');
  assert.equal(d.getElementById('chat-model-settings').hidden,false);
@@ -71,10 +76,11 @@ test('Chat switch routes the same composer to ordinary Chat and restores the Cod
  assert.equal(prompt.value,'');
  prompt.value='일반 Chat 질문';d.getElementById('composer').dispatchEvent(new w.Event('submit',{cancelable:true}));await tick();
  assert.equal(calls.filter(x=>x.action==='chat.web.send').length,1);
+ assert.equal(calls.find(x=>x.action==='chat.web.send').args.requestedOptionId,'Instant');
  assert.equal(calls.filter(x=>x.action==='chat.send').length,0);
  assert.match(d.getElementById('messages').textContent,/일반 Chat 질문.*일반 Chat 답변/s);
  assert.equal(d.getElementById('chat-sessions').textContent,'일반 Chat 질문');
- assert.equal(d.getElementById('chat-model-summary').textContent,'확인되지 않음');
+ assert.equal(d.getElementById('chat-model-summary').textContent,'Instant');
  w.mobileCodexEvent('state',{...snapshot,busy:true});
  d.getElementById('mode-codex').click();await tick();
  assert.equal(d.body.classList.contains('chat-mode'),false);
@@ -99,7 +105,7 @@ test('Chat model slider applies a verified level through the Chat web transport'
  d.getElementById('chat-model-settings').click();await tick();
  const dialog=d.getElementById('chat-model-dialog'),slider=d.getElementById('chat-model-slider');
  assert.equal(dialog.open,true);
- assert.equal(slider.value,'2');
+ assert.equal(slider.value,'0');
  assert.equal(slider.disabled,false);
  slider.value='3';slider.dispatchEvent(new w.Event('input'));slider.dispatchEvent(new w.Event('change'));await tick();
  assert.equal(dialog.open,false);
@@ -167,12 +173,13 @@ test('Chat send waits for its selected level instead of sending the previous lev
   assert.equal(calls.filter(m=>m.action==='chat.web.send').length,1);
   assert.equal(calls.find(m=>m.action==='chat.web.send').args.requestedOptionId,'High');
 });
-test('Chat model slider can retry a selection after the session state read fails',async()=>{
+test('Chat slider opens on Instant without waiting for the web session to be read',async()=>{
  const {w,calls}=setup({'chat.web.modelState':()=>{throw new Error('화면 준비 중');},'chat.web.selectModel':m=>({level:m.args.level})});await tick();
  const d=w.document;d.getElementById('mode-chat').click();await tick();
  d.getElementById('chat-model-settings').click();await tick();
  const slider=d.getElementById('chat-model-slider');assert.equal(slider.disabled,false);
- assert.match(d.getElementById('chat-model-status').textContent,/다시 시도/);
+ assert.equal(slider.value,'0');
+ assert.equal(calls.some(m=>m.action==='chat.web.modelState'),false);
  slider.value='3';slider.dispatchEvent(new w.Event('input'));slider.dispatchEvent(new w.Event('change'));await tick();
  assert.equal(calls.find(m=>m.action==='chat.web.selectModel').args.level,'X-High');
  assert.equal(d.getElementById('chat-model-summary').textContent,'X-High');

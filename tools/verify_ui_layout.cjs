@@ -36,6 +36,8 @@ async function open(browser, width, height, theme='light', language='en', extra=
    if(m.action==='state') result=snapshot;
    if(m.action==='updates.state') result={versionName:'0.1.13-alpha',versionCode:14,repository:'nokryong/mobile-codex',prereleases:true};
    if(m.action==='instructions.read') result={content:'Read the relevant files before editing.',activePath:'/private/AGENTS.md'};
+   if(m.action==='chat.web.modelState') result={level:'High',sessionEpoch:1};
+   if(m.action==='chat.web.selectModel') result={level:m.args.level,sessionEpoch:1};
    if(m.action==='files.list') result={entries:[]};
    setTimeout(()=>window.mobileCodexEvent('response',{id:m.id,result}),0);
   }};
@@ -93,6 +95,12 @@ async function checkSidebar(page,width) {
  return values;
 }
 async function checkModeSwitch(page,width,theme) {
+ await page.locator('.topbar .sidebar-toggle').click();
+ const modeSwitch=await page.locator('#sidebar .mode-switch').boundingBox();
+ const brand=await page.locator('#sidebar .sidebar-top').boundingBox();
+ assert.ok(modeSwitch.y>=brand.y+brand.height,'Mode switch is below the brand');
+ assert.ok(modeSwitch.width<=180,'Mode switch stays compact');
+ assert.equal(await page.locator('.topbar .mode-switch').count(),0);
  await page.locator('#mode-chat').click();
  assert.equal(await page.locator('body').evaluate(el=>el.classList.contains('chat-mode')),true);
  assert.equal(await page.locator('#mode-chat').getAttribute('aria-pressed'),'true');
@@ -108,6 +116,20 @@ async function checkModeSwitch(page,width,theme) {
  assert.equal(await page.locator('#account-button').isVisible(),false);
  await page.screenshot({path:path.join(output,`chat-mode-sidebar-${width}-${theme}.png`)});
  await page.locator('#sidebar .sidebar-toggle').click();await page.waitForTimeout(180);
+ await page.locator('#chat-model-settings').click();
+ await page.locator('#chat-model-slider').waitFor({state:'visible'});
+ await page.waitForFunction(()=>!document.getElementById('chat-model-slider').disabled);
+ assert.equal(await page.locator('#chat-model-dialog button').count(),0);
+ await page.screenshot({path:path.join(output,`chat-model-${width}-${theme}.png`)});
+ await page.locator('#chat-model-slider').focus();await page.keyboard.press('ArrowRight');
+ await page.waitForFunction(()=>!document.getElementById('chat-model-dialog').open);
+ assert.equal(await page.locator('#chat-model-summary').innerText(),'Medium');
+ await page.locator('#chat-model-settings').click();await page.waitForTimeout(220);
+ const modelSheet=await page.locator('#chat-model-dialog').boundingBox();
+ assert.ok(modelSheet.y>20,'Reasoning sheet leaves room for outside dismissal');
+ await page.mouse.click(width/2,modelSheet.y-15);
+ await page.waitForFunction(()=>!document.getElementById('chat-model-dialog').open);
+ await page.locator('.topbar .sidebar-toggle').click();
  await page.locator('#mode-codex').click();
  assert.equal(await page.locator('body').evaluate(el=>el.classList.contains('chat-mode')),false);
  assert.equal(await page.locator('#mode-codex').getAttribute('aria-pressed'),'true');

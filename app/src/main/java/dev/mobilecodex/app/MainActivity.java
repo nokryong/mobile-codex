@@ -549,9 +549,9 @@ public final class MainActivity extends Activity implements Engine.Ui {
                         catch (Exception e) { respond(id, null, e); }
                     }); return;
                 }
-                if (action.equals("ui.chatWebProbe")) {
+                if (action.equals("ui.chatLogin")) {
                     runOnUiThread(() -> {
-                        try { startActivity(new Intent(MainActivity.this, ChatWebProbeActivity.class)); chatWebLoginOpened = true; respond(id, obj("ok", true), null); }
+                        try { startActivity(new Intent(MainActivity.this, ChatWebLoginActivity.class)); chatWebLoginOpened = true; respond(id, obj("ok", true), null); }
                         catch (Exception e) { respond(id, null, e); }
                     }); return;
                 }
