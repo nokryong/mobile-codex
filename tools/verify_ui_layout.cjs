@@ -36,8 +36,6 @@ async function open(browser, width, height, theme='light', language='en', extra=
    if(m.action==='state') result=snapshot;
    if(m.action==='updates.state') result={versionName:'0.1.13-alpha',versionCode:14,repository:'nokryong/mobile-codex',prereleases:true};
    if(m.action==='instructions.read') result={content:'Read the relevant files before editing.',activePath:'/private/AGENTS.md'};
-   if(m.action==='chat.web.modelState') result={level:'High',sessionEpoch:1};
-   if(m.action==='chat.web.selectModel') result={level:m.args.level,sessionEpoch:1};
    if(m.action==='files.list') result={entries:[]};
    setTimeout(()=>window.mobileCodexEvent('response',{id:m.id,result}),0);
   }};

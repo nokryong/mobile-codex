@@ -14,12 +14,6 @@
   let dictationState = {phase:'idle'}, dictationTimer = null;
   let voiceStarting = false, voiceActive = false, voiceRecoveryGeneration = 0;
   let chatIconsEnabled = localStorage.getItem('chat-icons') !== 'off', activityIcon = 'thinking';
-  let chatMode = false, chatBusy = false, composerPinned = false;
-  let chatMessages = [];
-  try { const saved = JSON.parse(localStorage.getItem('chat-web-messages') || '[]'); if (Array.isArray(saved)) { const failed = new Set(saved.filter(x => x.id?.endsWith('-error')).map(x => x.id.slice(0, -6))); chatMessages = saved.filter(x => !failed.has(x.id) && !x.id?.endsWith('-error')).slice(-100); } } catch {}
-  let chatModel = localStorage.getItem('chat-web-model') || '';
-  const chatLevels = ['Instant', 'Medium', 'High', 'X-High', 'Pro'];
-  let chatConfirmedLevel = '', chatConfirmedEpoch = null, chatModelChanging = false, chatModelApplyPromise = null, chatRequestedLevel = 'Instant', chatSelectionRevision = 0;
   let characterState = {folderName:'', folderConfigured:false, selectedPackId:'builtin', packs:[{id:'builtin',name:'Builtin',valid:true,icons:{}}]};
   let instructionsOriginal = '', instructionsLoaded = false, instructionsSaving = false, devtoolsCheckResult = null, devtoolsCheckSummary = '', devtoolsChecking = false, usageLoading = false, accountActionStatus = {text:'', error:false};
   let resetCredits = null, resetCreditBusy = false, resetCreditScope = '', resetCreditIdempotencyKey = '', resetCreditSelectedId = '', usageGeneration = 0;
@@ -29,7 +23,7 @@
     return new Promise((resolve, reject) => {
       if (!window.Native) return reject(new Error(t('Android 앱에서 실행해 주세요.')));
       const id = String(++seq);
-      const timer = setTimeout(() => { pending.delete(id); reject(new Error(t('요청 시간이 초과되었습니다. 상태를 확인하고 다시 시도해 주세요.'))); }, ['files.mutate','recovery.restore','updates.install','chat.web.send'].includes(action) ? 610000 : 150000);
+      const timer = setTimeout(() => { pending.delete(id); reject(new Error(t('요청 시간이 초과되었습니다. 상태를 확인하고 다시 시도해 주세요.'))); }, ['files.mutate','recovery.restore','updates.install'].includes(action) ? 610000 : 150000);
       pending.set(id, {resolve, reject, timer});
       window.Native.postMessage(JSON.stringify({id, action, args}));
     });
@@ -197,7 +191,6 @@
   function restoreOptions(scope) { try { const value = JSON.parse(localStorage.getItem(optionsScope(scope)) || '{}'); return {model:value.model || '', effort:value.effort || ''}; } catch { return {model:'', effort:''}; } }
   function saveOptions() { if (!draftScope) return; draftOptions = {model:$('model').value, effort:$('effort').value}; try { if (draftOptions.model || draftOptions.effort) localStorage.setItem(optionsScope(), JSON.stringify(draftOptions)); else localStorage.removeItem(optionsScope()); } catch {} }
   function saveDraft() {
-    if (chatMode) { try { if ($('prompt').value) localStorage.setItem('chat-web-draft', $('prompt').value); else localStorage.removeItem('chat-web-draft'); } catch {} return; }
     if (!draftScope) return;
     try {
       if ($('prompt').value) localStorage.setItem(draftScope, $('prompt').value); else localStorage.removeItem(draftScope);
@@ -241,7 +234,7 @@
     efforts(); if ([...$('effort').options].some(o => o.value === draftOptions.effort)) $('effort').value = draftOptions.effort;
     sizeComposer();
   }
-  function updateSend() { $('voice-input').disabled = (!chatMode && !draftScope) || voiceStarting || voiceActive || !!sending || chatBusy; $('voice-input').setAttribute('aria-busy', String(voiceStarting || voiceActive)); $('send').disabled = chatMode ? (!$('prompt').value.trim() || chatBusy || voiceStarting || voiceActive) : ((!$('prompt').value.trim() && !(draftContext.attachments || []).length) || !!sending || voiceStarting || voiceActive); $('send').setAttribute('aria-label', !chatMode && state.busy ? t('진행 중인 작업에 추가 지시') : t('메시지 보내기')); $('send').title = !chatMode && state.busy ? t('추가 지시') : t('보내기'); }
+  function updateSend() { $('voice-input').disabled = !draftScope || voiceStarting || voiceActive || !!sending; $('voice-input').setAttribute('aria-busy', String(voiceStarting || voiceActive)); $('send').disabled = ((!$('prompt').value.trim() && !(draftContext.attachments || []).length) || !!sending || voiceStarting || voiceActive); $('send').setAttribute('aria-label', state.busy ? t('진행 중인 작업에 추가 지시') : t('메시지 보내기')); $('send').title = state.busy ? t('추가 지시') : t('보내기'); }
   function scrollLatest() { following = true; $('chat-scroll').scrollTop = $('chat-scroll').scrollHeight; $('jump-latest').hidden = true; }
   function sizeComposer() {
     const field = $('prompt'), cap = Math.max(60, Math.min(160, window.innerHeight * .24));
@@ -740,35 +733,20 @@
     drawStatusIcons(); drawMessages();
   }
   function drawMessages() {
-    const messages = chatMode ? chatMessages : (state.messages || []);
+    const messages = state.messages || [];
     const elements = new Map(Array.from($('messages').children).map(n => [n.dataset.id, n]));
     const keep = new Set();
     C.groupImageMessages(messages).forEach(m => {
       keep.add(m.id); let el = elements.get(m.id);
       if (!el) { el = node('article', null, 'message ' + (m.role === 'user' ? 'user' : 'assistant')); el.dataset.id = m.id; $('messages').append(el); }
-      const iconName = m.imageStatus === 'generating' ? 'working' : (chatMode ? chatBusy : state.busy) && m.id === messages[messages.length - 1]?.id ? 'thinking' : C.messageIcon(m);
+      const iconName = m.imageStatus === 'generating' ? 'working' : state.busy && m.id === messages[messages.length - 1]?.id ? 'thinking' : C.messageIcon(m);
       const signature = JSON.stringify([m.text, m.status, m.images, m.attachments, m.imageStatus, m.imageError, L.language(), chatIconsEnabled, iconName, characterVisualKey()]);
       if (el.dataset.signature !== signature) {
         el.dataset.signature = signature;
         if (m.role === 'user') {
-          const expanded = el.querySelector('.user-message-toggle')?.getAttribute('aria-expanded') === 'true';
           const text = m.text || '';
           const body = node('div', text, 'user-message-text');
           el.replaceChildren(body);
-          if (chatMode && (text.length > 600 || text.split('\n').length > 8)) {
-            body.classList.toggle('is-collapsed', !expanded);
-            const toggle = node('button', t(expanded ? '접기' : '더 보기'), 'user-message-toggle');
-            toggle.type = 'button'; toggle.setAttribute('aria-expanded', String(expanded));
-            toggle.addEventListener('click', () => {
-              const next = toggle.getAttribute('aria-expanded') !== 'true';
-              toggle.setAttribute('aria-expanded', String(next));
-              toggle.textContent = t(next ? '접기' : '더 보기');
-              body.classList.toggle('is-collapsed', !next);
-            });
-            el.append(toggle);
-          }
-          if (chatMode && m.status === 'uncertain') el.append(node('small', '전송 상태 확인 필요', 'chat-send-status'));
-          if (chatMode && m.status === 'not_sent') el.append(node('small', '전송하지 않음', 'chat-send-status'));
           if (m.attachments?.length) el.append(sentAttachments(m.attachments));
         }
         else {
@@ -855,147 +833,12 @@
   async function selectProject(key) {
     await call('projects.select', {key:key || ''}); sidebar(false);
   }
-  function persistChatMessages() {
-    chatMessages = chatMessages.slice(-100);
-    try { localStorage.setItem('chat-web-messages', JSON.stringify(chatMessages)); } catch { toast('Chat 대화의 기기 내 표시 기록을 저장하지 못했습니다.'); }
-    renderChatSidebar();
-    renderReconcileAction();
-  }
-  function renderReconcileAction() {
-    $('chat-reconcile').hidden = !chatMode || chatBusy || !chatMessages.some(message =>
-      message.role === 'user' && message.status === 'uncertain' && message.conversationId);
-  }
-  function renderModeChrome() {
-    document.body.classList.toggle('chat-mode', chatMode);
-    $('mode-chat').setAttribute('aria-pressed', String(chatMode));
-    $('mode-codex').setAttribute('aria-pressed', String(!chatMode));
-    $('sidebar-brand-name').textContent = chatMode ? 'ChatGPT' : 'Codex';
-    $('new-chat').setAttribute('aria-label', chatMode ? '새 Chat 대화' : '새 Codex 대화');
-    $('chat-model-settings').hidden = !chatMode;
-    $('composer-options').hidden = chatMode;
-    if (chatMode || composerPinned) $('composer').classList.add('composer-expanded');
-    else if (!$('composer').contains(document.activeElement)) $('composer').classList.remove('composer-expanded');
-  }
-  function renderChatSidebar() {
-    const list = $('chat-sessions'); list.replaceChildren();
-    const first = chatMessages.find(message => message.role === 'user' && message.text?.trim());
-    const title = first ? first.text.trim().slice(0, 70) : '새 Chat 대화';
-    const row = node('div', null, 'session-row active');
-    const current = button('', () => sidebar(false), 'session active');
-    current.append(node('span', title, 'session-title'));
-    current.setAttribute('aria-current', 'page');
-    row.append(current); list.append(row);
-  }
-  function renderChatModelSlider(level) {
-    const index = chatLevels.indexOf(level);
-    const slider = $('chat-model-slider');
-    if (index >= 0) slider.value = String(index);
-    slider.style.setProperty('--chat-progress', index >= 0 ? `${index * 25}%` : '0%');
-    $('chat-model-level').textContent = index >= 0 ? `${level} 추론 수준` : '추론 수준 확인되지 않음';
-    document.querySelectorAll('.chat-model-ticks i').forEach((tick, i) => tick.dataset.active = String(index >= 0 && i <= index));
-  }
-  function openChatModelSlider() {
-    if (chatBusy) throw new Error('ChatGPT 답변을 기다리는 중에는 모델을 바꿀 수 없습니다.');
-    show('chat-model-dialog');
-    renderChatModelSlider(chatRequestedLevel);
-    $('chat-model-slider').disabled = false;
-    $('chat-model-status').textContent = '';
-  }
-  function selectChatModelLevel() {
-    const requested = chatLevels[Number($('chat-model-slider').value)];
-    chatRequestedLevel = requested;
-    chatSelectionRevision++;
-    renderChatModelSlider(requested);
-    $('chat-model-summary').textContent = requested;
-    $('chat-model-status').textContent = '';
-    dismiss('chat-model-dialog');
-    if (chatModelChanging) return chatModelApplyPromise;
-    chatModelChanging = true;
-    chatModelApplyPromise = (async () => {
-      try {
-        while (chatRequestedLevel && chatRequestedLevel !== chatConfirmedLevel) {
-          const level = chatRequestedLevel;
-          try {
-            const result = await call('chat.web.selectModel', {level});
-            if (result?.level !== level) throw new Error('ChatGPT 웹의 모델 설정이 바뀌었는지 확인하지 못했습니다.');
-            chatConfirmedLevel = level;
-            chatConfirmedEpoch = result.sessionEpoch ?? null;
-          } catch (error) {
-            chatConfirmedLevel = ''; chatConfirmedEpoch = null;
-            if (chatRequestedLevel === level) {
-              $('chat-model-summary').textContent = chatRequestedLevel;
-              $('chat-model-status').textContent = error.message;
-              toast(error.message);
-              break;
-            }
-          }
-        }
-      } finally {
-        chatModelChanging = false;
-        chatModelApplyPromise = null;
-      }
-    })();
-    return chatModelApplyPromise;
-  }
-  function renderChatMode() {
-    renderModeChrome();
-    $('header-project').textContent = 'Chat';
-    $('header-title').textContent = 'ChatGPT';
-    renderChatSidebar();
-    $('welcome').hidden = chatMessages.length > 0;
-    $('welcome-title').textContent = '무엇이든 물어보세요';
-    $('welcome-description').textContent = '일반 ChatGPT 대화입니다. 아래 입력창에서 보내고 답변을 받습니다.';
-    $('prompt').placeholder = 'ChatGPT에게 물어보세요';
-    $('prompt').setAttribute('aria-label', 'ChatGPT에게 질문');
-    $('chat-model-summary').textContent = chatRequestedLevel;
-    $('activity').hidden = !chatBusy;
-    $('activity-text').textContent = 'ChatGPT 답변 기다리는 중';
-    $('stop').hidden = true;
-    $('file-panel').hidden = true;
-    $('chat-error').hidden = true;
-    renderReconcileAction();
-    hideAutocomplete();
-    renderDraftContext();
-    drawMessages(); updateSend(); sizeComposer();
-  }
   async function openChatSurface() {
     saveDraft();
     try { await call('ui.chat.open'); sidebar(false); }
     catch (error) { toast(error.message); }
   }
-  function switchMode(mode) {
-    const next = mode === 'chat';
-    if (chatMode === next) return;
-    saveDraft();
-    sidebar(false);
-    chatMode = next;
-    if (chatMode) { chatConfirmedLevel = ''; chatConfirmedEpoch = null; }
-    composerPinned = true;
-    try { localStorage.setItem('conversation-mode', chatMode ? 'chat' : 'codex'); } catch {}
-    renderModeChrome();
-    $('messages').replaceChildren(); following = true;
-    if (chatMode) {
-      try { $('prompt').value = localStorage.getItem('chat-web-draft') || ''; } catch { $('prompt').value = ''; }
-      renderChatMode();
-      call('chat.web.prepare').catch(error => toast(error.message));
-    } else {
-      $('chat-error').hidden = true;
-      render(state);
-      try { $('prompt').value = localStorage.getItem(draftScope) || ''; } catch { $('prompt').value = ''; }
-      $('welcome-title').textContent = '어떤 작업을 할까요?';
-      $('welcome-description').textContent = '아이디어부터 코드, 기기의 파일까지. Codex와 함께 작업하세요.';
-      $('prompt').placeholder = '무엇이든 요청하세요. @ 파일·앱, $ 스킬';
-      $('prompt').setAttribute('aria-label', 'Codex에게 요청');
-      sizeComposer();
-    }
-    sidebar(false);
-  }
   async function newChat(workspaceKey) {
-    if (chatMode) {
-      if (chatBusy) throw new Error('ChatGPT 답변을 기다리는 중입니다.');
-      await call('chat.web.new'); chatConfirmedLevel = ''; chatConfirmedEpoch = null; chatRequestedLevel = 'Instant'; chatMessages = []; persistChatMessages();
-      $('prompt').value = ''; saveDraft(); renderChatMode(); $('chat-error').hidden = true; sidebar(false); return;
-    }
     await call('chat.new', {workspaceKey:workspaceKey || ''}); sidebar(false);
   }
   async function removeProject(project) {
@@ -1109,7 +952,6 @@
     state.phone = {...state.phone, enabled:false, status:t('휴대폰 제어 꺼짐')}; renderPhone();
   }
   function render(next) {
-    if (chatMode) { state = next; state.messages ||= []; state.models ||= []; state.projects ||= []; state.accounts ||= []; state.workspace ||= {}; state.account ||= {}; state.rateLimits ||= {}; setCharacterState(state.characters); return; }
     const previousAccountScope = accountScope(state.account), nextAccountScope = accountScope(next.account);
     if (previousAccountScope !== nextAccountScope) { usageGeneration++; resetCredits = null; resetCreditBusy = false; resetCreditIdempotencyKey = ''; resetCreditSelectedId = ''; resetCreditScope = nextAccountScope; }
     const changedThread = state.threadId !== next.threadId;
@@ -1130,7 +972,7 @@
     $('pending-deletions').hidden = pendingDeletes === 0;
     $('pending-deletions').textContent = pendingDeletes ? t('원본 삭제 대기 {count}건. 아래 ‘Codex 시작 / 다시 연결’을 누르면 다시 시도합니다.', {count:pendingDeletes}) : '';
     $('send').hidden = false; $('stop').hidden = !state.busy; $('activity').hidden = !state.busy;
-    if (changedThread || !state.busy || $('activity-text').textContent.startsWith('ChatGPT'))
+    if (changedThread || !state.busy)
       $('activity-text').textContent = 'Codex 답변 기다리는 중';
     if (!state.busy) activityIcon = 'thinking';
     drawStatusIcons();
@@ -1625,8 +1467,8 @@
     if (name === 'state') render(data);
     else if (name === 'error') { if (!data.threadId || data.threadId === state.threadId) toast(data.message); }
     else if (name === 'notice') toast(data.message);
-    else if (name === 'message.delta') { if (data.threadId && data.threadId !== state.threadId) return; C.appendDelta(state.messages, data.id, data.delta); if (!chatMode) drawMessages(); }
-    else if (name === 'tool') { if (data.threadId && data.threadId !== state.threadId) return; activityIcon = /read|list|search/.test(data.name) ? 'inspecting' : 'working'; if (!chatMode) { drawStatusIcons(); $('activity-text').textContent = data.name.replace('mobile_', '') + ' · ' + data.path; } logEvent(data.name, data); }
+    else if (name === 'message.delta') { if (data.threadId && data.threadId !== state.threadId) return; C.appendDelta(state.messages, data.id, data.delta); drawMessages(); }
+    else if (name === 'tool') { if (data.threadId && data.threadId !== state.threadId) return; activityIcon = /read|list|search/.test(data.name) ? 'inspecting' : 'working'; drawStatusIcons(); $('activity-text').textContent = data.name.replace('mobile_', '') + ' · ' + data.path; logEvent(data.name, data); }
     else if (name === 'agent.event') { if (data.threadId && data.threadId !== state.threadId) return; if (!data.method.endsWith('/delta')) logEvent(data.method, data.params); if (data.method === 'turn/diff/updated') logEvent(t('변경 사항'), data.params.diff); }
     else if (name === 'files.changed' && (!data.threadId || data.threadId === state.threadId) && !$('file-panel').hidden) listFiles().catch(e => toast(e.message));
     else if (name === 'updates.changed') drawUpdates(data);
@@ -1689,10 +1531,6 @@
   document.querySelectorAll('[data-prompt]').forEach(b => b.addEventListener('click', () => { $('prompt').value = b.dataset.prompt; saveDraft(); sizeComposer(); $('prompt').focus(); }));
   on('mode-chat', openChatSurface);
   on('mode-codex', () => sidebar(false));
-  on('chat-login', () => call('ui.chatLogin'));
-  on('chat-model-settings', openChatModelSlider);
-  on('chat-model-slider', () => renderChatModelSlider(chatLevels[Number($('chat-model-slider').value)]), 'input');
-  on('chat-model-slider', selectChatModelLevel, 'change');
   for (const [buttonId, listId] of [['toggle-projects','projects'], ['toggle-history','sessions']]) {
     const button = $(buttonId), list = $(listId);
     const key = 'sidebar-section-' + listId;
@@ -1721,63 +1559,6 @@
   on('input-value', e => { if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) $('input-confirm').click(); }, 'keydown');
   on('composer', async () => {
     const value = $('prompt').value, text = value.trim();
-    if (chatMode) {
-      if (!text || chatBusy) return;
-      const requestedOptionId = chatRequestedLevel;
-      const selectionRevision = chatSelectionRevision;
-      if (requestedOptionId && chatConfirmedLevel !== requestedOptionId && chatModelApplyPromise) {
-        chatBusy = true; updateSend();
-        try { await chatModelApplyPromise; }
-        finally { chatBusy = false; updateSend(); }
-      }
-      if (chatRequestedLevel !== requestedOptionId) {
-        $('chat-error').textContent = '선택한 ChatGPT 설정이 확인되지 않아 전송하지 않았습니다. 설정을 다시 확인해 주세요.';
-        $('chat-error').hidden = false;
-        return;
-      }
-      const id = 'chat-' + Date.now() + '-' + Math.random().toString(36).slice(2);
-      chatBusy = true;
-      $('chat-error').hidden = true;
-      chatMessages.push({id, role:'user', text});
-      $('welcome').hidden = true; $('activity').hidden = false;
-      drawMessages(); updateSend(); scrollLatest();
-      try {
-        const result = await call('chat.web.send', {operationId:id, sessionEpoch:chatConfirmedEpoch, conversationId:null,
-          text, requestedOptionId, selectionRevision});
-        if (result.status === 'not_sent') {
-          const rejected = new Error(result.reason || '선택한 ChatGPT 설정을 적용하지 못해 전송하지 않았습니다.');
-          rejected.delivery = 'not_sent'; throw rejected;
-        }
-        if (result.status === 'needs_reconciliation') {
-          const sent = chatMessages.find(message => message.id === id);
-          if (sent) Object.assign(sent, {status:'uncertain', conversationId:result.conversationId || '',
-            observedUserMessageId:result.observedUserMessageId || '', sentAtSeconds:result.sentAtSeconds || 0});
-          persistChatMessages();
-          $('chat-error').textContent = '전송 뒤 서버 저장을 확인하지 못했습니다. 다시 보내지 말고 서버 상태를 확인해 주세요. ' + (result.reason || '');
-          $('chat-error').hidden = false;
-          return;
-        }
-        if (result.operationId !== id || (requestedOptionId && result.uiConfirmedSetting !== requestedOptionId))
-          throw new Error('전송 작업과 ChatGPT 설정의 연결을 확인하지 못했습니다.');
-        if (!result.reply || !result.conversationId) throw new Error('ChatGPT 답변과 대화 저장을 확인하지 못했습니다.');
-        chatMessages.push({id:id + '-reply', role:'assistant', text:result.reply, model:result.model || ''});
-        chatModel = result.model || chatModel;
-        $('chat-model-summary').textContent = chatRequestedLevel;
-        try { localStorage.setItem('chat-web-model', chatModel); } catch {}
-        persistChatMessages();
-        if (chatMode && $('prompt').value === value) { $('prompt').value = ''; saveDraft(); }
-      } catch (error) {
-        const sent = chatMessages.find(message => message.id === id);
-        if (sent) sent.status = error.delivery === 'not_sent' ? 'not_sent' : 'uncertain';
-        persistChatMessages();
-        if (chatMode) { $('chat-error').textContent = '전송 또는 답변 저장 확인에 실패했습니다. 같은 메시지를 다시 보내기 전에 웹 대화를 확인해 주세요. ' + error.message; $('chat-error').hidden = false; }
-        throw error;
-      } finally {
-        chatBusy = false;
-        if (chatMode) { $('activity').hidden = true; drawMessages(); renderReconcileAction(); sizeComposer(); }
-      }
-      return;
-    }
     if ((!text && !draftContext.attachments.length) || sending || voiceStarting || voiceActive) return;
     const steer = !!state.busy, expectedTurnId = state.turnId || '', expectedThreadId = state.threadId || '', workspaceKey = state.workspace?.key || '';
     const submitted = {value, context:JSON.parse(JSON.stringify(draftContext)), scopes:new Set([draftScope])}; sending = submitted;
@@ -1810,41 +1591,15 @@
     }
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); $('composer').requestSubmit(); }
   });
-  on('chat-reconcile', async () => {
-    if (chatBusy || !chatMode) return;
-    const sent = [...chatMessages].reverse().find(message => message.role === 'user' &&
-      message.status === 'uncertain' && message.conversationId);
-    if (!sent) return;
-    chatBusy = true; renderReconcileAction();
-    try {
-      const result = await call('chat.web.reconcile', {operationId:sent.id, text:sent.text,
-        conversationId:sent.conversationId, sentAtSeconds:sent.sentAtSeconds || 0,
-        observedUserMessageId:sent.observedUserMessageId || ''});
-      if (result.status === 'needs_reconciliation') {
-        $('chat-error').textContent = '서버 저장 상태를 아직 확인하지 못했습니다. ' + (result.reason || '');
-        $('chat-error').hidden = false;
-        return;
-      }
-      if (result.operationId !== sent.id || !result.reply || result.conversationId !== sent.conversationId)
-        throw new Error('기록된 전송과 서버 답변의 연결을 확인하지 못했습니다.');
-      sent.status = 'confirmed';
-      if (!chatMessages.some(message => message.id === sent.id + '-reply'))
-        chatMessages.push({id:sent.id + '-reply', role:'assistant', text:result.reply, model:result.model || ''});
-      persistChatMessages(); drawMessages(); $('chat-error').hidden = true;
-    } catch (error) {
-      $('chat-error').textContent = '서버 상태 재확인 실패: ' + error.message;
-      $('chat-error').hidden = false;
-    } finally { chatBusy = false; renderReconcileAction(); }
-  });
-  let autocompleteTimer; $('prompt').addEventListener('input', () => { saveDraft(); sizeComposer(); clearTimeout(autocompleteTimer); hideAutocomplete(); if (chatMode) return; if (/[@$]$/.test($('prompt').value.slice(0, $('prompt').selectionStart))) queryAutocomplete(); else autocompleteTimer = setTimeout(queryAutocomplete, 120); });
+  let autocompleteTimer; $('prompt').addEventListener('input', () => { saveDraft(); sizeComposer(); clearTimeout(autocompleteTimer); hideAutocomplete(); if (/[@$]$/.test($('prompt').value.slice(0, $('prompt').selectionStart))) queryAutocomplete(); else autocompleteTimer = setTimeout(queryAutocomplete, 120); });
   $('prompt').addEventListener('focus', () => { if (following) frame(scrollLatest); });
   $('composer').addEventListener('focusin', () => $('composer').classList.add('composer-expanded'));
-  $('composer').addEventListener('focusout', () => frame(() => { if (!chatMode && !composerPinned && !$('composer').contains(document.activeElement)) $('composer').classList.remove('composer-expanded'); }));
+  $('composer').addEventListener('focusout', () => frame(() => { if (!$('composer').contains(document.activeElement)) $('composer').classList.remove('composer-expanded'); }));
   $('composer').addEventListener('click', e => { if (! $('composer').classList.contains('composer-expanded') && e.target === $('composer')) $('prompt').focus(); });
-  $('prompt').addEventListener('click', () => { if (!chatMode) queryAutocomplete(); });
+  $('prompt').addEventListener('click', queryAutocomplete);
   $('chat-scroll').addEventListener('scroll', () => {
     const area = $('chat-scroll'); following = area.scrollHeight - area.scrollTop - area.clientHeight < 80;
-    $('jump-latest').hidden = following || !(chatMode ? chatMessages.length : state.messages.length);
+    $('jump-latest').hidden = following || !state.messages.length;
   }, {passive:true});
   on('voice-input', startVoiceInput);
   on('dictation-done', () => call('voice.stop'));
@@ -1868,8 +1623,6 @@
   on('approval-mode', () => setApprovalMode($('approval-mode').value), 'change');
   document.querySelectorAll('input[name="permission"]').forEach(r => r.addEventListener('change', () => setPermissionMode(r.value).catch(error => toast(error.message))));
   ensureCharacterPackUi(); ensureNotificationSettings(); ensureChatLoginUi();
-  // Ordinary Chat now lives in the official WebView; old local transcripts remain stored.
-  localStorage.setItem('conversation-mode', 'codex');
   on('connect', () => startLogin(false)); on('account-button', openAccountSettings); on('settings', () => { ensureCharacterPackUi(); ensureNotificationSettings(); show('settings-dialog'); sidebar(false); if (!characterState.folderConfigured && characterState.packs.length <= 1) loadCharacterPacks(); });
   document.querySelectorAll('[data-settings-tab]').forEach(tab => tab.addEventListener('click', () => {
     const selected = tab.dataset.settingsTab; selectSettingsTab(selected);

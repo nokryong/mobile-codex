@@ -832,36 +832,8 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-vis
 .mode-switch button{flex:1;min-width:0;min-height:44px;border-radius:999px;padding:6px 10px;font-size:12px;font-weight:600;color:var(--muted)}
 .topbar-left{flex:1;min-width:0;max-width:none}
 .mode-switch button[aria-pressed="true"]{background:var(--bg);color:var(--text);box-shadow:0 1px 5px #0002}
-.chat-error{max-width:780px;margin:12px auto;padding:12px 15px;border:1px solid var(--danger);border-radius:12px;color:var(--danger);background:var(--bg);font-size:13px;line-height:1.6;overflow-wrap:anywhere}
-.chat-reconcile{display:block;max-width:780px;margin:8px auto 12px}
-.chat-reconcile[hidden]{display:none}
-body.chat-mode #files-toggle,body.chat-mode #composer-folder,body.chat-mode #composer-options,body.chat-mode #approval-mode,body.chat-mode #add-attachment,body.chat-mode #stop,body.chat-mode #onboarding,body.chat-mode #suggestions,body.chat-mode #draft-context,body.chat-mode #autocomplete,body.chat-mode #projects,body.chat-mode #sessions,body.chat-mode .sidebar-scroll>.section-title{display:none!important}
-body.chat-mode #chat-model-settings{display:flex!important}
-body:not(.chat-mode) #chat-model-settings{display:none!important}
-/* Keep the two modes' navigation and account controls distinct. */
-#chat-sidebar,#chat-login{display:none!important}
-body.chat-mode #chat-sidebar{display:block!important}
-body.chat-mode #chat-login{display:flex!important}
-body.chat-mode #show-tools,body.chat-mode #account-button{display:none!important}
-.chat-model-sheet{width:min(520px,100%);max-width:100%;margin:auto auto 0;padding:22px 24px calc(24px + env(safe-area-inset-bottom));border-radius:28px 28px 0 0;text-align:center}
-.chat-model-sheet .dialog-head{justify-content:center;position:relative;margin:4px 0 28px}
-.chat-model-sheet .dialog-head h2{font-size:22px;font-weight:600}
-.chat-model-track{position:relative;height:76px}
-#chat-model-slider{appearance:none;-webkit-appearance:none;position:absolute;inset:0;width:100%;height:76px;margin:0;border:10px solid var(--bg);border-radius:999px;background:linear-gradient(to right,#3b82f6 var(--chat-progress,50%),var(--pill) var(--chat-progress,50%));cursor:pointer;z-index:1}
-#chat-model-slider::-webkit-slider-thumb{appearance:none;-webkit-appearance:none;width:64px;height:64px;border:5px solid #3b82f6;border-radius:50%;background:#fff;box-shadow:0 1px 4px #0002}
-#chat-model-slider:disabled{cursor:wait;opacity:.6}
-.chat-model-ticks{position:absolute;inset:0 42px;display:flex;align-items:center;justify-content:space-between;pointer-events:none;z-index:2}
-.chat-model-ticks i{width:12px;height:12px;border-radius:50%;background:#b9bdc3}
-.chat-model-ticks i[data-active="true"]{background:#78adfb}
-#chat-model-status:empty{display:none}
-#chat-model-status{min-height:22px;margin:16px 0 0;font-size:12px;line-height:1.5}
-@media(max-width:760px){.chat-model-sheet{width:100%;padding:18px 20px calc(20px + env(safe-area-inset-bottom))}.chat-model-track,#chat-model-slider{height:68px}#chat-model-slider::-webkit-slider-thumb{width:58px;height:58px}}
-
 /* Long user messages keep their complete text; only their visible height changes. */
 .user-message-text { white-space:pre-wrap; overflow-wrap:anywhere; }
-.user-message-text.is-collapsed { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:8; overflow:hidden; max-height:14em; }
-.user-message-toggle { display:block; min-height:44px; padding:8px 0 0; font-size:12px; color:var(--muted); text-decoration:underline; text-underline-offset:3px; }
-.user-message-toggle:focus-visible { outline:2px solid var(--focus); outline-offset:3px; border-radius:4px; }
 
 /* Sidebar navigation stays in one scroll region beneath the fixed identity row. */
 .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
@@ -963,9 +935,6 @@ body.chat-mode #show-tools,body.chat-mode #account-button{display:none!important
 .model-choice { gap:8px; padding:7px 10px; }
 .model-choice strong { font-size:14px; }
 .model-choice small { font-size:12px; }
-.chat-error { margin-top:8px; margin-bottom:8px; padding-top:8px; padding-bottom:8px; font-size:14px; }
-.chat-reconcile { margin-top:6px; margin-bottom:8px; }
-.chat-reconcile:not([hidden]) { min-height:40px; }
 .dialog-head { gap:10px; }
 .muted { font-size:13px; line-height:1.55; }
 .dialog:not(.sheet-dialog):not(.settings-dialog):not(.editor-dialog) { padding-top:14px; padding-bottom:14px; }
@@ -992,18 +961,10 @@ body.chat-mode #show-tools,body.chat-mode #account-button{display:none!important
 .account-runtime-actions { gap:6px; margin-top:12px; }
 .file-entry .file-row { padding-top:6px; padding-bottom:6px; }
 .file-row { min-height:38px; }
-.chat-model-sheet .dialog-head { gap:10px; }
 .primary-button,.secondary-button { min-height:40px; padding:8px 13px; font-size:14px; }
 .settings-row { padding:8px 0; }
 .dialog-head { margin-bottom:12px; }
-.chat-model-sheet { padding:16px 18px calc(16px + env(safe-area-inset-bottom)); }
-.chat-model-sheet .dialog-head { margin:0 0 14px; }
-.chat-model-sheet .dialog-head h2 { font-size:20px; }
-.chat-model-track,#chat-model-slider { height:68px; }
-#chat-model-slider::-webkit-slider-thumb { width:56px; height:56px; }
-#chat-model-status { min-height:20px; margin:8px 0 0; font-size:13px; }
 @media(max-width:760px) {
-  .chat-model-sheet { padding:14px 16px calc(14px + env(safe-area-inset-bottom)); }
   .topbar { height:52px; }
   .chat-scroll { padding-top:calc(var(--header-height) + 12px); padding-bottom:10px; }
   .welcome { margin-top:clamp(18px,5vh,48px); margin-bottom:16px; }

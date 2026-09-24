@@ -50,8 +50,6 @@ public final class MainActivity extends Activity implements Engine.Ui {
     private static final int PICK_FOLDER = 31, EXPORT_RECOVERY = 32, IMPORT_SKILL = 33, EXPORT_IMAGE = 34, PICK_ATTACHMENTS = 35, EXPORT_ATTACHMENT = 36, INSTALL_UPDATE = 37, PICK_CHARACTERS = 38;
     private WebView web;
     private SafeWebViewLayout root;
-    private ChatWebTransport chatWeb;
-    private boolean chatWebLoginOpened;
     private boolean keyboardVisible;
     private String theme = "system";
     private Engine engine;
@@ -166,7 +164,7 @@ public final class MainActivity extends Activity implements Engine.Ui {
         return new WebResourceResponse("text/plain", "UTF-8", 403, "Forbidden", Map.of(), new ByteArrayInputStream(new byte[0]));
     }
     @Override protected void onStart() { super.onStart(); if (loaded) engine.attach(this); }
-    @Override protected void onResume() { super.onResume(); AppLanguage.configure(this); foreground = true; getSharedPreferences("notifications", 0).edit().putBoolean("foreground", true).commit(); requestNotificationPermissionIfNeeded(); event("notifications.changed", obj()); event("updates.changed", updates.snapshot()); if (loaded) engine.attach(this); event("voice.changed", obj()); if (chatWebLoginOpened && chatWeb != null) chatWeb.reloadIfIdle(); chatWebLoginOpened = false; }
+    @Override protected void onResume() { super.onResume(); AppLanguage.configure(this); foreground = true; getSharedPreferences("notifications", 0).edit().putBoolean("foreground", true).commit(); requestNotificationPermissionIfNeeded(); event("notifications.changed", obj()); event("updates.changed", updates.snapshot()); if (loaded) engine.attach(this); event("voice.changed", obj()); }
     @Override protected void onPause() { foreground = false; getSharedPreferences("notifications", 0).edit().putBoolean("foreground", false).commit(); if (dictation != null && !dictation.waitingPermission()) dictation.cancel(); super.onPause(); }
     @Override protected void onNewIntent(Intent intent) { super.onNewIntent(intent); setIntent(intent); handleNotificationIntent(intent); }
     private void handleNotificationIntent(Intent intent) {
@@ -187,12 +185,7 @@ public final class MainActivity extends Activity implements Engine.Ui {
         if (dictation != null) dictation.cancel();
         engine.detach(this);
         if (approvalDialog != null) approvalDialog.dismiss();
-        if (chatWeb != null) chatWeb.destroy();
         web.removeJavascriptInterface("Native"); web.destroy(); super.onDestroy();
-    }
-    private ChatWebTransport chatWeb() {
-        if (chatWeb == null) chatWeb = new ChatWebTransport(this, root);
-        return chatWeb;
     }
     @Override public void onBackPressed() { handleBack(); }
     private void handleBack() {
@@ -554,49 +547,6 @@ public final class MainActivity extends Activity implements Engine.Ui {
                         try { startActivity(new Intent(MainActivity.this, ChatWebActivity.class).addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)); respond(id, obj("ok", true), null); }
                         catch (Exception e) { respond(id, null, e); }
                     }); return;
-                }
-                if (action.equals("chat.web.prepare")) {
-                    runOnUiThread(() -> { try { chatWeb(); respond(id, obj("ok", true, "debug", BuildConfig.DEBUG, "buildSha", BuildConfig.SOURCE_SHA), null); }
-                        catch (Exception e) { respond(id, null, e); } }); return;
-                }
-                if (action.equals("chat.web.diagnostic")) {
-                    runOnUiThread(() -> { try {
-                        if (!BuildConfig.DEBUG) throw new IllegalStateException("진단 화면은 debug 빌드에서만 사용할 수 있습니다.");
-                        chatWeb().diagnostic((result, error) -> respond(id, result, error));
-                    } catch (Exception e) { respond(id, null, e); } }); return;
-                }
-                if (action.equals("chat.web.new")) {
-                    runOnUiThread(() -> { try { chatWeb().newChat(); respond(id, obj("ok", true), null); }
-                        catch (Exception e) { respond(id, null, e); } }); return;
-                }
-                if (action.equals("chat.web.send")) {
-                    String text = args.getString("text");
-                    String option = args.optString("requestedOptionId", "");
-                    String operationId = args.optString("operationId", "");
-                    long revision = args.optLong("selectionRevision", 0);
-                    long expectedEpoch = args.isNull("sessionEpoch") ? 0 : args.optLong("sessionEpoch", 0);
-                    runOnUiThread(() -> { try { chatWeb().send(text, option, operationId, revision, expectedEpoch,
-                        (result, error) -> respond(id, result, error)); }
-                        catch (Exception e) { respond(id, null, e); } }); return;
-                }
-                if (action.equals("chat.web.reconcile")) {
-                    String operationId = args.getString("operationId");
-                    String text = args.getString("text");
-                    String conversationId = args.getString("conversationId");
-                    String observedUserId = args.optString("observedUserMessageId", "");
-                    long sentAt = args.optLong("sentAtSeconds", 0);
-                    runOnUiThread(() -> { try { chatWeb().reconcile(operationId, text, conversationId, sentAt, observedUserId,
-                        (result, error) -> respond(id, result, error)); }
-                        catch (Exception e) { respond(id, null, e); } }); return;
-                }
-                if (action.equals("chat.web.modelState")) {
-                    runOnUiThread(() -> { try { chatWeb().modelState((result, error) -> respond(id, result, error)); }
-                        catch (Exception e) { respond(id, null, e); } }); return;
-                }
-                if (action.equals("chat.web.selectModel")) {
-                    String level = args.getString("level");
-                    runOnUiThread(() -> { try { chatWeb().selectModel(level, (result, error) -> respond(id, result, error)); }
-                        catch (Exception e) { respond(id, null, e); } }); return;
                 }
                 if (action.equals("ui.storageAccess")) {
                     runOnUiThread(() -> {

@@ -41,7 +41,7 @@ test('every wired control exists and initial state renders safely',async()=>{
  assert.match(w.document.getElementById('messages').textContent,/<script>/);
  assert.equal(w.document.getElementById('project-label').textContent,'Project');
 });
-test('account and Chat sidebar open official sign-in without experiment controls',async()=>{
+test('account settings open official Chat sign-in without experiment controls',async()=>{
  const {w,calls}=setup();await tick();
  const button=w.document.getElementById('chat-account-login');
  assert.ok(button);
@@ -49,8 +49,7 @@ test('account and Chat sidebar open official sign-in without experiment controls
  assert.equal(calls.filter(call=>call.action==='ui.chatLogin').length,1);
  assert.ok(w.document.querySelector('[data-settings-panel="account"] #chat-account-login'));
  assert.doesNotMatch(w.document.body.textContent,/전송 실험|동작은 아직 검증되지 않았습니다/);
- w.document.getElementById('chat-login').click();await tick();
- assert.equal(calls.filter(call=>call.action==='ui.chatLogin').length,2);
+ assert.equal(w.document.getElementById('chat-login'),null);
 });
 test('submit is cancelled synchronously and calls native with chosen model and effort',async()=>{
  const {w,calls}=setup();await tick();w.document.getElementById('prompt').value='실제 파일 수정';
@@ -58,8 +57,8 @@ test('submit is cancelled synchronously and calls native with chosen model and e
  assert.equal(e.defaultPrevented,true);await tick();
  assert.equal(calls.find(m=>m.action==='chat.send').args.text,'실제 파일 수정');
 });
-test('Chat opens official WebView without replacing Codex state, draft or model',async()=>{
- const {w,calls,snapshot}=setup();await tick();
+test('Chat opens official WebView without importing old local replies or replacing Codex state',async()=>{
+ const {w,calls,snapshot}=setup({}, {drafts:{'chat-web-messages':JSON.stringify([{id:'old',role:'assistant',text:'Legacy Chat reply'}]),'chat-web-draft':'Legacy Chat draft'}});await tick();
  w.mobileCodexEvent('state',{...snapshot,busy:true,messages:[{id:'a',role:'assistant',text:'Codex answer'}]});
  const d=w.document;d.getElementById('prompt').value='Codex draft';
  d.getElementById('prompt').dispatchEvent(new w.Event('input'));
@@ -69,6 +68,8 @@ test('Chat opens official WebView without replacing Codex state, draft or model'
  assert.equal(d.getElementById('prompt').value,'Codex draft');
  assert.equal(d.body.classList.contains('chat-mode'),false);
  assert.match(d.getElementById('messages').textContent,/Codex answer/);
+ assert.doesNotMatch(d.getElementById('messages').textContent,/Legacy Chat reply/);
+ assert.equal(d.getElementById('chat-model-settings'),null);
  assert.equal(d.getElementById('mode-codex').getAttribute('aria-pressed'),'true');
  assert.ok(d.querySelector('.sidebar-top .brand + .mode-switch'));
  assert.equal(d.querySelector('.topbar .mode-switch'),null);
@@ -78,6 +79,19 @@ test('Chat opening failure leaves Codex usable and reports the failure',async()=
  w.document.getElementById('mode-chat').click();await tick();
  assert.equal(w.document.body.classList.contains('chat-mode'),false);
  assert.match(w.document.getElementById('toast').textContent,/open failed/);
+});
+test('packaged Chat surface has no native send, reply requery, or fetch observer',()=>{
+ const main=fs.readFileSync('app/src/main/java/dev/mobilecodex/app/MainActivity.java','utf8');
+ const app=fs.readFileSync(root+'app.js','utf8');
+ const web=fs.readFileSync('app/src/main/java/dev/mobilecodex/app/ChatWebActivity.java','utf8');
+ assert.equal(fs.existsSync('app/src/main/java/dev/mobilecodex/app/ChatWebTransport.java'),false);
+ assert.doesNotMatch(main,/chat\.web\.|ChatWebTransport/);
+ assert.doesNotMatch(app,/chat\.web\.|chat-web-messages|chat-web-draft/);
+ assert.doesNotMatch(web,/addJavascriptInterface|backend-api\/f\/conversation/);
+ for(const name of ['chat-web-custom.js','chat-icon-renderer.js']) {
+   const script=fs.readFileSync('app/src/main/assets/'+name,'utf8');
+   assert.doesNotMatch(script,/window\.fetch\s*=|XMLHttpRequest|backend-api\/f\/conversation/);
+ }
 });
 test('sidebar sections collapse independently and restore their state',async()=>{
  const {w,snapshot}=setup();await tick();const d=w.document;
