@@ -3,7 +3,10 @@ package dev.mobilecodex.app;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.net.Uri;
+import android.os.SystemClock;
+import android.view.InputDevice;
 import android.view.KeyEvent;
+import android.view.MotionEvent;
 import android.webkit.CookieManager;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
@@ -82,7 +85,18 @@ final class ChatWebTransport {
 
     private static String modelButtonScript() {
         return "[...document.querySelectorAll('button[aria-haspopup=menu]')]"
-            + ".find(e=>/^(Instant|Medium|High|X-High|Pro)$/.test((e.textContent||'').trim()))";
+            + ".find(e=>/^(Instant|Medium|High|X-High|Pro|즉시|빠름|중간|높음|매우 높음)$/.test((e.textContent||'').trim()))";
+    }
+
+    private static String normalizedLevel(String value) {
+        if (value == null) return "";
+        if (value.startsWith("매우 높음")) return "X-High";
+        if (value.startsWith("즉시") || value.startsWith("빠름")) return "Instant";
+        if (value.startsWith("중간")) return "Medium";
+        if (value.startsWith("높음")) return "High";
+        for (String level : MODEL_LEVELS)
+            if (value.startsWith(level)) return level;
+        return "";
     }
 
     void modelState(Done done) {
@@ -97,7 +111,7 @@ final class ChatWebTransport {
             return;
         }
         page.evaluateJavascript("(function(){const b=" + modelButtonScript() + ";return b?(b.textContent||'').trim():''})()", raw -> {
-            String level = jsString(raw);
+            String level = normalizedLevel(jsString(raw));
             if (modelIndex(level) < 0) {
                 if (attempt < 40) page.postDelayed(() -> readModelState(done, attempt + 1), 250);
                 else done.complete(null, new IllegalStateException("ChatGPT 웹의 모델 설정을 읽지 못했습니다. 로그인 상태를 확인해 주세요."));
@@ -124,16 +138,45 @@ final class ChatWebTransport {
         if (!pageLoaded) { page.postDelayed(() -> openModelSlider(target, done, attempt + 1, steps), 250); return; }
         String open = "(function(){const b=" + modelButtonScript() + ";"
             + "const s=document.querySelector('[role=slider],input[type=range]');"
-            + "if(!b)return 'missing';if((b.textContent||'').trim()===" + JSONObject.quote(target) + ")return 'selected';"
+            + "if(!b)return 'missing';const label=(b.textContent||'').trim();"
+            + "const current=({'즉시':'Instant','빠름':'Instant','중간':'Medium','높음':'High','매우 높음':'X-High'}[label]||label);"
+            + "if(current===" + JSONObject.quote(target) + ")return 'selected';"
             + "if(s)return 'slider';"
             + "if(b.getAttribute('aria-expanded')==='true'){"
-            + "if(" + attempt + "===12)b.click();return 'opening';}b.click();return 'clicked'})()";
+            + "if(" + attempt + "===12)b.click();return 'opening';}"
+            + "if(" + attempt + "===3){b.dispatchEvent(new PointerEvent('pointerdown',{button:0,pointerType:'mouse',bubbles:true,cancelable:true}));return 'pointer';}"
+            + "if(" + attempt + "%5!==0)return 'waiting';"
+            + "const r=b.getBoundingClientRect();return JSON.stringify({x:r.left+r.width/2,y:r.top+r.height/2,w:innerWidth,h:innerHeight})})()";
         page.evaluateJavascript(open, raw -> {
             String state = jsString(raw);
             if ("selected".equals(state)) { selectedModel(target, done); return; }
             if ("slider".equals(state)) { adjustModel(target, done, steps); return; }
+            if (state.startsWith("{")) {
+                try { tapModelButton(new JSONObject(state)); }
+                catch (Exception ignored) {}
+            }
             page.postDelayed(() -> openModelSlider(target, done, attempt + 1, steps), 250);
         });
+    }
+
+    private void tapModelButton(JSONObject bounds) {
+        double width = bounds.optDouble("w", 0), height = bounds.optDouble("h", 0);
+        if (width <= 0 || height <= 0 || page.getWidth() <= 0 || page.getHeight() <= 0) return;
+        float x = (float) (bounds.optDouble("x", -1) * page.getWidth() / width);
+        float y = (float) (bounds.optDouble("y", -1) * page.getHeight() / height);
+        if (x < 0 || y < 0 || x > page.getWidth() || y > page.getHeight()) return;
+        page.requestFocus();
+        long now = SystemClock.uptimeMillis();
+        MotionEvent down = MotionEvent.obtain(now, now, MotionEvent.ACTION_DOWN, x, y, 0);
+        down.setSource(InputDevice.SOURCE_TOUCHSCREEN);
+        page.dispatchTouchEvent(down);
+        down.recycle();
+        page.postDelayed(() -> {
+            MotionEvent up = MotionEvent.obtain(now, SystemClock.uptimeMillis(), MotionEvent.ACTION_UP, x, y, 0);
+            up.setSource(InputDevice.SOURCE_TOUCHSCREEN);
+            page.dispatchTouchEvent(up);
+            up.recycle();
+        }, 80);
     }
 
     private void adjustModel(String target, Done done, int steps) {
@@ -149,8 +192,8 @@ final class ChatWebTransport {
             try { state = new JSONObject(jsString(raw)); }
             catch (Exception error) { finishModel(done, null, new IllegalStateException("ChatGPT 모델 선택 상태를 읽지 못했습니다.")); return; }
             if ("slider_missing".equals(state.optString("error"))) { openModelSlider(target, done, 0, steps); return; }
-            String current = levelFromSlider(state.optString("value"));
-            if (current.isEmpty()) current = state.optString("button");
+            String current = normalizedLevel(state.optString("value"));
+            if (current.isEmpty()) current = normalizedLevel(state.optString("button"));
             int currentIndex = modelIndex(current);
             if (currentIndex < 0) { finishModel(done, null, new IllegalStateException("현재 ChatGPT 모델 단계를 확인하지 못했습니다.")); return; }
             if (target.equals(current)) {
@@ -166,13 +209,6 @@ final class ChatWebTransport {
                 page.postDelayed(() -> adjustModel(target, done, steps + 1), 300);
             });
         });
-    }
-
-    private static String levelFromSlider(String value) {
-        if (value == null) return "";
-        for (String level : MODEL_LEVELS)
-            if (value.startsWith(level)) return level;
-        return "";
     }
 
     private void selectedModel(String level, Done done) {
@@ -191,7 +227,7 @@ final class ChatWebTransport {
 
     private void verifyModelSelection(String level, Done done, int attempt) {
         page.evaluateJavascript("(function(){const b=" + modelButtonScript() + ";return b?(b.textContent||'').trim():''})()", raw -> {
-            if (level.equals(jsString(raw))) {
+            if (level.equals(normalizedLevel(jsString(raw)))) {
                 JSONObject result = new JSONObject();
                 try { result.put("level", level); } catch (Exception ignored) {}
                 modelChanging = false;
