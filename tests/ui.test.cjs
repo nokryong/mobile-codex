@@ -75,11 +75,13 @@ test('Chat switch routes the same composer to ordinary Chat and restores the Cod
  assert.match(d.getElementById('messages').textContent,/일반 Chat 질문.*일반 Chat 답변/s);
  assert.equal(d.getElementById('chat-sessions').textContent,'일반 Chat 질문');
  assert.equal(d.getElementById('chat-model-summary').textContent,'gpt-5-6-thinking');
+ w.mobileCodexEvent('state',{...snapshot,busy:true});
  d.getElementById('mode-codex').click();await tick();
  assert.equal(d.body.classList.contains('chat-mode'),false);
  assert.equal(d.getElementById('mode-codex').getAttribute('aria-pressed'),'true');
  assert.equal(d.getElementById('mode-chat').getAttribute('aria-pressed'),'false');
  assert.equal(d.getElementById('sidebar-brand-name').textContent,'Codex');
+ assert.equal(d.getElementById('activity-text').textContent,'Codex 답변 기다리는 중');
  assert.equal(d.getElementById('header-project').textContent,'Project');
  assert.equal(d.getElementById('chat-model-settings').hidden,true);
  assert.equal(d.getElementById('composer-options').hidden,false);

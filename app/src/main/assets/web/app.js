@@ -1091,6 +1091,8 @@
     $('pending-deletions').hidden = pendingDeletes === 0;
     $('pending-deletions').textContent = pendingDeletes ? t('원본 삭제 대기 {count}건. 아래 ‘Codex 시작 / 다시 연결’을 누르면 다시 시도합니다.', {count:pendingDeletes}) : '';
     $('send').hidden = false; $('stop').hidden = !state.busy; $('activity').hidden = !state.busy;
+    if (changedThread || !state.busy || $('activity-text').textContent.startsWith('ChatGPT'))
+      $('activity-text').textContent = 'Codex 답변 기다리는 중';
     if (!state.busy) activityIcon = 'thinking';
     drawStatusIcons();
     syncPermissionControls(state.permissions, !!state.busy);
