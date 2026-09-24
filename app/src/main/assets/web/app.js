@@ -842,6 +842,11 @@
     chatMessages = chatMessages.slice(-100);
     try { localStorage.setItem('chat-web-messages', JSON.stringify(chatMessages)); } catch { toast('Chat 대화의 기기 내 표시 기록을 저장하지 못했습니다.'); }
     renderChatSidebar();
+    renderReconcileAction();
+  }
+  function renderReconcileAction() {
+    $('chat-reconcile').hidden = !chatMode || chatBusy || !chatMessages.some(message =>
+      message.role === 'user' && message.status === 'uncertain' && message.conversationId);
   }
   function renderModeChrome() {
     document.body.classList.toggle('chat-mode', chatMode);
@@ -865,12 +870,12 @@
     row.append(current); list.append(row);
   }
   function renderChatModelSlider(level) {
-    const index = Math.max(0, chatLevels.indexOf(level));
+    const index = chatLevels.indexOf(level);
     const slider = $('chat-model-slider');
-    slider.value = String(index);
-    slider.style.setProperty('--chat-progress', `${index * 25}%`);
-    $('chat-model-level').textContent = `${chatLevels[index]} 추론 수준`;
-    document.querySelectorAll('.chat-model-ticks i').forEach((tick, i) => tick.dataset.active = String(i <= index));
+    if (index >= 0) slider.value = String(index);
+    slider.style.setProperty('--chat-progress', index >= 0 ? `${index * 25}%` : '0%');
+    $('chat-model-level').textContent = index >= 0 ? `${level} 추론 수준` : '추론 수준 확인되지 않음';
+    document.querySelectorAll('.chat-model-ticks i').forEach((tick, i) => tick.dataset.active = String(index >= 0 && i <= index));
   }
   async function openChatModelSlider() {
     if (chatBusy) throw new Error('ChatGPT 답변을 기다리는 중에는 모델을 바꿀 수 없습니다.');
@@ -888,6 +893,7 @@
       $('chat-model-slider').disabled = false;
     } catch (error) {
       chatConfirmedLevel = ''; chatConfirmedEpoch = null;
+      renderChatModelSlider('');
       $('chat-model-summary').textContent = '확인되지 않음';
       $('chat-model-status').textContent = `${error.message} 눈금을 선택하면 다시 시도합니다.`;
       $('chat-model-slider').disabled = false;
@@ -934,6 +940,7 @@
     $('stop').hidden = true;
     $('file-panel').hidden = true;
     $('chat-error').hidden = true;
+    renderReconcileAction();
     hideAutocomplete();
     renderDraftContext();
     drawMessages(); updateSend(); sizeComposer();
@@ -943,6 +950,7 @@
     if (chatMode === next) return;
     saveDraft();
     chatMode = next;
+    if (chatMode) { chatConfirmedLevel = ''; chatConfirmedEpoch = null; }
     composerPinned = true;
     try { localStorage.setItem('conversation-mode', chatMode ? 'chat' : 'codex'); } catch {}
     renderModeChrome();
@@ -950,7 +958,6 @@
     if (chatMode) {
       try { $('prompt').value = localStorage.getItem('chat-web-draft') || ''; } catch { $('prompt').value = ''; }
       renderChatMode();
-      chatConfirmedLevel = ''; chatConfirmedEpoch = null;
       call('chat.web.prepare').then(result => { $('chat-model-diagnostic').hidden = !result.debug; }).catch(error => toast(error.message));
     } else {
       $('chat-error').hidden = true;
@@ -1695,6 +1702,15 @@
           const rejected = new Error(result.reason || '선택한 ChatGPT 설정을 적용하지 못해 전송하지 않았습니다.');
           rejected.delivery = 'not_sent'; throw rejected;
         }
+        if (result.status === 'needs_reconciliation') {
+          const sent = chatMessages.find(message => message.id === id);
+          if (sent) Object.assign(sent, {status:'uncertain', conversationId:result.conversationId || '',
+            observedUserMessageId:result.observedUserMessageId || '', sentAtSeconds:result.sentAtSeconds || 0});
+          persistChatMessages();
+          $('chat-error').textContent = '전송 뒤 서버 저장을 확인하지 못했습니다. 다시 보내지 말고 서버 상태를 확인해 주세요. ' + (result.reason || '');
+          $('chat-error').hidden = false;
+          return;
+        }
         if (result.operationId !== id || (requestedOptionId && result.uiConfirmedSetting !== requestedOptionId))
           throw new Error('전송 작업과 ChatGPT 설정의 연결을 확인하지 못했습니다.');
         if (!result.reply || !result.conversationId) throw new Error('ChatGPT 답변과 대화 저장을 확인하지 못했습니다.');
@@ -1712,7 +1728,7 @@
         throw error;
       } finally {
         chatBusy = false;
-        if (chatMode) { $('activity').hidden = true; drawMessages(); sizeComposer(); }
+        if (chatMode) { $('activity').hidden = true; drawMessages(); renderReconcileAction(); sizeComposer(); }
       }
       return;
     }
@@ -1747,6 +1763,32 @@
       return;
     }
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); $('composer').requestSubmit(); }
+  });
+  on('chat-reconcile', async () => {
+    if (chatBusy || !chatMode) return;
+    const sent = [...chatMessages].reverse().find(message => message.role === 'user' &&
+      message.status === 'uncertain' && message.conversationId);
+    if (!sent) return;
+    chatBusy = true; renderReconcileAction();
+    try {
+      const result = await call('chat.web.reconcile', {operationId:sent.id, text:sent.text,
+        conversationId:sent.conversationId, sentAtSeconds:sent.sentAtSeconds || 0,
+        observedUserMessageId:sent.observedUserMessageId || ''});
+      if (result.status === 'needs_reconciliation') {
+        $('chat-error').textContent = '서버 저장 상태를 아직 확인하지 못했습니다. ' + (result.reason || '');
+        $('chat-error').hidden = false;
+        return;
+      }
+      if (result.operationId !== sent.id || !result.reply || result.conversationId !== sent.conversationId)
+        throw new Error('기록된 전송과 서버 답변의 연결을 확인하지 못했습니다.');
+      sent.status = 'confirmed';
+      if (!chatMessages.some(message => message.id === sent.id + '-reply'))
+        chatMessages.push({id:sent.id + '-reply', role:'assistant', text:result.reply, model:result.model || ''});
+      persistChatMessages(); drawMessages(); $('chat-error').hidden = true;
+    } catch (error) {
+      $('chat-error').textContent = '서버 상태 재확인 실패: ' + error.message;
+      $('chat-error').hidden = false;
+    } finally { chatBusy = false; renderReconcileAction(); }
   });
   let autocompleteTimer; $('prompt').addEventListener('input', () => { saveDraft(); sizeComposer(); clearTimeout(autocompleteTimer); hideAutocomplete(); if (chatMode) return; if (/[@$]$/.test($('prompt').value.slice(0, $('prompt').selectionStart))) queryAutocomplete(); else autocompleteTimer = setTimeout(queryAutocomplete, 120); });
   $('prompt').addEventListener('focus', () => { if (following) frame(scrollLatest); });

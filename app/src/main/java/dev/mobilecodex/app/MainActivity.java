@@ -574,7 +574,19 @@ public final class MainActivity extends Activity implements Engine.Ui {
                     String option = args.optString("requestedOptionId", "");
                     String operationId = args.optString("operationId", "");
                     long revision = args.optLong("selectionRevision", 0);
-                    runOnUiThread(() -> { try { chatWeb().send(text, option, operationId, revision, (result, error) -> respond(id, result, error)); }
+                    long expectedEpoch = args.isNull("sessionEpoch") ? 0 : args.optLong("sessionEpoch", 0);
+                    runOnUiThread(() -> { try { chatWeb().send(text, option, operationId, revision, expectedEpoch,
+                        (result, error) -> respond(id, result, error)); }
+                        catch (Exception e) { respond(id, null, e); } }); return;
+                }
+                if (action.equals("chat.web.reconcile")) {
+                    String operationId = args.getString("operationId");
+                    String text = args.getString("text");
+                    String conversationId = args.getString("conversationId");
+                    String observedUserId = args.optString("observedUserMessageId", "");
+                    long sentAt = args.optLong("sentAtSeconds", 0);
+                    runOnUiThread(() -> { try { chatWeb().reconcile(operationId, text, conversationId, sentAt, observedUserId,
+                        (result, error) -> respond(id, result, error)); }
                         catch (Exception e) { respond(id, null, e); } }); return;
                 }
                 if (action.equals("chat.web.modelState")) {

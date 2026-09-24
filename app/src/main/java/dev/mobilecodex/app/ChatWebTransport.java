@@ -16,6 +16,8 @@ import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
 import org.json.JSONArray;
 import org.json.JSONObject;
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 
 /** Keeps the ordinary ChatGPT web session behind the packaged Mobile Codex UI. */
@@ -25,6 +27,7 @@ final class ChatWebTransport {
     private final Activity activity;
     private final WebView page;
     private final String modelDomSource;
+    private final String requerySource;
     private Done pending;
     private String submittedText = "";
     private boolean clicked;
@@ -47,14 +50,22 @@ final class ChatWebTransport {
     private String requestedOptionId = "";
     private String uiConfirmedOptionId = "";
     private long selectionRevision;
+    private long sendGeneration;
+    private String lastConversationId = "";
+    private String sendObservedUserId = "";
 
     @SuppressLint("SetJavaScriptEnabled")
     ChatWebTransport(Activity activity, FrameLayout root) {
         this.activity = activity;
         try (var source = activity.getAssets().open("chat-model-dom.js")) {
-            modelDomSource = new String(source.readAllBytes(), StandardCharsets.UTF_8);
+            modelDomSource = readAsset(source);
         } catch (Exception error) {
             throw new IllegalStateException("Chat 모델 제어 코드를 읽지 못했습니다.", error);
+        }
+        try (var source = activity.getAssets().open("chat-requery.js")) {
+            requerySource = readAsset(source);
+        } catch (Exception error) {
+            throw new IllegalStateException("Chat 재조회 코드를 읽지 못했습니다.", error);
         }
         page = new WebView(activity);
         WebSettings settings = page.getSettings();
@@ -76,7 +87,10 @@ final class ChatWebTransport {
             }
             @Override public void onPageFinished(WebView view, String url) {
                 pageLoaded = "chatgpt.com".equals(Uri.parse(url).getHost());
-                if (pending != null && !clicked && !inserting) page.postDelayed(() -> insert(0), 350);
+                if (pending != null && !clicked && !inserting) {
+                    long generation = sendGeneration;
+                    page.postDelayed(() -> insert(0, generation), 350);
+                }
             }
             @Override public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
                 sessionEpoch++;
@@ -87,6 +101,14 @@ final class ChatWebTransport {
         root.addView(page, 0, new FrameLayout.LayoutParams(-1, -1));
         String saved = activity.getSharedPreferences("general-chat", 0).getString("url", "");
         page.loadUrl(conversationId(saved).isEmpty() ? "https://chatgpt.com/" : saved);
+    }
+
+    private static String readAsset(InputStream source) throws java.io.IOException {
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        byte[] buffer = new byte[4096];
+        int count;
+        while ((count = source.read(buffer)) != -1) bytes.write(buffer, 0, count);
+        return new String(bytes.toByteArray(), StandardCharsets.UTF_8);
     }
 
     void reloadIfIdle() {
@@ -420,13 +442,21 @@ final class ChatWebTransport {
         }, 80);
     }
 
-    void send(String text, String requestedOption, String operationId, long revision, Done done) {
+    void send(String text, String requestedOption, String operationId, long revision,
+              long expectedEpoch, Done done) {
         if (text == null || text.trim().isEmpty()) { done.complete(null, new IllegalArgumentException("메시지를 입력해 주세요.")); return; }
         if (!requestedOption.isEmpty() && modelIndex(requestedOption) < 0) {
             done.complete(null, new IllegalArgumentException("지원하지 않는 Chat 옵션입니다.")); return;
         }
         if (pending != null || modelChanging) {
             done.complete(null, new IllegalStateException("Chat 작업이 진행 중입니다.")); return;
+        }
+        if (expectedEpoch > 0 && expectedEpoch != sessionEpoch) {
+            JSONObject rejected = new JSONObject();
+            try { rejected.put("status", "not_sent"); rejected.put("operationId", operationId);
+                rejected.put("reason", "웹 세션이 바뀌어 ChatGPT 설정을 다시 확인해야 합니다."); }
+            catch (Exception ignored) {}
+            done.complete(rejected, null); return;
         }
         if (!requestedOption.isEmpty()) {
             selectModel(requestedOption, (state, error) -> {
@@ -460,17 +490,23 @@ final class ChatWebTransport {
         submittedText = text.trim();
         sendStartedAt = System.currentTimeMillis() / 1000;
         lastDiagnostic = "";
+        lastConversationId = "";
+        sendObservedUserId = "";
         clicked = false;
         inserting = false;
-        deadline = System.currentTimeMillis() + 600_000;
-        insert(0);
+        deadline = SystemClock.elapsedRealtime() + 600_000;
+        insert(0, ++sendGeneration);
     }
 
-    private void insert(int attempt) {
-        if (pending == null || clicked || inserting) return;
+    private boolean liveSend(long generation) {
+        return pending != null && sendGeneration == generation && !destroyed;
+    }
+
+    private void insert(int attempt, long generation) {
+        if (!liveSend(generation) || clicked || inserting) return;
         if (expired()) { finish(null, new IllegalStateException("ChatGPT 입력창을 찾지 못했습니다. 웹 로그인 상태를 확인해 주세요.")); return; }
         String host = Uri.parse(page.getUrl() == null ? "" : page.getUrl()).getHost();
-        if (!"chatgpt.com".equals(host) || !pageLoaded) { retry(() -> insert(attempt + 1), attempt, 40, "ChatGPT 로그인이 필요합니다."); return; }
+        if (!"chatgpt.com".equals(host) || !pageLoaded) { retry(() -> insert(attempt + 1, generation), attempt, 40, "ChatGPT 로그인이 필요합니다."); return; }
         String script = "(function(){" + sendObserverScript()
             + "const e=document.querySelector('#prompt-textarea,[data-testid=\"prompt-textarea\"]');"
             + "if(!e)return 'missing';if((e.value||e.textContent||'').trim())return 'not_empty';e.focus();"
@@ -478,18 +514,19 @@ final class ChatWebTransport {
             + "return ok&&(e.value||e.textContent||'').trim()?'inserted':'failed'})()";
         inserting = true;
         page.evaluateJavascript(script, raw -> {
+            if (!liveSend(generation)) return;
             inserting = false;
-            if (pending == null || clicked) return;
+            if (clicked) return;
             String outcome = jsString(raw);
-            if ("inserted".equals(outcome)) { page.postDelayed(() -> click(0), 200); return; }
-            if ("missing".equals(outcome)) { retry(() -> insert(attempt + 1), attempt, 40, "ChatGPT 웹 입력창을 찾지 못했습니다. 웹 로그인/모델 설정을 열어 확인해 주세요."); return; }
+            if ("inserted".equals(outcome)) { page.postDelayed(() -> click(0, generation), 200); return; }
+            if ("missing".equals(outcome)) { retry(() -> insert(attempt + 1, generation), attempt, 40, "ChatGPT 웹 입력창을 찾지 못했습니다. 웹 로그인/모델 설정을 열어 확인해 주세요."); return; }
             finish(null, new IllegalStateException("웹 입력 실패: " + outcome));
         });
     }
 
     /** Observes only the official client's request outcome and conversation ID, never credentials or proofs. */
     static String sendObserverScript() {
-        return "window.__mcChatObserved={id:'',sendStatus:0,prepareStatus:0,active:false};"
+        return "window.__mcChatObserved={id:'',userMessageId:'',parentMessageId:'',sendStatus:0,prepareStatus:0,active:false};"
             + "if(!window.__mcChatFetchObserved){const original=window.fetch;"
             + "window.fetch=function(input,init){const result=original.apply(this,arguments);try{"
             + "const u=new URL(typeof input==='string'?input:input.url,location.href);"
@@ -498,33 +535,36 @@ final class ChatWebTransport {
             + "&&(u.pathname==='/backend-api/f/conversation'||u.pathname==='/backend-api/f/conversation/prepare')){"
             + "const observed=window.__mcChatObserved,prepare=u.pathname.endsWith('/prepare');"
             + "if(!observed||!observed.active)return result;"
-            + "const record=body=>{try{const id=JSON.parse(body).conversation_id;"
-            + "if(typeof id==='string'&&/^[0-9a-fA-F-]{36}$/.test(id))observed.id=id;}catch(e){}};"
+            + "const record=body=>{try{const data=JSON.parse(body),id=data.conversation_id;"
+            + "if(typeof id==='string'&&/^[0-9a-fA-F-]{36}$/.test(id))observed.id=id;"
+            + "const user=data.messages&&data.messages[0];"
+            + "if(user&&user.author&&user.author.role==='user'&&typeof user.id==='string'&&/^[0-9a-fA-F-]{36}$/.test(user.id))observed.userMessageId=user.id;"
+            + "if(typeof data.parent_message_id==='string'&&/^[0-9a-fA-F-]{36}$/.test(data.parent_message_id))observed.parentMessageId=data.parent_message_id;}catch(e){}};"
             + "if(init&&typeof init.body==='string')record(init.body);"
             + "else if(typeof Request!=='undefined'&&input instanceof Request)input.clone().text().then(record).catch(()=>{});"
             + "result.then(r=>{if(prepare)observed.prepareStatus=r.status;else observed.sendStatus=r.status;}).catch(()=>{});"
             + "}}catch(e){}return result;};window.__mcChatFetchObserved=true;}";
     }
 
-    private void click(int attempt) {
-        if (pending == null || clicked) return;
+    private void click(int attempt, long generation) {
+        if (!liveSend(generation) || clicked) return;
         String script = "(function(){const b=document.querySelector('#composer-submit-button,[data-testid=\"send-button\"]');"
             + "if(!b)return 'missing';if(b.disabled||b.getAttribute('aria-disabled')==='true')return 'disabled';"
             + "if(window.__mcChatObserved)window.__mcChatObserved.active=true;b.click();return 'clicked'})()";
         page.evaluateJavascript(script, raw -> {
-            if (pending == null || clicked) return;
+            if (!liveSend(generation) || clicked) return;
             String outcome = jsString(raw);
-            if ("clicked".equals(outcome)) { clicked = true; page.postDelayed(() -> requery(0), 700); return; }
-            if ("disabled".equals(outcome) || "missing".equals(outcome)) { retry(() -> click(attempt + 1), attempt, 30, "ChatGPT 전송 버튼을 누르지 못했습니다."); return; }
+            if ("clicked".equals(outcome)) { clicked = true; page.postDelayed(() -> requery(0, generation), 700); return; }
+            if ("disabled".equals(outcome) || "missing".equals(outcome)) { retry(() -> click(attempt + 1, generation), attempt, 30, "ChatGPT 전송 버튼을 누르지 못했습니다."); return; }
             finish(null, new IllegalStateException("웹 전송 실패: " + outcome));
         });
     }
 
-    private void requery(int attempt) {
-        if (pending == null) return;
+    private void requery(int attempt, long generation) {
+        if (!liveSend(generation)) return;
         if (expired()) { finish(null, new IllegalStateException("전송 후 답변 저장을 확인하지 못했습니다. 같은 메시지를 다시 보내기 전에 웹 대화를 확인해 주세요.")); return; }
         String inspect = "(function(){const observed=window.__mcChatObserved||{};return JSON.stringify({path:location.pathname,"
-            + "observedId:observed.id||'',sendStatus:observed.sendStatus||0,prepareStatus:observed.prepareStatus||0,"
+            + "observedId:observed.id||'',userMessageId:observed.userMessageId||'',sendStatus:observed.sendStatus||0,prepareStatus:observed.prepareStatus||0,"
             + "visibility:document.visibilityState,ready:document.readyState,"
             + "users:document.querySelectorAll('[data-message-author-role=user]').length,"
             + "assistants:document.querySelectorAll('[data-message-author-role=assistant]').length,"
@@ -532,7 +572,7 @@ final class ChatWebTransport {
             + "network:performance.getEntriesByType('resource').filter(x=>x.name.includes('/backend-api/conversation')).slice(-3)"
             + ".map(x=>({kind:new URL(x.name).pathname.includes('/conversation/')?'read':'send',status:x.responseStatus||0}))})})()";
         page.evaluateJavascript(inspect, raw -> {
-            if (pending == null) return;
+            if (!liveSend(generation)) return;
             JSONObject evidence;
             try { evidence = new JSONObject(jsString(raw)); }
             catch (Exception ignored) { evidence = new JSONObject(); }
@@ -540,6 +580,13 @@ final class ChatWebTransport {
             String id = conversationId("https://chatgpt.com" + path);
             if (id.isEmpty()) id = conversationId(page.getUrl());
             if (id.isEmpty()) id = conversationId("https://chatgpt.com/c/" + evidence.optString("observedId", ""));
+            if (!id.isEmpty()) {
+                lastConversationId = id;
+                activity.getSharedPreferences("general-chat", 0).edit()
+                    .putString("url", "https://chatgpt.com/c/" + id).apply();
+            }
+            String observedUserId = evidence.optString("userMessageId", "");
+            if (!observedUserId.isEmpty()) sendObservedUserId = observedUserId;
             lastDiagnostic = "화면=" + (id.isEmpty() ? ("/".equals(path) ? "첫 화면" : "기타") : "대화")
                 + ", 사용자=" + evidence.optInt("users", -1) + ", 답변=" + evidence.optInt("assistants", -1)
                 + ", 표시=" + evidence.optString("visibility", "?") + ", 준비=" + evidence.optString("ready", "?")
@@ -553,55 +600,56 @@ final class ChatWebTransport {
                 return;
             }
             // The official client can emit /f/conversation/prepare only after a slow model finishes.
-            if (id.isEmpty()) { retry(() -> requery(attempt + 1), attempt, 1200, "대화 주소를 찾지 못했습니다."); return; }
-            String script = requeryScript(id, submittedText, sendStartedAt);
+            if (id.isEmpty()) { retry(() -> requery(attempt + 1, generation), attempt, 1200, "대화 주소를 찾지 못했습니다."); return; }
+            String script = requeryScript(id, submittedText, sendStartedAt, sendOperationId,
+                sendObservedUserId, requerySource);
             final String foundId = id;
-            page.evaluateJavascript(script, ignored -> pollResult(attempt, 0, foundId));
+            page.evaluateJavascript(script, ignored -> pollResult(attempt, 0, foundId, generation));
         });
     }
 
-    private void pollResult(int attempt, int polls, String id) {
-        if (pending == null) return;
-        page.evaluateJavascript("JSON.stringify(window.__mcChatQueryResult||{kind:'pending'})", raw -> {
-            if (pending == null) return;
+    private void pollResult(int attempt, int polls, String id, long generation) {
+        if (!liveSend(generation)) return;
+        String key = JSONObject.quote(sendOperationId);
+        page.evaluateJavascript("JSON.stringify(window.__mcChatQueries?.[" + key + "]?.result||{kind:'pending'})", raw -> {
+            if (!liveSend(generation)) return;
             JSONObject result;
             try { result = new JSONObject(jsString(raw)); }
             catch (Exception error) { finish(null, new IllegalStateException("일반 Chat 조회 결과를 읽지 못했습니다.")); return; }
             String kind = result.optString("kind");
-            if ("pending".equals(kind) && polls < 60) { page.postDelayed(() -> pollResult(attempt, polls + 1, id), 250); return; }
-            if ("waiting".equals(kind) || "pending".equals(kind)) { page.postDelayed(() -> requery(attempt + 1), 2500); return; }
+            if ("pending".equals(kind) && polls < 60) { page.postDelayed(() -> pollResult(attempt, polls + 1, id, generation), 250); return; }
+            if ("waiting".equals(kind) || "pending".equals(kind)) { page.postDelayed(() -> requery(attempt + 1, generation), 2500); return; }
             if ("ok".equals(kind)) {
                 activity.getSharedPreferences("general-chat", 0).edit().putString("url", "https://chatgpt.com/c/" + id).apply();
                 finish(result, null); return;
             }
+            if ("network".equals(kind)) { page.postDelayed(() -> requery(attempt + 1, generation), 2500); return; }
             finish(null, new IllegalStateException(result.optString("reason", "일반 Chat 조회 실패")));
         });
     }
 
-    static String requeryScript(String id, String expected, long sentAtSeconds) {
-        return "(function(){window.__mcChatQueryResult={kind:'pending'};"
-            + "fetch('/api/auth/session',{credentials:'include',headers:{Accept:'application/json'}})"
-            + ".then(async s=>{if(!s.ok){window.__mcChatQueryResult={kind:'error',reason:'웹 세션 HTTP '+s.status};return;}"
+    static String requeryScript(String id, String expected, long sentAtSeconds, String operationId,
+                                String observedUserId, String matcherSource) {
+        String key = JSONObject.quote(operationId);
+        return matcherSource + "\n(function(){"
+            + "const key=" + key + ",queries=window.__mcChatQueries||(window.__mcChatQueries={});"
+            + "const old=queries[key];if(old?.controller)old.controller.abort();"
+            + "const sequence=(old?.sequence||0)+1,controller=new AbortController();"
+            + "queries[key]={sequence,controller,result:{kind:'pending'}};"
+            + "const set=value=>{if(queries[key]?.sequence===sequence)queries[key].result=value};"
+            + "fetch('/api/auth/session',{credentials:'include',headers:{Accept:'application/json'},signal:controller.signal})"
+            + ".then(async s=>{if(!s.ok){set({kind:'error',reason:'웹 세션 HTTP '+s.status});return;}"
             + "const session=await s.json(),token=session.accessToken;"
-            + "if(typeof token!=='string'||!token){window.__mcChatQueryResult={kind:'error',reason:'웹 로그인이 필요합니다.'};return;}"
-            + "const r=await fetch('/backend-api/conversation/" + id + "',{credentials:'include',headers:{Authorization:'Bearer '+token,Accept:'application/json'}});"
-            + "if(r.status===404){window.__mcChatQueryResult={kind:'waiting'};return;}"
-            + "if(!r.ok){window.__mcChatQueryResult={kind:'error',reason:'대화 조회 HTTP '+r.status};return;}"
-            + "const data=await r.json(),mapping=data.mapping||{},nodes=Object.entries(mapping),expected=" + JSONObject.quote(expected) + ",sentAt=" + sentAtSeconds + ";"
-            + "let match='',matchTime=-1;for(const [key,node] of nodes){const m=node&&node.message,parts=m&&m.content&&m.content.parts;"
-            + "if(m&&m.author&&m.author.role==='user'&&Array.isArray(parts)&&parts.some(p=>p===expected)){const time=Number(m.create_time)||0;if(time>=matchTime){match=key;matchTime=time;}}}"
-            + "if(matchTime>0&&matchTime<sentAt-3){window.__mcChatQueryResult={kind:'waiting'};return;}"
-            + "if(!match){window.__mcChatQueryResult={kind:'waiting'};return;}"
-            + "let best=null,bestTime=-1;for(const [key,node] of nodes){const m=node&&node.message;"
-            + "if(!m||!m.author||m.author.role!=='assistant'||m.status!=='finished_successfully'||(m.recipient&&m.recipient!=='all'))continue;"
-            + "let parent=node.parent;const seen=new Set();let linked=false;while(parent&&!seen.has(parent)){seen.add(parent);"
-            + "if(parent===match){linked=true;break;}parent=mapping[parent]&&mapping[parent].parent;}"
-            + "if(!linked)continue;const parts=m.content&&m.content.parts,text=Array.isArray(parts)?parts.map(p=>typeof p==='string'?p:(p&&typeof p.text==='string'?p.text:'')).filter(Boolean).join('\\n'):'';"
-            + "if(!text)continue;const time=Number(m.create_time)||0;if(time>=bestTime){bestTime=time;best={message:m,text};}}"
-            + "if(!best){window.__mcChatQueryResult={kind:'waiting'};return;}"
-            + "const meta=best.message.metadata||{},model=meta.resolved_model_slug||meta.model_slug||'';"
-            + "window.__mcChatQueryResult={kind:'ok',reply:best.text.slice(0,200000),truncated:best.text.length>200000,model,conversationId:" + JSONObject.quote(id) + "};})"
-            + ".catch(e=>{window.__mcChatQueryResult={kind:'error',reason:'대화 조회 오류: '+e.name};});return 'started';})()";
+            + "if(typeof token!=='string'||!token){set({kind:'error',reason:'웹 로그인이 필요합니다.'});return;}"
+            + "const r=await fetch('/backend-api/conversation/" + id + "',{credentials:'include',"
+            + "headers:{Authorization:'Bearer '+token,Accept:'application/json'},signal:controller.signal});"
+            + "if(r.status===404){set({kind:'waiting'});return;}"
+            + "if(!r.ok){set({kind:'error',reason:'대화 조회 HTTP '+r.status});return;}"
+            + "const data=await r.json(),match=MCChatRequery.match(data," + JSONObject.quote(expected) + ","
+            + sentAtSeconds + "," + JSONObject.quote(observedUserId) + ");"
+            + "set(match.kind==='ok'?{...match,conversationId:" + JSONObject.quote(id) + "}:match);})"
+            + ".catch(error=>{if(error.name!=='AbortError')set({kind:'network',reason:'대화 재조회 네트워크 오류'});});"
+            + "return 'started'})()";
     }
 
     private void retry(Runnable step, int attempt, int maximum, String error) {
@@ -609,11 +657,48 @@ final class ChatWebTransport {
         else page.postDelayed(step, 500);
     }
 
-    private boolean expired() { return System.currentTimeMillis() > deadline; }
+    private boolean expired() { return SystemClock.elapsedRealtime() > deadline; }
+
+    void reconcile(String operationId, String text, String conversationId, long sentAtSeconds,
+                   String observedUserId, Done done) {
+        if (pending != null || modelChanging) { done.complete(null, new IllegalStateException("Chat 작업이 진행 중입니다.")); return; }
+        if (operationId.isEmpty() || text.isEmpty() || !conversationId.matches("[0-9a-fA-F-]{36}")) {
+            done.complete(null, new IllegalArgumentException("재조회할 대화 주소와 작업 기록이 없습니다.")); return;
+        }
+        String currentId = conversationId(page.getUrl());
+        if (!currentId.equals(conversationId)) {
+            done.complete(null, new IllegalStateException("현재 열린 웹 대화가 기록된 대화와 다릅니다. 해당 대화를 연 뒤 다시 확인해 주세요.")); return;
+        }
+        pending = done;
+        sendOperationId = operationId;
+        submittedText = text;
+        sendStartedAt = sentAtSeconds;
+        sendObservedUserId = observedUserId;
+        lastConversationId = conversationId;
+        clicked = true;
+        deadline = SystemClock.elapsedRealtime() + 60_000;
+        requery(0, ++sendGeneration);
+    }
 
     private void finish(JSONObject result, Exception error) {
         Done done = pending;
         pending = null;
+        sendGeneration++;
+        if (!sendOperationId.isEmpty() && !destroyed) {
+            String key = JSONObject.quote(sendOperationId);
+            page.evaluateJavascript("(function(){const q=window.__mcChatQueries?.[" + key + "];if(q?.controller)q.controller.abort();if(window.__mcChatQueries)delete window.__mcChatQueries[" + key + "]})()", null);
+        }
+        if (result == null && error != null) {
+            result = new JSONObject();
+            try {
+                result.put("status", clicked ? "needs_reconciliation" : "not_sent");
+                result.put("reason", error.getMessage());
+                result.put("conversationId", lastConversationId);
+                result.put("observedUserMessageId", sendObservedUserId);
+                result.put("sentAtSeconds", sendStartedAt);
+            } catch (Exception ignored) {}
+            error = null;
+        }
         if (result != null) try {
             result.put("operationId", sendOperationId);
             result.put("requestedSetting", requestedOptionId);
@@ -624,6 +709,8 @@ final class ChatWebTransport {
             result.put("observedRequestSetting", JSONObject.NULL);
         } catch (Exception ignored) {}
         sendOperationId = "";
+        lastConversationId = "";
+        sendObservedUserId = "";
         requestedOptionId = "";
         uiConfirmedOptionId = "";
         submittedText = "";
@@ -644,7 +731,9 @@ final class ChatWebTransport {
     }
 
     void destroy() {
+        cancelModel("Chat 화면이 닫혔습니다.");
         if (pending != null) finish(null, new IllegalStateException("일반 Chat 화면이 닫혔습니다."));
+        destroyed = true;
         page.stopLoading();
         page.destroy();
     }

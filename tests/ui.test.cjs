@@ -130,6 +130,21 @@ test('failed Chat verification keeps the draft and shows an error outside the as
  assert.equal(d.getElementById('chat-error').hidden,true);
  assert.equal(d.getElementById('header-project').textContent,'Project');
 });
+test('an uncertain Chat send is rechecked without sending the message again',async()=>{
+ const conversationId='6ab46e59-8b48-83e8-beb2-04c61e1e5345';
+ const {w,calls}=setup({'chat.web.send':m=>({status:'needs_reconciliation',operationId:m.args.operationId,
+   conversationId,sentAtSeconds:1790210700,observedUserMessageId:'2ab46e59-8b48-83e8-beb2-04c61e1e5345'}),
+   'chat.web.reconcile':m=>({operationId:m.args.operationId,conversationId,reply:'서버에 저장된 답변'})});await tick();
+ const d=w.document;d.getElementById('mode-chat').click();await tick();
+ d.getElementById('prompt').value='같은 질문';d.getElementById('composer').dispatchEvent(new w.Event('submit',{cancelable:true}));await tick();
+ assert.equal(d.getElementById('chat-reconcile').hidden,false);
+ assert.equal(d.querySelectorAll('#messages .message.assistant').length,0);
+ d.getElementById('chat-reconcile').click();await tick();
+ assert.equal(calls.filter(m=>m.action==='chat.web.send').length,1);
+ assert.equal(calls.filter(m=>m.action==='chat.web.reconcile').length,1);
+ assert.match(d.getElementById('messages').textContent,/서버에 저장된 답변/);
+ assert.equal(d.getElementById('chat-reconcile').hidden,true);
+});
 test('composer exposes approval review beside the model without changing file access',async()=>{
  const {w,calls,snapshot}=setup({'approvals.set':()=>({ok:true})});await tick();
  const select=w.document.getElementById('approval-mode');assert.equal(select.value,'auto-review');

@@ -47,8 +47,10 @@
   }
   function triggers() {
     return [...root.document.querySelectorAll('button[aria-haspopup="menu"]')].filter(visible)
-      .filter(button => level(button.textContent || button.getAttribute('aria-label'))
-        || (button.getAttribute('aria-expanded') === 'true' && /추론\s*수준|reasoning/i.test(normalize(button.textContent))));
+      .filter(button => {
+        const label = normalize([button.getAttribute('aria-label'), button.textContent, description(button)].join(' '));
+        return !!level(label) || /추론\s*수준|reasoning\s*(level|effort)|performance/i.test(label);
+      });
   }
   function type(element) {
     const role = element.getAttribute('role') || '';
@@ -73,9 +75,12 @@
       .filter(entry => entry.controls.length);
     // Ignore an ancestor popup when an open child contains the same control.
     const leaves = candidates.filter(entry => !candidates.some(other => other !== entry && entry.popup.contains(other.popup)));
-    const scoped = leaves.length === 1 ? leaves[0] : null;
+    const controlledIds = new Set(leaves.flatMap(entry => entry.controls.map(element => element.getAttribute('aria-controls')).filter(Boolean)));
+    const childPopups = leaves.filter(entry => controlledIds.has(entry.popup.id));
+    const active = childPopups.length === 1 ? childPopups : leaves;
+    const scoped = active.length === 1 ? active[0] : null;
     const button = buttons.length === 1 ? buttons[0] : null;
-    return {button, buttons, popup:scoped?.popup || null, controls:scoped?.controls || [], ambiguous:buttons.length > 1 || leaves.length > 1};
+    return {button, buttons, popup:scoped?.popup || null, controls:scoped?.controls || [], ambiguous:buttons.length > 1 || active.length > 1};
   }
   function inspect() {
     const found = locate();
@@ -88,6 +93,10 @@
     const position = ordinal(details);
     const buttonLevel = found.button ? level(found.button.textContent) : '';
     let current = control ? level(control.getAttribute('aria-valuetext') || details || control.textContent) : '';
+    if (options) {
+      const checked = controls.filter(element => element.getAttribute('aria-checked') === 'true' || element.getAttribute('aria-selected') === 'true');
+      if (checked.length === 1) current = level(checked[0].getAttribute('aria-label') || checked[0].textContent);
+    }
     if (!current && control && type(control) === 'slider') {
       const minimum = Number(control.getAttribute('aria-valuemin') ?? control.min);
       const maximum = Number(control.getAttribute('aria-valuemax') ?? control.max);

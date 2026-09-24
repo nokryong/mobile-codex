@@ -44,6 +44,14 @@ test('radio options use activation and the chosen checked state', () => {
   assert.equal(adapter.inspect().type,'options');
   assert.equal(adapter.choose('X-High').ok,true);
   assert.equal(adapter.inspect().options[1].checked,'true');
+  assert.equal(adapter.inspect().level,'X-High');
+});
+
+test('follows an aria-controls link to the open submenu', () => {
+  const {adapter} = setup(trigger+'<div role="menu" id="settings"><div role="menuitem" aria-haspopup="menu" aria-controls="performance">성능</div></div>'+
+    '<div role="menu" id="performance"><div role="menuitemradio" aria-checked="true">High</div><div role="menuitemradio" aria-checked="false">X-High</div></div>');
+  assert.equal(adapter.inspect().type,'options');
+  assert.equal(adapter.inspect().level,'High');
 });
 
 test('real slider reads its numeric position and confirms DOM focus', () => {
@@ -59,6 +67,12 @@ test('normalizes localized labels without treating arbitrary text as a model', (
   assert.equal(adapter.inspect().level,'X-High');
   assert.equal(adapter.level('X - High, 5개 중 4번째.'),'X-High');
   assert.equal(adapter.level('Prompt settings'),'');
+});
+
+test('recognizes the reasoning trigger before its current label is available', () => {
+  const {adapter} = setup('<button aria-haspopup="menu" aria-label="추론 수준" aria-expanded="false"></button>');
+  assert.equal(adapter.inspect().state,'closed');
+  assert.equal(adapter.inspect().level,'');
 });
 
 test('disabled and unavailable options fail closed', () => {
