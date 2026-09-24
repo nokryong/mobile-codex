@@ -88,6 +88,15 @@ final class ChatWebTransport {
             + ".find(e=>/^(Instant|Medium|High|X-High|Pro|즉시|빠름|중간|높음|매우 높음)$/.test((e.textContent||'').trim()))";
     }
 
+    private static String modelControlScript() {
+        return "document.querySelector('[role=slider],input[type=range]')||"
+            + "[...document.querySelectorAll('[role=menuitem],[role=menuitemradio]')]"
+            + ".find(e=>{const ids=(e.getAttribute('aria-describedby')||'').split(/\\s+/);"
+            + "const description=ids.map(id=>document.getElementById(id)?.textContent||'').join(' ');"
+            + "const label=(e.getAttribute('aria-label')||'')+' '+(e.textContent||'');"
+            + "return /성능|Performance/i.test(label)||/5개 중|of 5/i.test(description)})";
+    }
+
     private static String normalizedLevel(String value) {
         if (value == null) return "";
         if (value.startsWith("매우 높음")) return "X-High";
@@ -137,7 +146,7 @@ final class ChatWebTransport {
         }
         if (!pageLoaded) { page.postDelayed(() -> openModelSlider(target, done, attempt + 1, steps), 250); return; }
         String open = "(function(){const b=" + modelButtonScript() + ";"
-            + "const s=document.querySelector('[role=slider],input[type=range]');"
+            + "const s=" + modelControlScript() + ";"
             + "if(!b)return 'missing';const label=(b.textContent||'').trim();"
             + "const current=({'즉시':'Instant','빠름':'Instant','중간':'Medium','높음':'High','매우 높음':'X-High'}[label]||label);"
             + "if(current===" + JSONObject.quote(target) + ")return 'selected';"
@@ -183,9 +192,11 @@ final class ChatWebTransport {
         if (steps > 8 || System.currentTimeMillis() > modelDeadline) {
             finishModel(done, null, new IllegalStateException("ChatGPT 모델 선택을 확인하지 못했습니다.")); return;
         }
-        String inspect = "(function(){const s=document.querySelector('[role=slider],input[type=range]');"
+        String inspect = "(function(){const s=" + modelControlScript() + ";"
             + "const b=" + modelButtonScript() + ";if(!s)return JSON.stringify({error:'slider_missing'});"
-            + "return JSON.stringify({value:s.getAttribute('aria-valuetext')||s.getAttribute('aria-label')||'',"
+            + "const ids=(s.getAttribute('aria-describedby')||'').split(/\\s+/);"
+            + "const description=ids.map(id=>document.getElementById(id)?.textContent||'').join(' ');"
+            + "return JSON.stringify({value:s.getAttribute('aria-valuetext')||description||s.getAttribute('aria-label')||s.textContent||'',"
             + "button:(b?.textContent||'').trim()})})()";
         page.evaluateJavascript(inspect, raw -> {
             JSONObject state;
@@ -202,7 +213,7 @@ final class ChatWebTransport {
             }
             int key = modelIndex(target) > currentIndex ? KeyEvent.KEYCODE_DPAD_RIGHT : KeyEvent.KEYCODE_DPAD_LEFT;
             page.requestFocus();
-            page.evaluateJavascript("(function(){const s=document.querySelector('[role=slider],input[type=range]');if(s)s.focus();return !!s})()", focused -> {
+            page.evaluateJavascript("(function(){const s=" + modelControlScript() + ";if(s)s.focus();return !!s})()", focused -> {
                 if (!"true".equals(focused)) { openModelSlider(target, done, 0, steps); return; }
                 page.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, key));
                 page.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, key));
