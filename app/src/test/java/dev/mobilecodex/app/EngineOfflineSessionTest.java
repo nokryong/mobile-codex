@@ -49,6 +49,27 @@ public class EngineOfflineSessionTest {
         if (children != null) for (File child : children) deleteTree(child);
         file.delete();
     }
+    @Test public void modelPickerRefreshReadsCurrentServerAndPreservesChoicesOnFailure() throws Exception {
+        Engine engine = new Engine(context);
+        java.util.concurrent.atomic.AtomicInteger reads = new java.util.concurrent.atomic.AtomicInteger();
+        engine.setTestTransport((method, params) -> {
+            assertEquals("model/list", method);
+            assertEquals(100, params.getInt("limit"));
+            assertFalse(params.getBoolean("includeHidden"));
+            int read = reads.incrementAndGet();
+            if (read == 3) throw new java.io.IOException("offline");
+            JSONArray choices = new JSONArray().put(obj("model", "gpt-6-astra"));
+            if (read >= 2) choices.put(obj("model", "gpt-6-sol"));
+            return obj("data", choices);
+        });
+        assertEquals(1, handle(engine, "models.refresh", obj()).getJSONArray("models").length());
+        assertEquals(2, handle(engine, "models.refresh", obj()).getJSONArray("models").length());
+        try { handle(engine, "models.refresh", obj()); fail("refresh failure must be visible"); }
+        catch (ExecutionException expected) { assertEquals("offline", expected.getCause().getMessage()); }
+        assertEquals(2, handle(engine, "state", obj()).getJSONArray("models").length());
+        assertEquals(3, reads.get());
+        engine.io.shutdownNow();
+    }
     @Test public void approvalReviewModesStaySeparateFromFileAccess() throws Exception {
         Engine engine = new Engine(context);
         Method method = Engine.class.getDeclaredMethod("threadStartParams", String.class); method.setAccessible(true);

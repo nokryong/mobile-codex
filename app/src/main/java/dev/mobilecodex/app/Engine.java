@@ -196,6 +196,12 @@ public final class Engine {
                     case "state" -> reply.complete(snapshot(), null);
                     case "phone.stop" -> { publish(); reply.complete(snapshot(), null); }
                     case "runtime.start" -> { start(); reply.complete(snapshot(), null); }
+                    case "models.refresh" -> {
+                        if (!ready) start();
+                        JSONArray latest = call("model/list", obj("limit", 100, "includeHidden", false), 10).optJSONArray("data");
+                        if (latest == null) throw new IOException(t("모델 목록 응답이 올바르지 않습니다."));
+                        models = latest; publish(); reply.complete(obj("models", models), null);
+                    }
                     case "devtools.check" -> { JSONObject result = devTools.check(codexHome.root(), runtimeAliases()); publish(); reply.complete(result, null); }
                     case "runtime.stop" -> { stopNow(); reply.complete(snapshot(), null); }
                     case "auth.login" -> reply.complete(beginLogin(false), null);
@@ -434,10 +440,11 @@ public final class Engine {
             stopNow(); throw new IOException(detail, e);
         }
     }
-    private JSONObject call(String method, JSONObject params) throws Exception {
+    private JSONObject call(String method, JSONObject params) throws Exception { return call(method, params, 65); }
+    private JSONObject call(String method, JSONObject params, int timeoutSeconds) throws Exception {
         if (testTransport != null) return testTransport.call(method, params);
         if (rpc == null) throw new IOException(t("먼저 Codex를 시작해 주세요."));
-        return rpc.request(method, params).get(65, TimeUnit.SECONDS);
+        return rpc.request(method, params).get(timeoutSeconds, TimeUnit.SECONDS);
     }
     private void readAccount() throws Exception {
         // Do not force a refresh here. In app-server v0.155.1,

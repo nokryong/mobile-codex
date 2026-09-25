@@ -8,7 +8,7 @@
   let following = true, draftScope = '', sending = null, configOriginal = '', sidebarFocus = null, openedImage = null;
   const imageReads = new Map();
   let viewerImages = [], viewerIndex = 0, viewerGroup = null;
-  let seq = 0, state = {messages: [], sessions: [], projects: [], models: [], accounts: [], account: {}, rateLimits: {}, workspace: {}}, folder = '', openedFile = null, login = null, inputResolve = null, toastTimer, fileSeq = 0, modelKey = '', displayedRequest = null, projectMenuFocus = null, projectMenuActionClosing = false;
+  let seq = 0, state = {messages: [], sessions: [], projects: [], models: [], accounts: [], account: {}, rateLimits: {}, workspace: {}}, folder = '', openedFile = null, login = null, inputResolve = null, toastTimer, fileSeq = 0, modelKey = '', modelRefreshGeneration = 0, displayedRequest = null, projectMenuFocus = null, projectMenuActionClosing = false;
   let draftContext = {attachments: [], mentions: [], skills: []}, draftOptions = {model:'', effort:''}, autocomplete = {items: [], index: -1, token: '', type: '', version: 0};
   const handledReceipts = new Set(), handledVoiceReceipts = new Set();
   let dictationState = {phase:'idle'}, dictationTimer = null;
@@ -1604,7 +1604,17 @@
   on('voice-input', startVoiceInput);
   on('dictation-done', () => call('voice.stop'));
   on('dictation-cancel', () => call('voice.cancel'));
-  on('jump-latest', scrollLatest); on('composer-options', () => { optionsSummary(); show('options-dialog'); });
+  on('jump-latest', scrollLatest); on('composer-options', () => {
+    optionsSummary(); show('options-dialog');
+    const generation = ++modelRefreshGeneration, status = $('model-refresh-status');
+    status.textContent = t('모델 목록 확인 중…'); status.hidden = false;
+    call('models.refresh').then(() => {
+      if (generation === modelRefreshGeneration) status.hidden = true;
+    }).catch(() => {
+      if (generation !== modelRefreshGeneration) return;
+      status.textContent = t('모델 목록을 갱신하지 못했습니다. 이전 목록을 표시합니다.');
+    });
+  });
   on('image-save', () => openedImage && call('images.export', {id:openedImage.id, name:openedImage.name}));
   on('image-zoom', () => { const zoomed = $('image-stage').classList.toggle('zoomed'); $('image-zoom').setAttribute('aria-pressed', String(zoomed)); });
   on('image-prev', () => changeImage(-1)); on('image-next', () => changeImage(1));

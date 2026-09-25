@@ -364,6 +364,35 @@ test('mobile settings expose full model, reasoning and permission controls',asyn
  assert.equal(calls.find(c=>c.action==='permissions.set').args.mode,'danger-full-access');
  assert.equal(d.getElementById('effort').value,'high');
 });
+test('opening model settings refreshes available models without waiting to show the sheet',async()=>{
+ let finish;
+ const oldModels=[{id:'gpt-6-astra',displayName:'GPT-6-Astra'},{id:'gpt-5.6-sol',displayName:'GPT-5.6-Sol'}];
+ const newModels=[...oldModels,{id:'gpt-6-sol',displayName:'GPT-6-Sol'},{id:'gpt-6-luna',displayName:'GPT-6-Luna'}];
+ const {w,calls,snapshot}=setup({'models.refresh':()=>new Promise(resolve=>{finish=resolve;})},{mobile:true});await tick();
+ const d=w.document;w.mobileCodexEvent('state',{...snapshot,models:oldModels});
+ d.getElementById('model').value='gpt-6-astra';d.getElementById('model').dispatchEvent(new w.Event('change'));
+ d.getElementById('composer-options').click();await tick();
+ assert.equal(d.getElementById('options-dialog').open,true);
+ assert.equal(calls.filter(c=>c.action==='models.refresh').length,1);
+ assert.match(d.getElementById('model-list').textContent,/GPT-5.6-Sol/);
+ assert.doesNotMatch(d.getElementById('model-list').textContent,/GPT-6-Luna/);
+ assert.equal(d.getElementById('model-refresh-status').hidden,false);
+ w.mobileCodexEvent('state',{...snapshot,models:newModels});finish({models:newModels});await tick();
+ assert.match(d.getElementById('model-list').textContent,/GPT-6-Sol/);
+ assert.match(d.getElementById('model-list').textContent,/GPT-6-Luna/);
+ assert.equal(d.querySelector('#model-list input[value="gpt-6-astra"]').checked,true);
+ assert.equal(d.getElementById('model-refresh-status').hidden,true);
+ assert.equal(calls.some(c=>c.action==='runtime.stop'||c.action==='runtime.start'),false);
+});
+test('model refresh failure keeps the previous choices and explains their age',async()=>{
+ const oldModels=[{id:'gpt-5.6-sol',displayName:'GPT-5.6-Sol'}];
+ const {w,snapshot}=setup({'models.refresh':()=>{throw new Error('offline');}},{mobile:true});await tick();
+ const d=w.document;w.mobileCodexEvent('state',{...snapshot,models:oldModels});
+ d.getElementById('composer-options').click();await tick();
+ assert.match(d.getElementById('model-list').textContent,/GPT-5.6-Sol/);
+ assert.match(d.getElementById('model-refresh-status').textContent,/이전 목록/);
+ assert.equal(d.getElementById('model-refresh-status').hidden,false);
+});
 test('back closes the actual top dialog, then the mobile drawer, then yields to Android',async()=>{
  const {w}=setup({}, {mobile:true});await tick();const d=w.document;
   d.getElementById('show-tools').click();await tick();d.getElementById('show-tools-panel').click();await tick();await tick();d.getElementById('marketplace-add').click();await tick();
