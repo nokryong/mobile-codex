@@ -18,15 +18,28 @@ html.dark #${SWITCH}{background:#25252b}html.dark #${SWITCH} button{background:#
     // Require a home link inside a sidebar, never match a conversation's linked logo.
     for (const root of sidebarRoots()) {
       const link = [...root.querySelectorAll('a[href="/"], a[href="https://chatgpt.com/"]')]
-        .find(a => a.querySelector('svg,img') && !/new chat|새 채팅/i.test(a.textContent || '') && !a.closest('[data-message-author-role]') && a.getBoundingClientRect().top < 52);
+        .find(a => a.querySelector('svg,img') && !/new chat|새 채팅/i.test(a.textContent || '') && !a.closest('[data-app-navigation-rail],[data-message-author-role]') && a.getBoundingClientRect().top < 52);
       if (link) return link;
     }
     // Some mobile variants render a dialog instead of an aside. The top home logo
     // must share a row with the sidebar close button; a new-chat link is excluded.
     for (const link of document.querySelectorAll('a[href="/"]')) {
-      if (!link.querySelector('svg,img') || /new chat|새 채팅/i.test(link.textContent || '') || link.closest('main,[data-message-author-role]') || link.getBoundingClientRect().top >= 52) continue;
+      if (!link.querySelector('svg,img') || /new chat|새 채팅/i.test(link.textContent || '') || link.closest('main,[data-app-navigation-rail],[data-message-author-role]') || link.getBoundingClientRect().top >= 52) continue;
       const row = link.parentElement;
       if (row && row.querySelector('button[aria-label*="sidebar" i],button[aria-label*="사이드바"],button[aria-label*="Close" i],button[aria-label*="닫기"]')) return link;
+    }
+    return null;
+  }
+  function findNavigationHeader() {
+    // Observed in the official WebView: a non-interactive SVG wordmark in Home,
+    // a different title in Settings, and separate hidden/visible mobile navs.
+    // Their shared header is stable across language and selected section.
+    const roots = [...document.querySelectorAll('nav[aria-label]')]
+      .filter(root => !root.hasAttribute('data-app-navigation-rail') && !root.closest('main'))
+      .sort((a,b) => Number(!!b.getClientRects().length) - Number(!!a.getClientRects().length));
+    for (const root of roots) {
+      const headers = root.querySelectorAll('[class~="@container/navigation-header"]');
+      if (headers.length === 1) return headers[0];
     }
     return null;
   }
@@ -51,6 +64,8 @@ html.dark #${SWITCH}{background:#25252b}html.dark #${SWITCH} button{background:#
     return newChat ? {title, newChat} : null;
   }
   function target() {
+    const header = findNavigationHeader();
+    if (header) return {anchor:header, below:true, title:header};
     const logo = findLogo();
     if (logo) return {anchor:logo, before:false};
     const newer = findTitleAndNewChat();
@@ -73,7 +88,8 @@ html.dark #${SWITCH}{background:#25252b}html.dark #${SWITCH} button{background:#
     const chat = document.createElement('button'); chat.type = 'button'; chat.textContent = 'Chat'; chat.setAttribute('aria-pressed','true');
     const codex = document.createElement('a'); codex.href = 'mobilecodex://mode/codex'; codex.textContent = 'Codex'; codex.setAttribute('aria-label','Codex로 전환');
     group.append(chat, codex);
-    if (place.before) { group.classList.add('mc-below-title'); place.anchor.before(group); }
+    if (place.before || place.below) group.classList.add('mc-below-title');
+    if (place.before) place.anchor.before(group);
     else place.anchor.after(group);
   }
   function closeSidebar() {
@@ -81,7 +97,7 @@ html.dark #${SWITCH}{background:#25252b}html.dark #${SWITCH} button{background:#
     const start = place.title || place.anchor;
     let row = start.parentElement, button = null;
     for (let i = 0; row && i < 4 && !button; i++, row = row.parentElement)
-      button = row.querySelector('button[aria-label*="Close" i],button[aria-label*="닫기"],button[aria-label*="사이드바 접기"],button[aria-label*="사이드바 숨기기"]');
+      button = row.querySelector('button[aria-label*="Close" i],button[aria-label="Hide sidebar" i],button[aria-label*="닫기"],button[aria-label*="사이드바 접기"],button[aria-label*="사이드바 숨기기"]');
     if (!button || !button.getClientRects().length) return false;
     button.click(); return true;
   }
@@ -89,10 +105,10 @@ html.dark #${SWITCH}{background:#25252b}html.dark #${SWITCH} button{background:#
     // Ignore streamed answer updates; sidebar changes need a rescan.
     if (records.every(record => {
       const parent = record.target.nodeType === 1 ? record.target : record.target.parentElement;
-      return parent && parent.closest('[data-message-author-role],#' + SWITCH);
+      return parent && parent.closest('[data-message-author-role],[data-content-search-turn-key],#' + SWITCH);
     })) return;
     if (!scheduled) { scheduled = true; frame = setTimeout(refresh, 120); } });
-  observer.observe(document.documentElement, {childList:true, subtree:true});
+  observer.observe(document.documentElement, {childList:true, subtree:true, attributes:true, attributeFilter:['hidden','aria-hidden','data-state']});
   window.__mcChatCustom = {refresh, hasSwitch: () => !!document.getElementById(SWITCH), closeSidebar,
     dispose: () => { observer.disconnect(); clearTimeout(frame); }};
   refresh();

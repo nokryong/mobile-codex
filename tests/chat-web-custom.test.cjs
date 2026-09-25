@@ -80,3 +80,35 @@ test('new text-title sidebar gets a switch above its New chat row, not in the ic
  group.remove();await tick();group=d.getElementById('mc-chat-mode-switch');
  assert.ok(group);assert.equal(group.nextElementSibling.id,'new-chat');
 });
+
+test('observed navigation wordmark mounts the switch without a clickable title or localized New chat label',async()=>{
+ const html='<nav data-app-navigation-rail aria-label="App navigation"><a href="/"><svg></svg></a></nav>'+
+  '<nav role="navigation" aria-label="Home"><div id="sidebar-heading"><div class="@container/navigation-header">'+
+  '<span class="contents"><div><span><span class="sr-only">ChatGPT</span><svg role="img"><title>ChatGPT</title></svg></span></div></span>'+
+  '<div><button id="hide" aria-label="Hide sidebar"></button></div></div><div id="new"><button>New chat</button></div></div></nav>'+
+  '<main><p>ChatGPT</p><p>[[icon:안녕]]</p></main>';
+ const w=setup(html),d=w.document,group=d.getElementById('mc-chat-mode-switch');
+ assert.ok(group);assert.equal(group.parentElement.id,'sidebar-heading');
+ assert.ok(group.previousElementSibling.classList.contains('@container/navigation-header'));
+ assert.equal(group.nextElementSibling.id,'new');
+ assert.equal(d.querySelector('[data-app-navigation-rail] #mc-chat-mode-switch'),null);
+ assert.equal(d.querySelector('main').textContent,'ChatGPT[[icon:안녕]]');
+ const hide=d.getElementById('hide');hide.getClientRects=()=>[{}];let clicks=0;hide.onclick=()=>clicks++;
+ assert.equal(w.__mcChatCustom.closeSidebar(),true);assert.equal(clicks,1);
+ const root=d.querySelector('nav[role="navigation"]');root.replaceWith(root.cloneNode(true));
+ d.getElementById('mc-chat-mode-switch').remove();await tick();
+ assert.equal(d.querySelectorAll('#mc-chat-mode-switch').length,1);
+ assert.ok(d.querySelector('nav[role="navigation"] #mc-chat-mode-switch'));
+});
+
+test('uses the visible navigation when mobile and hidden desktop copies coexist, including Settings',async()=>{
+ const hidden='<nav aria-label="Home"><div class="@container/navigation-header">ChatGPT</div></nav>';
+ const w=setup(hidden),d=w.document;
+ const visible=d.createElement('nav');visible.setAttribute('aria-label','Settings');
+ visible.innerHTML='<div class="@container/navigation-header">Settings</div>';
+ visible.getClientRects=()=>[{}];d.body.append(visible);await tick();
+ assert.equal(d.querySelectorAll('#mc-chat-mode-switch').length,1);
+ assert.ok(visible.querySelector('#mc-chat-mode-switch'));
+ visible.remove();await tick();
+ assert.ok(d.querySelector('nav[aria-label="Home"] #mc-chat-mode-switch'));
+});

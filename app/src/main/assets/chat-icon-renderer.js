@@ -46,6 +46,7 @@
   const STYLE_ID = 'mc-chat-icon-renderer-style';
   const OWNED = '[data-mc-chat-icon-owned="true"]';
   const ASSISTANT = '[data-message-author-role="assistant"],article[data-turn="assistant"]';
+  const ROLE_HEADING = 'h4[data-conversation-role="assistant"]';
   const SKIP = 'script,style,noscript,template,textarea,input,select,option,optgroup,button,output,code,pre,[contenteditable]:not([contenteditable="false"]),[role="textbox"]';
   const normalize = (value) => String(value || '').replace(/[\u200B-\u200D\uFEFF]/g, '').replace(/\s+/g, '').trim().toLowerCase();
   const icons = Object.create(null), aliases = Object.create(null), categories = Object.create(null), categoryLookup = Object.create(null);
@@ -86,7 +87,13 @@
   }
   function assistantRootFor(node) {
     const element = node && (node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement);
-    return element && (element.closest(ASSISTANT) || labelledAssistantArticle(element));
+    if (!element) return null;
+    // New official UI puts the role on a heading immediately inside each answer
+    // block. The enclosing turn also contains user text, so never scan the turn.
+    for (let current = element; current && current !== document.body; current = current.parentElement) {
+      if ([...current.children].some(child => child.matches(ROLE_HEADING))) return current;
+    }
+    return element.closest(ASSISTANT) || labelledAssistantArticle(element);
   }
   function skipText(node) {
     const parent = node && node.parentElement;
@@ -138,7 +145,7 @@
     return true;
   }
   function scan(root) {
-    if (!root || !root.isConnected || (!root.matches(ASSISTANT) && labelledAssistantArticle(root) !== root)) return;
+    if (!root || !root.isConnected || assistantRootFor(root) !== root) return;
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {acceptNode(node) {
       return !skipText(node) && hasToken(node.nodeValue) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
     }});
@@ -151,6 +158,7 @@
     document.querySelectorAll('article[data-testid^="conversation-turn-"]').forEach(root => {
       if (!root.matches(ASSISTANT) && !root.querySelector('[data-message-author-role="assistant"]')) scan(root);
     });
+    document.querySelectorAll(ROLE_HEADING).forEach(heading => scan(heading.parentElement));
   }
   function queue(root) { if (root && root.isConnected) pendingRoots.add(root); }
   function processQueue() {
@@ -164,7 +172,7 @@
   function mutations(records) {
     let relevant = false;
     for (const record of records) {
-      if (record.type === 'characterData') {
+      if (record.type === 'characterData' || record.type === 'attributes') {
         const root = assistantRootFor(record.target);
         if (root) { queue(root); relevant = true; }
         continue;
@@ -174,6 +182,7 @@
         if (root) { queue(root); relevant = true; }
         if (node.nodeType === Node.ELEMENT_NODE) {
           node.querySelectorAll(ASSISTANT).forEach((child) => { queue(child); relevant = true; });
+          node.querySelectorAll(ROLE_HEADING).forEach(heading => { queue(heading.parentElement); relevant = true; });
           node.querySelectorAll('article[data-testid^="conversation-turn-"]').forEach((child) => {
             if (labelledAssistantArticle(child) === child) { queue(child); relevant = true; }
           });
@@ -185,7 +194,7 @@
   function start() {
     if (!document.body) { document.addEventListener('DOMContentLoaded', start, {once: true}); return; }
     ensureStyle(); scanAll();
-    if (!observer) { observer = new MutationObserver(mutations); observer.observe(document.body, {childList: true, subtree: true, characterData: true}); }
+    if (!observer) { observer = new MutationObserver(mutations); observer.observe(document.documentElement, {childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['data-conversation-role','data-message-author-role','data-turn']}); }
   }
   function stop() { if (observer) observer.disconnect(); observer = null; pendingRoots.clear(); scheduled = false; }
 
