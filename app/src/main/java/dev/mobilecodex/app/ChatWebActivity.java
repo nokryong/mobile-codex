@@ -22,6 +22,7 @@ public final class ChatWebActivity extends Activity {
     private TextView status;
     private ProgressBar progress;
     private String customScript;
+    private String iconScript;
     private boolean loadFailed;
     private ValueCallback<Uri[]> fileCallback;
     private static final int CHOOSE_FILE = 61;
@@ -47,7 +48,8 @@ public final class ChatWebActivity extends Activity {
         getWindow().setNavigationBarColor(Color.TRANSPARENT);
         getWindow().setNavigationBarContrastEnforced(false);
         try (var ui = getAssets().open("chat-web-custom.js"); var icons = getAssets().open("chat-icon-renderer.js")) {
-            customScript = readAsset(ui) + "\n" + readAsset(icons);
+            customScript = readAsset(ui);
+            iconScript = readAsset(icons);
         } catch (Exception error) { throw new IllegalStateException("Chat 화면 코드를 읽지 못했습니다.", error); }
         SafeWebViewLayout safe = new SafeWebViewLayout(this);
         FrameLayout content = new FrameLayout(this);
@@ -133,6 +135,7 @@ public final class ChatWebActivity extends Activity {
     private void inject() {
         if (page == null || !official(Uri.parse(page.getUrl() == null ? "" : page.getUrl()))) return;
         page.evaluateJavascript(customScript, null);
+        page.evaluateJavascript(iconScript, null);
     }
     private void showLoadError() { loadFailed = true; progress.setVisibility(View.GONE); fallback.setVisibility(View.VISIBLE); status.setText(t("연결을 확인하고 새로고침해 주세요.")); }
     private void returnToCodex() { startActivity(new Intent(this, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)); }

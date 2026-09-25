@@ -62,3 +62,21 @@ test('does not inject into authentication or unrelated origins',()=>{
   const w=setup(fixture,url);assert.equal(w.document.getElementById('mc-chat-mode-switch'),null);
  }
 });
+test('new text-title sidebar gets a switch above its New chat row, not in the icon rail',async()=>{
+ const html='<div id="stage-sidebar"><nav><a id="rail-home" href="/"><svg></svg></a></nav><div><div><button id="chat-title">ChatGPT</button><button aria-label="검색">Search</button><button id="hide-sidebar" aria-label="사이드바 숨기기">Close</button></div><a id="new-chat" href="/">새 채팅</a></div></div><main><p>ChatGPT</p></main>';
+ const dom=new JSDOM(html,{url:'https://chatgpt.com/c/test',runScripts:'outside-only',pretendToBeVisual:true});open.push(dom);
+ const d=dom.window.document;
+ for(const [id,top,left,width] of [['rail-home',70,8,40],['chat-title',10,100,110],['new-chat',65,100,240]]){
+  const element=d.getElementById(id);element.getClientRects=()=>[{}];element.getBoundingClientRect=()=>({top,left,width,height:40,bottom:top+40,right:left+width});
+ }
+ d.getElementById('hide-sidebar').getClientRects=()=>[{}];
+ dom.window.eval(script);
+ let group=d.getElementById('mc-chat-mode-switch');
+ assert.ok(group);assert.equal(group.nextElementSibling.id,'new-chat');
+ assert.equal(group.classList.contains('mc-below-title'),true);
+ assert.notEqual(group.previousElementSibling.id,'rail-home');
+ let clicks=0;d.getElementById('hide-sidebar').addEventListener('click',()=>clicks++);
+ assert.equal(dom.window.__mcChatCustom.closeSidebar(),true);assert.equal(clicks,1);
+ group.remove();await tick();group=d.getElementById('mc-chat-mode-switch');
+ assert.ok(group);assert.equal(group.nextElementSibling.id,'new-chat');
+});

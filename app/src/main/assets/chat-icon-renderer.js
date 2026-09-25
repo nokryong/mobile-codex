@@ -45,6 +45,7 @@
   const TOKEN = /\[\[\s*icon\s*:\s*([^\]\r\n]+?)\s*\]\]|\[\s*([0-9]{2}[^\]\r\n]+?)\s*\]/g;
   const STYLE_ID = 'mc-chat-icon-renderer-style';
   const OWNED = '[data-mc-chat-icon-owned="true"]';
+  const ASSISTANT = '[data-message-author-role="assistant"],article[data-turn="assistant"]';
   const SKIP = 'script,style,noscript,template,textarea,input,select,option,optgroup,button,output,code,pre,[contenteditable]:not([contenteditable="false"]),[role="textbox"]';
   const normalize = (value) => String(value || '').replace(/[\u200B-\u200D\uFEFF]/g, '').replace(/\s+/g, '').trim().toLowerCase();
   const icons = Object.create(null), aliases = Object.create(null), categories = Object.create(null), categoryLookup = Object.create(null);
@@ -77,9 +78,15 @@
   }
 
   function hasToken(text) { TOKEN.lastIndex = 0; const found = !!text && TOKEN.test(text); TOKEN.lastIndex = 0; return found; }
+  function labelledAssistantArticle(element) {
+    const article = element && element.closest('article[data-testid^="conversation-turn-"]');
+    if (!article || article.getAttribute('data-turn') === 'user') return null;
+    const heading = [...article.children].find(child => /^H[1-6]$/.test(child.tagName) && child.classList.contains('sr-only'));
+    return /^ChatGPT\s*(?:said|답변)\s*:/i.test((heading?.textContent || '').trim()) ? article : null;
+  }
   function assistantRootFor(node) {
     const element = node && (node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement);
-    return element && (element.matches('[data-message-author-role="assistant"]') ? element : element.closest('[data-message-author-role="assistant"]'));
+    return element && (element.closest(ASSISTANT) || labelledAssistantArticle(element));
   }
   function skipText(node) {
     const parent = node && node.parentElement;
@@ -131,7 +138,7 @@
     return true;
   }
   function scan(root) {
-    if (!root || !root.isConnected || !root.matches('[data-message-author-role="assistant"]')) return;
+    if (!root || !root.isConnected || (!root.matches(ASSISTANT) && labelledAssistantArticle(root) !== root)) return;
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {acceptNode(node) {
       return !skipText(node) && hasToken(node.nodeValue) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
     }});
@@ -139,7 +146,12 @@
     while (walker.nextNode()) nodes.push(walker.currentNode);
     nodes.forEach(replaceText);
   }
-  function scanAll() { document.querySelectorAll('[data-message-author-role="assistant"]').forEach(scan); }
+  function scanAll() {
+    document.querySelectorAll(ASSISTANT).forEach(scan);
+    document.querySelectorAll('article[data-testid^="conversation-turn-"]').forEach(root => {
+      if (!root.matches(ASSISTANT) && !root.querySelector('[data-message-author-role="assistant"]')) scan(root);
+    });
+  }
   function queue(root) { if (root && root.isConnected) pendingRoots.add(root); }
   function processQueue() {
     scheduled = false;
@@ -160,7 +172,12 @@
       for (const node of record.addedNodes) {
         const root = assistantRootFor(node);
         if (root) { queue(root); relevant = true; }
-        if (node.nodeType === Node.ELEMENT_NODE) node.querySelectorAll('[data-message-author-role="assistant"]').forEach((child) => { queue(child); relevant = true; });
+        if (node.nodeType === Node.ELEMENT_NODE) {
+          node.querySelectorAll(ASSISTANT).forEach((child) => { queue(child); relevant = true; });
+          node.querySelectorAll('article[data-testid^="conversation-turn-"]').forEach((child) => {
+            if (labelledAssistantArticle(child) === child) { queue(child); relevant = true; }
+          });
+        }
       }
     }
     if (relevant) schedule();

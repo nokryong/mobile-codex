@@ -5,6 +5,7 @@
   if (window.__mcChatCustom) { window.__mcChatCustom.refresh(); return; }
   const SWITCH = 'mc-chat-mode-switch';
   const css = `#${SWITCH}{display:inline-flex;align-items:center;gap:2px;padding:1px;border:0;border-radius:999px;background:#eeeef0;font:600 13px/1.2 system-ui,sans-serif;flex:none;margin-inline-start:8px;margin-inline-end:auto;width:112px;box-sizing:border-box;position:relative;z-index:1}
+#${SWITCH}.mc-below-title{display:flex;margin:2px 0 6px 8px}
 #${SWITCH} button,#${SWITCH} a{display:flex;align-items:center;justify-content:center;min-height:40px;min-width:0;flex:1;padding:0 8px;border:0;border-radius:999px;font:inherit;text-decoration:none;color:#64646c;background:transparent;white-space:nowrap;cursor:pointer}
 #${SWITCH} button{background:#fafafa;color:#202024;box-shadow:0 1px 4px #0001}
 #${SWITCH} a:focus-visible{outline:2px solid #397cf6;outline-offset:2px}
@@ -17,17 +18,43 @@ html.dark #${SWITCH}{background:#25252b}html.dark #${SWITCH} button{background:#
     // Require a home link inside a sidebar, never match a conversation's linked logo.
     for (const root of sidebarRoots()) {
       const link = [...root.querySelectorAll('a[href="/"], a[href="https://chatgpt.com/"]')]
-        .find(a => a.querySelector('svg,img') && !/new chat|새 채팅/i.test(a.textContent || '') && !a.closest('[data-message-author-role]'));
+        .find(a => a.querySelector('svg,img') && !/new chat|새 채팅/i.test(a.textContent || '') && !a.closest('[data-message-author-role]') && a.getBoundingClientRect().top < 52);
       if (link) return link;
     }
     // Some mobile variants render a dialog instead of an aside. The top home logo
     // must share a row with the sidebar close button; a new-chat link is excluded.
     for (const link of document.querySelectorAll('a[href="/"]')) {
-      if (!link.querySelector('svg,img') || /new chat|새 채팅/i.test(link.textContent || '') || link.closest('main,[data-message-author-role]')) continue;
+      if (!link.querySelector('svg,img') || /new chat|새 채팅/i.test(link.textContent || '') || link.closest('main,[data-message-author-role]') || link.getBoundingClientRect().top >= 52) continue;
       const row = link.parentElement;
       if (row && row.querySelector('button[aria-label*="sidebar" i],button[aria-label*="사이드바"],button[aria-label*="Close" i],button[aria-label*="닫기"]')) return link;
     }
     return null;
+  }
+  function findTitleAndNewChat() {
+    // The newer sidebar shows a text title instead of a linked logo. Keep the
+    // switch in that sidebar, immediately before its own New chat action.
+    const candidates = [...document.querySelectorAll('a,button,[role="button"]')];
+    const title = candidates.find(element => {
+      if (element.closest('main,[data-message-author-role]') || (element.textContent || '').trim() !== 'ChatGPT' || !element.getClientRects().length) return false;
+      const rect = element.getBoundingClientRect();
+      return rect.top >= 0 && rect.top < 180 && rect.left < innerWidth * .65;
+    });
+    if (!title) return null;
+    const rect = title.getBoundingClientRect();
+    const newChat = candidates.find(element => {
+      if (element === title || element.closest('main') || !element.getClientRects().length) return false;
+      const name = ((element.getAttribute('aria-label') || '') + ' ' + (element.textContent || '')).trim();
+      if (!/^(?:새 채팅|새 대화|new chat)(?:\s+(?:새 채팅|새 대화|new chat))?$/i.test(name)) return false;
+      const next = element.getBoundingClientRect();
+      return next.top >= rect.bottom && next.top - rect.bottom < 180 && Math.abs(next.left - rect.left) < 100;
+    });
+    return newChat ? {title, newChat} : null;
+  }
+  function target() {
+    const logo = findLogo();
+    if (logo) return {anchor:logo, before:false};
+    const newer = findTitleAndNewChat();
+    return newer && {anchor:newer.newChat, before:true, title:newer.title};
   }
   function refresh() {
     scheduled = false;
@@ -37,20 +64,24 @@ html.dark #${SWITCH}{background:#25252b}html.dark #${SWITCH} button{background:#
     }
     // Undo the mistaken previous injection if this script is reloaded in place.
     document.querySelectorAll('[data-mc-hidden-official-mode-switch]').forEach(element => element.removeAttribute('data-mc-hidden-official-mode-switch'));
-    const logo = findLogo();
-    if (!logo) return;
+    const place = target();
+    if (!place) return;
     const existing = document.getElementById(SWITCH);
-    if (existing && existing.previousElementSibling === logo) return;
+    if (existing && (place.before ? existing.nextElementSibling === place.anchor : existing.previousElementSibling === place.anchor)) return;
     if (existing) existing.remove();
     const group = document.createElement('div'); group.id = SWITCH; group.setAttribute('role','group'); group.setAttribute('aria-label','대화 모드');
     const chat = document.createElement('button'); chat.type = 'button'; chat.textContent = 'Chat'; chat.setAttribute('aria-pressed','true');
     const codex = document.createElement('a'); codex.href = 'mobilecodex://mode/codex'; codex.textContent = 'Codex'; codex.setAttribute('aria-label','Codex로 전환');
-    group.append(chat, codex); logo.after(group);
+    group.append(chat, codex);
+    if (place.before) { group.classList.add('mc-below-title'); place.anchor.before(group); }
+    else place.anchor.after(group);
   }
   function closeSidebar() {
-    const logo = findLogo(); if (!logo) return false;
-    const row = logo.parentElement;
-    const button = row.querySelector('button[aria-label*="Close" i],button[aria-label*="닫기"],button[aria-label*="사이드바 접기"]');
+    const place = target(); if (!place) return false;
+    const start = place.title || place.anchor;
+    let row = start.parentElement, button = null;
+    for (let i = 0; row && i < 4 && !button; i++, row = row.parentElement)
+      button = row.querySelector('button[aria-label*="Close" i],button[aria-label*="닫기"],button[aria-label*="사이드바 접기"],button[aria-label*="사이드바 숨기기"]');
     if (!button || !button.getClientRects().length) return false;
     button.click(); return true;
   }

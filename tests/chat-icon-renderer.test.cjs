@@ -31,6 +31,21 @@ test('does not process user text, composer controls, or code', () => {
   assert.equal(w.document.querySelector('[data-message-author-role="user"]').textContent, '[[icon:해냈다]]');
 });
 
+test('renders an assistant turn after the web UI moves its role to the article', async () => {
+  const w = setup('<main><article data-turn="user">[[icon:안녕]]</article><article data-turn="assistant"><h6 class="sr-only">ChatGPT 답변:</h6><p>[[icon:안녕]]</p></article></main>');
+  assert.equal(w.document.querySelectorAll('article[data-turn="assistant"] .mc-chat-icon img').length, 1);
+  assert.equal(w.document.querySelector('article[data-turn="user"]').textContent, '[[icon:안녕]]');
+  const added = w.document.createElement('article'); added.dataset.turn = 'assistant'; added.innerHTML = '<p>[[icon:해냈다]]</p>';
+  w.document.querySelector('main').append(added); await tick();
+  assert.equal(added.querySelector('.mc-chat-icon img').alt, '해냈다');
+});
+
+test('uses the turn heading when the assistant role attribute is absent', () => {
+  const w = setup('<main><article data-testid="conversation-turn-1"><h6 class="sr-only">내가 한 말:</h6><p>[[icon:안녕]]</p></article><article data-testid="conversation-turn-2"><h6 class="sr-only">ChatGPT 답변:</h6><p>[[icon:안녕]]</p></article></main>');
+  assert.equal(w.document.querySelectorAll('.mc-chat-icon img').length, 1);
+  assert.equal(w.document.querySelector('[data-testid="conversation-turn-1"]').textContent.includes('[[icon:안녕]]'), true);
+});
+
 test('observes assistant nodes added by SPA navigation and ignores unrelated additions', async () => {
   const w = setup('<main></main>');
   const assistant = w.document.createElement('article');
