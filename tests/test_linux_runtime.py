@@ -112,13 +112,18 @@ class LinuxRuntimeScriptTest(unittest.TestCase):
         for executable in (proot, loader):
             executable.write_bytes(b"fixture")
             executable.chmod(0o700)
-        command = ["echo", "literal;$(must-not-expand)", "two words"]
+        command = ["echo", "literal;$(must-not-expand)", "--", "two words"]
         argv = module.proot_argv(str(root), str(workspace), str(proot), str(loader), command)
         self.assertEqual(command, argv[-len(command):])
+        self.assertEqual(["-w", "/workspace"], argv[-len(command) - 2:-len(command)])
+        self.assertNotIn("--", argv[:-len(command)])
         self.assertIn(str(workspace) + ":/workspace", argv)
         self.assertIn("--kill-on-exit", argv)
         with self.assertRaises(RuntimeError):
             module.proot_argv("/missing", "/missing", "/missing", "/missing", ["echo", "x;$(bad)"])
+        for invalid_command in ([], [""], ["--"], ["-b", "/unexpected"]):
+            with self.subTest(command=invalid_command), self.assertRaisesRegex(RuntimeError, "executable"):
+                module.proot_argv(str(root), str(workspace), str(proot), str(loader), invalid_command)
 
     def test_wrapper_status_requires_matching_ready_marker_and_run_drops_delimiter(self):
         spec = importlib.util.spec_from_file_location("linux_runtime", SCRIPT)
@@ -168,7 +173,27 @@ class LinuxRuntimeScriptTest(unittest.TestCase):
         self.assertEqual(str(proot), captured[0])
         self.assertEqual(str(proot), captured[1][0])
         self.assertEqual(["echo", "ok"], captured[1][-2:])
-        self.assertEqual(1, captured[1].count("--"))
+        self.assertNotIn("--", captured[1])
+
+    @unittest.skipUnless(os.path.isfile(os.environ.get("MC_LINUX_PROOT", ""))
+                         and os.path.isfile(os.environ.get("MC_LINUX_LOADER", ""))
+                         and Path("/system/bin/linker64").exists(),
+                         "requires the installed Android PRoot binaries")
+    def test_installed_android_proot_accepts_launcher_command_boundary(self):
+        # Exercise the actual packaged parser, loader and exec path. Use an
+        # app-owned executable so this does not install or enable a guest OS.
+        proot = os.environ["MC_LINUX_PROOT"]
+        loader = os.environ["MC_LINUX_LOADER"]
+        result = subprocess.run([
+            sys.executable, str(SCRIPT), "run", "--root", "/", "--workspace", str(self.path),
+            "--proot", proot, "--loader", loader, "--runtime-home", str(self.path),
+            "--", proot, "--version",
+        ], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
+        self.assertEqual(0, result.returncode, result.stderr)
+        version = next(package["version"] for package in
+                       json.loads((ROOT / "tools/devtools-lock.json").read_text())["packages"]
+                       if package["name"] == "proot")
+        self.assertIn(version, result.stdout)
 
 
 if __name__ == "__main__":

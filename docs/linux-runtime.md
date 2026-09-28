@@ -45,4 +45,8 @@ mc-linux -- /bin/bash -lc 'pwd && command -v python && command -v gcc'
 
 PRoot와 loader는 Android가 APK에서 설치하는 `nativeLibraryDir`에 둡니다. 기존 Android Python을 통해 실행 스크립트를 시작한 뒤 PRoot 진입 시 Android 동적 로더·Python 환경을 전달하지 않습니다. Codex app-server는 계속 기존 Android 실행 파일을 사용합니다. 일반 Chat WebView와 로그인 경로도 유지합니다.
 
+`mc-linux -- <명령>`의 구분자는 앱 실행기가 소비합니다. PRoot는 별도 `--`를 지원하지 않으므로 옵션 뒤에 실행할 명령을 바로 전달합니다. 명령 이후의 인수와 구분자는 그대로 유지합니다.
+
+`python3 -m unittest discover -s tests -p test_linux_runtime.py -v`는 `MC_LINUX_PROOT`와 `MC_LINUX_LOADER`가 있는 Android 환경에서 실제 설치 바이너리의 인자 처리·loader·실행 경로도 확인합니다. 이 테스트는 앱에 포함된 실행 파일을 사용하며, Linux를 설치하거나 활성화하지 않습니다. 일반 CI에서는 이 기기 전용 검사만 건너뜁니다.
+
 GitHub Actions에서 JS·Python·Android 단위 테스트, UI 레이아웃, Android 빌드와 Lint를 실행합니다. 이 검사는 실제 Android 기기에서의 Linux 설치·명령 실행을 대신하지 않습니다. 실기기 확인 순서는 설치 → 사용 켜기 → 터미널 `uname -m`/`pwd` → Codex `mc-linux status` → 사용 끄기 → 기존 Android 터미널 확인입니다. 삭제 테스트는 Linux 홈에 필요한 파일이 없는 상태에서 진행합니다.

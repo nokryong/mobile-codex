@@ -208,6 +208,11 @@ def guest_environment():
 
 
 def proot_argv(root, workspace, proot, loader, command):
+    # PRoot ends option parsing at the first command; it does not accept a
+    # standalone "--". Reject option-looking executables while preserving all
+    # following guest arguments, including their own "--" separators.
+    if not command or not command[0] or command[0].startswith("-"):
+        fail("guest command must start with an executable path or name")
     if not os.path.isdir(root):
         fail("Linux rootfs is unavailable")
     if not os.path.isdir(workspace):
@@ -220,7 +225,7 @@ def proot_argv(root, workspace, proot, loader, command):
         fail("PRoot loader is unavailable")
     # /dev and /proc are kernel pseudo-filesystems. No host home, Android app
     # files, credentials, or generic storage directories are mounted here.
-    return [proot, "--kill-on-exit", "-0", "-r", root, "-b", workspace + ":/workspace", "-b", "/dev", "-b", "/proc", "-w", "/workspace", "--"] + command
+    return [proot, "--kill-on-exit", "-0", "-r", root, "-b", workspace + ":/workspace", "-b", "/dev", "-b", "/proc", "-w", "/workspace"] + command
 
 
 def invoke(args, smoke=False):
