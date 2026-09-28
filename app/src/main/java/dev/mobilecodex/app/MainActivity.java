@@ -42,6 +42,21 @@ public final class MainActivity extends Activity implements Engine.Ui {
             return deniedResponse();
         }
     }
+    static WebResourceResponse packagedUiResponse(AssetManager assets, Uri uri) {
+        String path = uri.getPath();
+        if (!"https".equals(uri.getScheme()) || !HOST.equals(uri.getHost()) || path == null
+                || !(path.equals("/index.html") || path.equals("/app.css") || path.equals("/visual-system.css")
+                || path.equals("/app.js") || path.equals("/ui-core.js") || path.equals("/translations.js") || path.equals("/locale.js"))) {
+            return deniedResponse();
+        }
+        String mime = path.endsWith(".css") ? "text/css" : path.endsWith(".js") ? "application/javascript" : "text/html";
+        try {
+            return new WebResourceResponse(mime, "UTF-8", 200, "OK",
+                Map.of("Cache-Control", "no-store", "X-Content-Type-Options", "nosniff"), assets.open("web" + path));
+        } catch (Exception e) {
+            return deniedResponse();
+        }
+    }
     static boolean isBrowserUri(Uri uri, boolean allowHttp) {
         return ("https".equals(uri.getScheme()) || (allowHttp && "http".equals(uri.getScheme())))
             && uri.getHost() != null && !uri.getHost().isEmpty() && uri.getUserInfo() == null;
@@ -116,12 +131,7 @@ public final class MainActivity extends Activity implements Engine.Ui {
                 if (isPackagedLogoPath(path)) {
                     return packagedLogoResponse(getAssets(), uri);
                 }
-                if (path == null || !(path.equals("/index.html") || path.equals("/app.css") || path.equals("/app.js") || path.equals("/ui-core.js") || path.equals("/translations.js") || path.equals("/locale.js"))) return denied();
-                String mime = path.endsWith(".css") ? "text/css" : path.endsWith(".js") ? "application/javascript" : "text/html";
-                try {
-                    return new WebResourceResponse(mime, "UTF-8", 200, "OK",
-                        Map.of("Cache-Control", "no-store", "X-Content-Type-Options", "nosniff"), getAssets().open("web" + path));
-                } catch (Exception e) { return denied(); }
+                return packagedUiResponse(getAssets(), uri);
             }
             @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) { return true; }
             @Override public void onPageFinished(WebView view, String url) {
