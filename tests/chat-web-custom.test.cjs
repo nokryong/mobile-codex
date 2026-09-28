@@ -112,3 +112,41 @@ test('uses the visible navigation when mobile and hidden desktop copies coexist,
  visible.remove();await tick();
  assert.ok(d.querySelector('nav[aria-label="Home"] #mc-chat-mode-switch'));
 });
+
+// Observed 2026-09-28: the title/close toolbar moved outside the navigation.
+// Deliberately omit all of the previous header class names and localized labels.
+function separatedSidebar(id='panel') {
+ return `<section id="${id}"><header><svg role="img"><title>ChatGPT</title></svg><button aria-label="Hide sidebar" aria-controls="${id}" aria-expanded="true"></button></header>`+
+  '<div class="sidebar-navigation"><div class="contents"><nav role="navigation" aria-label="채팅 기록">'+
+  '<div class="header-new-build"><button>새 채팅</button></div><div data-app-action-sidebar-scroll><p>History unchanged</p></div>'+
+  '</nav></div></div></section>';
+}
+test('keeps the switch above New chat when the official title moves outside navigation',()=>{
+ const w=setup(separatedSidebar()+header),d=w.document,nav=d.querySelector('nav');
+ const group=d.getElementById('mc-chat-mode-switch');
+ assert.ok(group);assert.equal(nav.firstElementChild,group);
+ assert.equal(group.nextElementSibling.querySelector('button').textContent,'새 채팅');
+ assert.equal(nav.querySelector('[data-app-action-sidebar-scroll]').textContent,'History unchanged');
+ assert.ok(group.classList.contains('mc-at-sidebar-start'));
+ assert.equal(d.querySelector('.segmented').textContent,'ChatWork');
+ const close=d.querySelector('#panel > header button');close.getClientRects=()=>[{}];let clicked=0;close.onclick=()=>clicked++;
+ assert.equal(w.__mcChatCustom.closeSidebar(),true);assert.equal(clicked,1);
+});
+test('moves the switch to the visible separate-title sidebar on resize and restores it after remount',async()=>{
+ const w=setup(separatedSidebar('desktop')+separatedSidebar('mobile')),d=w.document;
+ const desktop=d.querySelector('#desktop nav'),mobile=d.querySelector('#mobile nav');
+ desktop.getClientRects=()=>[{}];mobile.getClientRects=()=>[];w.__mcChatCustom.refresh();
+ assert.ok(desktop.querySelector('#mc-chat-mode-switch'));
+ desktop.getClientRects=()=>[];mobile.getClientRects=()=>[{}];w.dispatchEvent(new w.Event('resize'));await tick();
+ assert.ok(mobile.querySelector('#mc-chat-mode-switch'));assert.equal(d.querySelectorAll('#mc-chat-mode-switch').length,1);
+ mobile.innerHTML='<div><button>New chat</button></div><div data-app-action-sidebar-scroll>History unchanged</div>';await tick();
+ assert.equal(mobile.firstElementChild.id,'mc-chat-mode-switch');
+ assert.equal(d.querySelectorAll('#mc-chat-mode-switch').length,1);
+});
+test('does not use the icon rail, an unrelated navigation, or an ambiguous sidebar as a fallback',()=>{
+ const w=setup('<nav data-app-navigation-rail aria-label="Sidebar"><div data-app-action-sidebar-scroll></div></nav>'+
+  '<nav aria-label="Unrelated"><button>New chat</button></nav>'+
+  '<nav aria-label="Ambiguous"><div data-app-action-sidebar-scroll></div><div data-app-action-sidebar-scroll></div></nav>'+
+  '<main><nav aria-label="Message"><div data-app-action-sidebar-scroll></div></nav></main>');
+ assert.equal(w.document.getElementById('mc-chat-mode-switch'),null);
+});
