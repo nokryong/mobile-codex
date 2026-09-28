@@ -68,6 +68,21 @@ async function checkComposer(page) {
  }
  return result;
 }
+async function checkCompactComposer(page) {
+ const result=await page.evaluate(()=>{
+  const box=id=>document.getElementById(id).getBoundingClientRect().toJSON();
+  return {expanded:document.getElementById('composer').classList.contains('composer-expanded'),
+   composer:box('composer'),prompt:box('prompt'),attach:box('add-attachment'),voice:box('voice-input'),
+   attachVisible:getComputedStyle(document.getElementById('add-attachment')).display!=='none',
+   voiceVisible:getComputedStyle(document.getElementById('voice-input')).display!=='none'};
+ });
+ assert.equal(result.expanded,false,'Composer returns to its compact state after blur');
+ assert.ok(result.attachVisible&&result.voiceVisible,'Compact composer keeps attach and voice visible');
+ assert.ok(result.attach.width>=43.5&&result.voice.width>=43.5,'Compact composer touch targets remain 44px');
+ assert.ok(result.attach.right<=result.prompt.x+1,'Attach button overlaps compact prompt');
+ assert.ok(result.prompt.right<=result.voice.x+1,'Voice button overlaps compact prompt');
+ assert.ok(result.voice.right<=result.composer.right+1,'Voice button leaves compact composer');
+}
 async function checkSidebar(page,width) {
  await page.locator('.topbar .sidebar-toggle').click();await page.waitForTimeout(180);
  const values=await page.evaluate(()=>{
@@ -124,6 +139,7 @@ async function checkModeSwitch(page,width,theme) {
  try {
   for(const [width,height,theme,language] of [[320,720,'light','en'],[393,852,'light','ko'],[393,852,'dark','en'],[800,1100,'light','en'],[1280,900,'dark','en']]){
    const {context,page,errors}=await open(browser,width,height,theme,language);
+   await checkCompactComposer(page);
    const layout=await checkComposer(page);const sidebar=width<=393?await checkSidebar(page,width):null;
    results.push({width,height,theme,language,layout,sidebar});
    await page.screenshot({path:path.join(output,`chat-${width}-${theme}-${language}.png`)});
