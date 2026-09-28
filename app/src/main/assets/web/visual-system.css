@@ -117,6 +117,9 @@ html[data-theme=dark] {
 .settings-section .settings-row { padding:12px 0; }
 .model-choice:has(input:checked),.permission-field label:has(input:checked) { border-color:var(--border); background:var(--pill); }
 .model-choice input,.permission-field input { accent-color:var(--action); }
+.toggle-switch input:checked + .toggle-track { background:var(--text); border-color:var(--text); }
+.status-pill.online { color:var(--text); background:var(--pill); }
+.dictation-level { accent-color:var(--accent); }
 
 @media(max-width:760px) {
   .sidebar { width:min(310px,calc(100% - 46px)); }
