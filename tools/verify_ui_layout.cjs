@@ -89,6 +89,9 @@ async function checkCompactComposer(page) {
  assert.ok(result.voice.right<=result.composer.right+1,'Voice button leaves compact composer');
  assert.ok(result.promptScrollHeight<=result.promptClientHeight+1,'Compact placeholder is clipped');
  await page.locator('#prompt').fill(draft);await page.locator('#prompt').blur();
+ await page.waitForFunction(()=>!document.getElementById('composer')?.classList.contains('composer-expanded'));
+ const draftHeight=await page.locator('#prompt').evaluate(el=>({scroll:el.scrollHeight,client:el.clientHeight}));
+ assert.ok(draftHeight.scroll<=draftHeight.client+1,'Compact draft wraps behind the composer edge');
 }
 async function checkSidebar(page,width) {
  await page.locator('.topbar .sidebar-toggle').click();await page.waitForTimeout(180);

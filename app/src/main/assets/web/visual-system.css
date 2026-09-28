@@ -87,7 +87,8 @@ html[data-theme=dark] {
 .composer:focus-within { border-color:var(--border); box-shadow:var(--shadow); }
 #prompt { font-size:16px; line-height:1.5; }
 .composer:not(.composer-expanded) { position:relative; min-height:58px; padding:8px 52px; border-radius:999px; }
-.composer:not(.composer-expanded) #prompt { height:40px!important; min-height:40px; padding:7px 2px; }
+.composer:not(.composer-expanded) #prompt { height:40px!important; min-height:40px; padding:7px 2px; white-space:nowrap; overflow:hidden; }
+.composer.composer-expanded #prompt { white-space:pre-wrap; }
 .composer:not(.composer-expanded) .composer-bottom { display:flex; position:absolute; inset:0; margin:0; padding:0; border:0; pointer-events:none; }
 .composer:not(.composer-expanded) .composer-actions { display:contents; }
 .composer:not(.composer-expanded) :is(#composer-folder,.approval-mode-picker,#composer-options,#send,#stop) { display:none!important; }
