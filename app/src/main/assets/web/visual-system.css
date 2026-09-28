@@ -1,0 +1,54 @@
+/* Mobile Codex visual foundation: one scale for the shell and core controls. */
+:root {
+  --space-1:4px; --space-2:8px; --space-3:12px; --space-4:16px; --space-6:24px;
+  --radius-control:12px; --radius-card:18px; --radius-sheet:24px;
+  --type-caption:12px; --type-label:14px; --type-body:15px; --type-title:clamp(25px,6vw,30px);
+  --touch-target:44px; --action:#285b46; --action-text:#fff;
+  --selected:rgba(51,101,82,.10); --selected-border:#336552;
+}
+html[data-theme=dark] {
+  --action:#a1d5b6; --action-text:#101012;
+  --selected:rgba(139,199,168,.14); --selected-border:#8bc7a8;
+}
+
+.sidebar,.file-panel { border-color:var(--border); }
+.sidebar .nav-button,.project-button,.session,.file-row { border-radius:var(--radius-control); }
+.sidebar .nav-button,.project-button,.session,.file-row { min-height:var(--touch-target); }
+.section-title { color:var(--muted); font-size:var(--type-caption); font-weight:650; letter-spacing:.01em; }
+.section-title .icon-button { width:var(--touch-target); height:var(--touch-target); min-height:var(--touch-target); }
+.project-tree.selected,.general-project.selected,.session-row.active { background:var(--selected); }
+.project-tree.selected .project-button,.general-project.selected .project-button,.session-row.active .session { color:var(--text); font-weight:600; }
+.topbar .outline-button { font-size:var(--type-label); font-weight:550; }
+.topbar .outline-button[aria-expanded="true"] { background:var(--selected); color:var(--selected-border); }
+
+.welcome h1 { font-size:var(--type-title); font-weight:680; letter-spacing:-.035em; line-height:1.28; }
+.welcome>p { font-size:var(--type-body); line-height:1.6; }
+.onboarding { border-radius:var(--radius-card); }
+.setup-row { min-height:64px; gap:var(--space-3); }
+.setup-row strong { font-size:var(--type-label); font-weight:620; }
+.setup-row small { font-size:var(--type-caption); line-height:1.45; }
+.setup-row .step { flex:none; width:32px; height:32px; color:var(--selected-border); border-color:var(--selected-border); font-weight:650; }
+.setup-row .step.done { color:var(--action-text); background:var(--action); }
+.suggestions button { min-height:var(--touch-target); border-radius:var(--radius-control); font-size:var(--type-label); line-height:1.4; }
+.suggestions svg { color:var(--selected-border); }
+
+.composer,.composer.composer-expanded { border-radius:var(--radius-sheet); }
+.composer:focus-within { box-shadow:0 0 0 2px var(--focus),var(--shadow); }
+.send-button::before { background:var(--action); }
+.send-button { color:var(--action-text); }
+.send-button:disabled { color:var(--disabled-icon); }
+.primary-button { background:var(--action); color:var(--action-text); font-weight:600; }
+.secondary-button { font-weight:550; }
+.dialog-head h2 { font-size:20px; line-height:1.35; font-weight:680; }
+.settings-nav button.active { color:var(--selected-border); background:var(--selected); }
+.model-choice:has(input:checked),.permission-field label:has(input:checked) { border-color:var(--selected-border); background:var(--selected); }
+.model-choice input,.permission-field input { accent-color:var(--action); }
+.file-row { font-size:var(--type-label); }
+.panel-head strong { font-size:var(--type-label); font-weight:650; }
+
+@media(max-width:760px) {
+  .welcome h1 { font-size:var(--type-title); }
+  .setup-row { min-height:68px; }
+  .settings-nav button { min-height:var(--touch-target); }
+  .sheet-dialog,.settings-dialog { border-radius:var(--radius-sheet) var(--radius-sheet) 0 0; }
+}

@@ -1283,8 +1283,18 @@
     if (!profiles.length) target.append(node('p',t('등록된 계정이 없습니다.'),'empty-note'));
   }
   function selectSettingsTab(name) {
-    document.querySelectorAll('[data-settings-tab]').forEach(button => button.classList.toggle('active', button.dataset.settingsTab === name));
+    document.querySelectorAll('[data-settings-tab]').forEach(button => {
+      const selected = button.dataset.settingsTab === name;
+      button.classList.toggle('active', selected);
+      if (selected) button.setAttribute('aria-current', 'page');
+      else button.removeAttribute('aria-current');
+    });
     document.querySelectorAll('[data-settings-panel]').forEach(panel => panel.hidden = panel.dataset.settingsPanel !== name);
+  }
+  function setFilePanelOpen(open) {
+    $('file-panel').hidden = !open;
+    $('files-toggle').setAttribute('aria-controls', 'file-panel');
+    $('files-toggle').setAttribute('aria-expanded', String(open));
   }
   function openAccountSettings() { selectSettingsTab('account'); show('settings-dialog'); sidebar(false); if (C.isLoggedIn(state.account)) loadUsage(); }
   async function loadUsage() {
@@ -1491,7 +1501,7 @@
     const id = dialogs.at(-1);
     if (id) { dismiss(id); return true; }
     if (document.body.classList.contains('sidebar-open')) { sidebar(false); return true; }
-    if (!$('file-panel').hidden) { $('file-panel').hidden = true; return true; }
+    if (!$('file-panel').hidden) { setFilePanelOpen(false); return true; }
     saveDraft(); return false;
   };
   document.querySelectorAll('dialog').forEach(d => {
@@ -1545,8 +1555,9 @@
   on('scrim', () => sidebar(false)); on('new-chat', async () => newChat(''));
   ['add-project', 'choose-folder', 'composer-folder'].forEach(id => on(id, () => pickFolder()));
    const closeToolMenu = () => { if ($('tool-menu-dialog').open) close('tool-menu-dialog'); };
-   ['show-files', 'files-toggle'].forEach(id => on(id, async () => { closeToolMenu(); $('file-panel').hidden = !$('file-panel').hidden; sidebar(false); if (!$('file-panel').hidden) await listFiles(); }));
-  on('file-close', () => $('file-panel').hidden = true); on('file-up', async () => { folder = C.parent(folder); await listFiles(); });
+   setFilePanelOpen(false);
+   ['show-files', 'files-toggle'].forEach(id => on(id, async () => { closeToolMenu(); setFilePanelOpen($('file-panel').hidden); sidebar(false); if (!$('file-panel').hidden) await listFiles(); }));
+  on('file-close', () => setFilePanelOpen(false)); on('file-up', async () => { folder = C.parent(folder); await listFiles(); });
   let searchTimer; on('file-query', () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => listFiles($('file-query').value.trim()).catch(e => toast(e.message)), 300); }, 'input');
   ['file-new', 'folder-new'].forEach(id => on(id, async () => { const name = await input(id === 'file-new' ? t('새 파일') : t('새 폴더'), t('이름을 입력하세요.')); if (name) await mutate(id === 'file-new' ? 'mobile_create' : 'mobile_mkdir', {path: C.join(folder, name), content: ''}); }));
   on('show-changes', () => { closeToolMenu(); return loadChanges(); }); on('changes-refresh', () => loadChanges()); on('changes-history', () => loadChanges(true)); on('change-restore', restoreChange);
@@ -1633,6 +1644,7 @@
   on('approval-mode', () => setApprovalMode($('approval-mode').value), 'change');
   document.querySelectorAll('input[name="permission"]').forEach(r => r.addEventListener('change', () => setPermissionMode(r.value).catch(error => toast(error.message))));
   ensureCharacterPackUi(); ensureNotificationSettings(); ensureChatLoginUi();
+  selectSettingsTab('general');
   on('connect', () => startLogin(false)); on('account-button', openAccountSettings); on('settings', () => { ensureCharacterPackUi(); ensureNotificationSettings(); show('settings-dialog'); sidebar(false); if (!characterState.folderConfigured && characterState.packs.length <= 1) loadCharacterPacks(); });
   document.querySelectorAll('[data-settings-tab]').forEach(tab => tab.addEventListener('click', () => {
     const selected = tab.dataset.settingsTab; selectSettingsTab(selected);
