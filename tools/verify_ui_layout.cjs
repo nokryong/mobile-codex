@@ -18,7 +18,7 @@ const snapshot = {
  models:[{id:'gpt-example',model:'gpt-example',displayName:'Default model',isDefault:true,supportedReasoningEfforts:[{reasoningEffort:'medium',description:'Medium'}]}],
  messages:[{id:'u',role:'user',text:'Help me organize this project.'},{id:'a',role:'assistant',text:'I reviewed the project files. Here is a clear place to start.\n\n- Keep the source files in `src/`.\n- Put setup instructions in `README.md`.\n- Review the changes before running the app.\n\n```js\nconst greeting = "Hello, mobile";\nconsole.log(greeting);\n```\n\nWhat would you like to work on first?'}]
 };
-async function open(browser, width, height, theme='light', language='en', extra={}) {
+async function open(browser, width, height, theme='light', language='en', extra={}, initialSnapshot=snapshot) {
  const context = await browser.newContext({viewport:{width,height},deviceScaleFactor:1,colorScheme:theme,...extra});
  const page = await context.newPage(), errors=[];
  page.on('pageerror',error=>errors.push(error.message));
@@ -39,7 +39,7 @@ async function open(browser, width, height, theme='light', language='en', extra=
    if(m.action==='files.list') result={entries:[]};
    setTimeout(()=>window.mobileCodexEvent('response',{id:m.id,result}),0);
   }};
- }, {snapshot,theme,language});
+ }, {snapshot:initialSnapshot,theme,language});
  await page.goto('https://appassets.androidplatform.net/index.html');
  await page.waitForFunction(()=>document.querySelector('#header-project')?.textContent==='Very long project display name that keeps its menu visible');
  await page.locator('#prompt').fill(language==='ko'?'다음으로 어떤 작업을 하면 될까요?':'What should we work on next?');
@@ -153,6 +153,14 @@ async function checkModeSwitch(page,width,theme) {
     await page.screenshot({path:path.join(output,`keyboard-${theme}-${language}.png`)});
    }
    assert.deepEqual(errors,[],'Browser errors');await context.close();
+  }
+  for(const [width,height,theme,language] of [[393,852,'light','ko'],[1280,900,'dark','en']]) {
+   const {context,page,errors}=await open(browser,width,height,theme,language,{}, {...snapshot,messages:[],sessions:[]});
+   await page.locator('#prompt').fill('');await page.locator('#prompt').blur();
+   assert.equal(await page.locator('#welcome').isVisible(),true,'Empty conversation shows the start screen');
+   assert.equal(await page.locator('#suggestions button:visible').count(),3,'Three starting actions remain visible');
+   await page.screenshot({path:path.join(output,`welcome-${width}-${theme}-${language}.png`)});
+   assert.deepEqual(errors,[],'Start screen browser errors');await context.close();
   }
   const {context,page}=await open(browser,393,852,'light','en',{reducedMotion:'reduce'});
   await page.locator('#prompt').focus();
