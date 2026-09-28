@@ -26,7 +26,7 @@ APK를 여는 앱에서 **이 출처 허용**을 별도로 요구할 수 있습�
 
 Codex 데스크톱의 작업 방식을 모바일로 옮기는 개인용 클라이언트입니다. Codex 실행 엔진과 Python·Node.js·Git을 APK에 포함해, Termux 설치나 별도 PC 서버 없이 기기에서 바로 작업할 수 있습니다.
 
-**0.1.28 alpha** · **ARM64 / Android 10 이상** · 제작 [nokryong](https://github.com/nokryong)
+**0.1.41 alpha** · **ARM64 / Android 10 이상** · 제작 [nokryong](https://github.com/nokryong)
 
 [APK 다운로드](https://github.com/nokryong/mobile-codex/releases) · [개발 빌드](https://github.com/nokryong/mobile-codex/actions/workflows/android.yml) · [문제 제보](https://github.com/nokryong/mobile-codex/issues)
 
@@ -47,7 +47,7 @@ Codex 사이드바는 제목 줄 아래 전체가 스크롤됩니다. 프로젝�
 | 프로젝트와 대화 | 프로젝트별 대화 목록, 폴더 없는 일반 대화, 저장된 기록 열기, 응답 스트리밍·중지·재개, 작업 중 추가 지시 |
 | 파일 작업 | 폴더 탐색·검색, 파일 읽기·생성·수정·이동·이름 변경·삭제, 변경 전 확인과 복구 사본 |
 | 첨부와 이미지 | 여러 파일 첨부, 이미지 미리보기, 여러 장의 생성 결과 갤러리, 확대·스와이프·원본 저장 |
-| 기기 내 개발 도구 | Python·pip, Node.js·npm/npx, Git, 명령 입력과 출력 스트리밍 |
+| 기기 내 개발 도구 | Python·pip, Node.js·npm/npx, Git, 선택 설치하는 Linux 환경, 명령 입력과 출력 스트리밍 |
 | 변경 사항 검토 | Git 상태 확인, HEAD 기준 변경 비교, 작업 파일 복원과 복구 사본 |
 | 플러그인·스킬·MCP | 플러그인 설치·활성화와 계정 연결, 스킬 폴더 가져오기, MCP 서버 설정·상태·도구 확인 |
 | 계정과 사용 한도 | ChatGPT 계정을 여러 개 등록해 안전하게 전환하고, 계정별 대화를 분리하며, 남은 Codex 한도를 간단·상세 그래프로 확인 |
@@ -68,7 +68,7 @@ Codex 사이드바는 제목 줄 아래 전체가 스크롤됩니다. 프로젝�
 
 | Actions 산출물 | 용도 |
 | --- | --- |
-| **`mobile-codex-update-assets`** | **설치할 때 받을 파일.** ZIP을 풀면 `mobile-codex-0.1.27-alpha-arm64.apk`와 검증 파일이 나옵니다. |
+| **`mobile-codex-update-assets`** | **설치할 때 받을 파일.** ZIP을 풀면 `mobile-codex-0.1.41-alpha-arm64.apk`와 검증 파일이 나옵니다. |
 | `mobile-codex-arm64-debug` | APK·런타임 정보·개발 도구의 대응 소스를 함께 담은 큰 묶음입니다. |
 | `check-reports` | 테스트·Lint 결과와 브라우저 화면 검사·스크린샷입니다. 설치 파일은 없습니다. |
 
@@ -105,6 +105,12 @@ Actions 산출물 다운로드에는 GitHub 로그인이 필요하며, 보관 �
 - **플러그인:** 마켓플레이스와 상세 정보를 확인해 설치·활성화합니다. 추가 계정 연결이 필요하면 연결 버튼이 표시됩니다.
 - **스킬:** `SKILL.md`가 바로 아래에 있는 폴더를 **스킬 가져오기**로 선택합니다. 스크립트·참고 자료·에셋도 함께 가져오며, 대화에서 `$`로 선택합니다.
 - **MCP:** 서버 상태와 도구 목록을 확인하고 OAuth 연결 또는 `config.toml` 설정을 사용합니다. stdio 서버의 명령은 Android에서 실행 가능해야 합니다.
+
+### 선택 설치하는 Linux 개발 환경
+
+**설정 → 도구 → Linux 환경**에서 Arch Linux ARM을 설치하고 **Linux 환경 사용**을 켭니다. 약 152 MB의 루트 파일 시스템을 별도로 내려받으며 APK에는 포함하지 않습니다. 설치 전에 저장 공간을 확인하고 다운로드 무결성을 검증합니다. 설치 도중 취소하거나 실패 후 다시 시도할 수 있습니다.
+
+활성화하면 앱 터미널에서 Linux 명령을 실행합니다. Codex는 기존 셸 도구와 승인 절차를 통해 `mc-linux -- /bin/bash -lc '명령'`을 사용할 수 있습니다. 현재 프로젝트는 Linux의 `/workspace`로 연결하며, 설치한 패키지와 Linux 홈은 앱 내부에 보관합니다. Linux 환경을 삭제해도 연결된 프로젝트 폴더는 유지됩니다. 자세한 사용법과 호환 범위는 [Linux 환경 안내](docs/linux-runtime.md)를 참고하세요.
 
 ### 휴대폰 제어와 플로팅 대화
 

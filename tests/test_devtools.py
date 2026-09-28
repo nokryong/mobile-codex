@@ -68,6 +68,13 @@ class DevtoolsPackagingTests(unittest.TestCase):
         self.assertEqual(resolved, ["libthree", "libtwo", "nodejs-lts", "npm"])
         self.assertNotIn("nodejs", resolved)
 
+    def test_proot_uses_only_its_termux_runtime_dependencies(self):
+        index = {
+            "proot": {"Depends": "libandroid-shmem, libtalloc"},
+            "libandroid-shmem": {}, "libtalloc": {},
+        }
+        self.assertEqual(devtools.resolve_packages(index, ("proot",)), ["libandroid-shmem", "libtalloc", "proot"])
+
     def test_archive_validation_rejects_path_traversal_symlink_and_elf(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -129,12 +136,21 @@ class DevtoolsPackagingTests(unittest.TestCase):
             for name in entries:
                 self.assertIsNone(devtools.elf_info(payload.read(name)), name)
 
-        self.assertEqual(set(manifest["versions"]), {"python", "node", "git", "npm", "pip", "ca-certificates"})
+        self.assertEqual(set(manifest["versions"]), {"python", "node", "git", "npm", "pip", "ca-certificates", "proot"})
         self.assertEqual(manifest["commands"]["node"]["native"], "libnode.so")
         self.assertEqual(manifest["commands"]["python3"]["native"], "libpython3.so")
         self.assertEqual(manifest["prefixVirtualization"]["requiredNative"], "libmc_exec.so")
         self.assertEqual(manifest["prefixVirtualization"]["activation"]["environment"], "LD_PRELOAD")
         self.assertEqual(manifest["unavoidablePathBlockers"], [])
+        linux = manifest["linuxRuntime"]
+        self.assertEqual(linux["proot"]["native"], "libproot.so")
+        self.assertEqual(linux["loader"]["native"], "libproot_loader.so")
+        self.assertEqual(linux["hostEnvironment"]["PROOT_LOADER"], "<nativeLibraryDir>/libproot_loader.so")
+        self.assertEqual(linux["clearHostEnvironment"], ["LD_PRELOAD", "LD_LIBRARY_PATH"])
+        self.assertIn("Only an ARM64 loader is bundled; 32-bit Linux guests are unsupported.", linux["limitations"])
+        self.assertEqual(manifest["commands"]["mc-linux"]["launcher"], "libmc_launch.so")
+        self.assertEqual(manifest["commands"]["mc-linux"]["scriptEnvironment"], "MC_LINUX_SCRIPT")
+        self.assertNotIn("libexec/proot/loader32", entries)
 
         available = set(manifest["nativeFiles"]) | set(manifest["appOwnedNative"]) | devtools.SYSTEM_NEEDED
         for name, record in manifest["nativeFiles"].items():

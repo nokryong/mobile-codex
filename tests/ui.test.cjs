@@ -41,6 +41,67 @@ test('every wired control exists and initial state renders safely',async()=>{
  assert.match(w.document.getElementById('messages').textContent,/<script>/);
  assert.equal(w.document.getElementById('project-label').textContent,'Project');
 });
+test('Linux environment stays idle until the user explicitly installs it',async()=>{
+ const {w,calls,snapshot}=setup();await tick();
+ const linux={supported:true,installed:false,enabled:false,busy:false,state:'not_installed',label:'Debian',downloadBytes:152000000,requiredFreeBytes:300000000,availableBytes:900000000};
+ w.mobileCodexEvent('state',{...snapshot,linux});await tick();
+ assert.equal(calls.filter(c=>c.action==='linux.install').length,0);
+ assert.match(w.document.getElementById('linux-environment-details').textContent,/Debian/);
+ assert.match(w.document.getElementById('linux-environment-details').textContent,/B/);
+ w.MobileCodexLocale.set('en');w.mobileCodexEvent('state',{...snapshot,linux});await tick();
+ assert.match(w.document.getElementById('linux-environment-description').textContent,/Codex and terminal/);
+});
+test('Linux progress and cancellation reflect native status events',async()=>{
+ const {w,calls,snapshot}=setup();await tick();
+ const linux={supported:true,installed:false,enabled:false,busy:true,state:'downloading',label:'Debian',downloadedBytes:25,totalBytes:100};
+ w.mobileCodexEvent('state',{...snapshot,linux});await tick();
+ const progress=w.document.getElementById('linux-environment-progress');
+ assert.equal(progress.hidden,false);assert.equal(progress.max,100);assert.equal(progress.value,25);
+ assert.equal(w.document.getElementById('linux-install').hidden,true);
+ w.document.getElementById('linux-cancel').click();await tick();
+  assert.equal(calls.filter(c=>c.action==='linux.cancel').length,1);
+ w.mobileCodexEvent('linux.changed',{...linux,state:'verifying'});await tick();
+ assert.equal(progress.hasAttribute('value'),false);
+  w.mobileCodexEvent('linux.changed',{...linux,busy:false,state:'cancelled'});await tick();
+ assert.match(w.document.getElementById('linux-environment-status').textContent,/취소/);
+ assert.equal(w.document.getElementById('linux-install').textContent,'다시 시도');
+});
+test('Linux settings suppress duplicate bridge mutations and reset the terminal note after disabling',async()=>{
+ let resolveInstall;
+ const {w,calls,snapshot}=setup({'linux.install':()=>new Promise(resolve=>{resolveInstall=resolve;})});await tick();
+ const linux={supported:true,installed:false,enabled:false,busy:false,state:'not_installed',label:'Debian'};
+ w.mobileCodexEvent('state',{...snapshot,devtools:{bundled:false},linux});await tick();
+ const install=w.document.getElementById('linux-install');install.click();install.click();await tick();
+ assert.equal(calls.filter(c=>c.action==='linux.install').length,1);assert.equal(install.disabled,true);
+ resolveInstall({...linux,installed:true,state:'ready',enabled:true});await tick();
+ assert.equal(install.disabled,false);
+ assert.match(w.document.getElementById('terminal-tools-note').textContent,/Debian/);
+ w.mobileCodexEvent('linux.changed',{...linux,installed:true,state:'ready',enabled:false});await tick();
+ assert.match(w.document.getElementById('terminal-tools-note').textContent,/번들 개발 도구는 사용할 수 없습니다/);
+});
+test('Linux installation errors retry only on click and failed enable never flips the toggle',async()=>{
+ const {w,calls,snapshot}=setup({'linux.enable':()=>{throw new Error('<img src=x onerror=alert(1)>');}});await tick();
+ const failed={supported:true,installed:false,enabled:false,busy:false,state:'error',label:'Debian',error:'network down'};
+ w.mobileCodexEvent('state',{...snapshot,linux:failed});await tick();
+ const install=w.document.getElementById('linux-install');assert.equal(install.textContent,'다시 시도');install.click();await tick();
+ assert.equal(calls.filter(c=>c.action==='linux.install').length,1);
+ const ready={supported:true,installed:true,enabled:false,busy:false,state:'ready',label:'Debian'};
+ w.mobileCodexEvent('linux.changed',ready);await tick();
+ const enabled=w.document.getElementById('linux-enabled');enabled.checked=true;enabled.dispatchEvent(new w.Event('change'));await tick();
+ assert.equal(calls.filter(c=>c.action==='linux.enable').at(-1).args.enabled,true);
+ assert.equal(enabled.checked,false);
+ assert.equal(w.document.querySelector('#linux-environment-status img'),null);
+ assert.match(w.document.getElementById('linux-environment-status').textContent,/<img/);
+});
+test('Linux incomplete installation can be explicitly removed without automatic retry',async()=>{
+ const {w,calls,snapshot}=setup({'linux.remove':()=>({supported:true,installed:false,hasFiles:false,enabled:false,busy:false,state:'not_installed'})});await tick();
+ w.mobileCodexEvent('state',{...snapshot,linux:{supported:true,installed:false,hasFiles:true,enabled:false,busy:false,state:'error',error:'incomplete installation'}});await tick();
+ const remove=w.document.getElementById('linux-remove');
+ assert.equal(remove.hidden,false);
+ w.confirm=()=>false;remove.click();await tick();assert.equal(calls.filter(c=>c.action==='linux.remove').length,0);
+ w.confirm=()=>true;remove.click();await tick();assert.equal(calls.filter(c=>c.action==='linux.remove').length,1);
+ assert.equal(remove.hidden,true);assert.equal(calls.filter(c=>c.action==='linux.install').length,0);
+});
 test('account settings open official Chat sign-in without experiment controls',async()=>{
  const {w,calls}=setup();await tick();
  const button=w.document.getElementById('chat-account-login');

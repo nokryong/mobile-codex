@@ -12,6 +12,7 @@ const output = process.env.UI_LAYOUT_OUTPUT ? path.resolve(root, process.env.UI_
 fs.mkdirSync(output, {recursive:true});
 const snapshot = {
  ready:true,busy:false,permissions:'workspace-write',status:'Connected',threadId:'demo',cwd:'/workspace/field-notes',directWorkspace:true,
+ linux:{supported:true,installed:false,enabled:false,busy:false,state:'not_installed',downloadBytes:151744988,requiredFreeBytes:1620180444,availableBytes:4000000000,label:'Arch Linux ARM (aarch64)'},
  workspace:{selected:true,key:'demo-project',name:'Very long project display name that keeps its menu visible'},projects:[{key:'demo-project',name:'Very long project display name that keeps its menu visible',available:true}],
  account:{type:'chatgpt',email:'demo@example.test'},
  sessions:[{id:'demo',workspaceKey:'demo-project',title:'A very long conversation title that must keep its action button visible'}],
@@ -37,6 +38,7 @@ async function open(browser, width, height, theme='light', language='en', extra=
    if(m.action==='updates.state') result={versionName:'0.1.13-alpha',versionCode:14,repository:'nokryong/mobile-codex',prereleases:true};
    if(m.action==='instructions.read') result={content:'Read the relevant files before editing.',activePath:'/private/AGENTS.md'};
    if(m.action==='files.list') result={entries:[]};
+   if(m.action==='linux.status') result=snapshot.linux;
    setTimeout(()=>window.mobileCodexEvent('response',{id:m.id,result}),0);
   }};
  }, {snapshot:initialSnapshot,theme,language});
@@ -143,6 +145,28 @@ async function checkModeSwitch(page,width,theme) {
  assert.equal(await page.locator('#prompt').inputValue(),draft,'Opening native Chat preserves Codex draft');
  assert.equal(await page.locator('body').evaluate(el=>el.classList.contains('chat-mode')),false);
 }
+async function checkLinuxSettings(page,width,theme,language) {
+ await page.locator('.topbar .sidebar-toggle').click();
+ await page.locator('#settings').click();
+ await page.locator('[data-settings-tab="tools"]').click();
+ const card=page.locator('#linux-environment-card');
+ await card.scrollIntoViewIfNeeded();
+ const bounds=await card.boundingBox();
+ assert.ok(bounds.width>0&&bounds.x>=0&&bounds.x+bounds.width<=width+1,'Linux settings leave viewport');
+ assert.equal(await page.locator('#linux-install').isVisible(),true);
+ const button=await page.locator('#linux-install').boundingBox();
+ assert.ok(button.height>=44&&button.width>=44,'Linux install touch target is too small');
+ assert.equal(await page.locator('#linux-enabled').isVisible(),false,'Linux stays disabled before installation');
+ await page.evaluate(info=>window.mobileCodexEvent('linux.changed',{...info,busy:true,state:'extracting',downloadedBytes:info.downloadBytes,totalBytes:info.downloadBytes}),snapshot.linux);
+ assert.equal(await page.locator('#linux-environment-progress').getAttribute('value'),null,'Extraction must not show download completion as installation progress');
+ assert.equal(await page.locator('#linux-cancel').isVisible(),true);
+ await page.evaluate(info=>window.mobileCodexEvent('linux.changed',{...info,installed:true,state:'ready'}),snapshot.linux);
+ await page.locator('#linux-enabled').scrollIntoViewIfNeeded();
+ assert.equal(await page.locator('#linux-enabled').isChecked(),false,'Finishing installation must not enable Linux automatically');
+ await page.screenshot({path:path.join(output,`linux-settings-${width}-${theme}-${language}.png`)});
+ await page.locator('#settings-dialog [data-close="settings-dialog"]').last().click();
+ if(await page.evaluate(()=>document.body.classList.contains('sidebar-open'))) await page.locator('#sidebar .sidebar-toggle').click();
+}
 (async()=>{
  const browser=await chromium.launch({headless:true,executablePath:process.env.MOBILE_CODEX_BROWSER_EXECUTABLE||undefined,args:['--no-sandbox','--disable-dev-shm-usage']});
  const results=[];
@@ -160,6 +184,7 @@ async function checkModeSwitch(page,width,theme) {
    if(width>760)await checkComposer(page);
    await page.locator('#file-close').click();
    if(width<=393)await checkModeSwitch(page,width,theme);
+   if(width<=393)await checkLinuxSettings(page,width,theme,language);
    if(width===393){
     // Exercise the actual user path into Settings, then drag its handle.
     await page.locator('.topbar .sidebar-toggle').click();await page.locator('#settings').click();

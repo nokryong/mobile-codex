@@ -23,6 +23,25 @@ static int starts_with(const char *value, const char *prefix) {
     return strncmp(value, prefix, strlen(prefix)) == 0;
 }
 
+static int is_safe_linux_script(const char *script, const char *home) {
+    size_t home_length;
+    const char *component;
+
+    if (script == NULL || script[0] != '/' || home == NULL || home[0] != '/') return 0;
+    home_length = strlen(home);
+    if (home_length == 0 || strncmp(script, home, home_length) || script[home_length] != '/') return 0;
+    /* The parent owns this app-private directory.  Refuse traversal syntax so
+     * this fixed alias cannot become an arbitrary Python script launcher. */
+    for (component = script + home_length + 1; *component != '\0'; ) {
+        const char *end = strchr(component, '/');
+        size_t length = end == NULL ? strlen(component) : (size_t)(end - component);
+        if ((length == 1 && component[0] == '.') || (length == 2 && component[0] == '.' && component[1] == '.')) return 0;
+        if (end == NULL) break;
+        component = end + 1;
+    }
+    return 1;
+}
+
 static char *join_path(const char *left, const char *right) {
     size_t need = strlen(left) + 1 + strlen(right) + 1;
     char *result = malloc(need);
@@ -39,6 +58,8 @@ int main(int argc, char **argv) {
     const char *command = base_name(argc > 0 ? argv[0] : "");
     const char *prefix = getenv("MC_PREFIX");
     const char *native_dir = getenv("MC_NATIVE_DIR");
+    const char *linux_home = getenv("MC_LINUX_HOME");
+    const char *linux_script = getenv("MC_LINUX_SCRIPT");
     const char *node_override = getenv("MC_NODE");
     const char *python_override = getenv("MC_PYTHON");
     char *node_owned = NULL, *python_owned = NULL, *script_owned = NULL;
@@ -96,6 +117,22 @@ int main(int argc, char **argv) {
         next[2] = "pip";
         for (int i = 1; i < argc; i++) next[i + 2] = argv[i];
         exec_program(python, next);
+        free(next);
+        goto done;
+    }
+    if (!strcmp(command, "mc-linux")) {
+        if (!is_safe_linux_script(linux_script, linux_home)) {
+            fputs("mobile-codex: MC_LINUX_SCRIPT must be an absolute script below MC_LINUX_HOME\n", stderr);
+            goto done;
+        }
+        next = calloc((size_t)argc + 2, sizeof(*next));
+        if (next == NULL) goto done;
+        /* Do not honor MC_PYTHON here: mc-linux has one app-owned Python
+         * runtime and one app-owned wrapper script by design. */
+        next[0] = python_owned;
+        next[1] = (char *)linux_script;
+        for (int i = 1; i < argc; i++) next[i + 1] = argv[i];
+        exec_program(python_owned, next);
         free(next);
         goto done;
     }

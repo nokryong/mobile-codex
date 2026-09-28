@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "id": "archlinux-aarch64-proot-distro-v4.29.0",
+  "distribution": "Arch Linux ARM (aarch64)",
+  "provenance": "https://github.com/termux/proot-distro/releases/tag/v4.29.0",
+  "url": "https://github.com/termux/proot-distro/releases/download/v4.29.0/archlinux-aarch64-pd-v4.29.0.tar.xz",
+  "sha256": "08d74365213e647c558e561b0a2a7afb6fa3dfe345a1994c62ccac5af1a1cdc6",
+  "compressedBytes": 151744988,
+  "archiveTopLevel": "archlinux-aarch64",
+  "maximumEntries": 100000,
+  "maximumUncompressedBytes": 1200000000,
+  "installationMarginBytes": 268435456
+}

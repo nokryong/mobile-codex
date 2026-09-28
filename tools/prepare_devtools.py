@@ -45,7 +45,11 @@ GPL2_SHA256 = "edaef632cbb643e4e7a221717a6c441a4c1a7c918e6e4d56debc3d8739b233f6"
 TERMUX_PREFIX = b"/data/data/com.termux/files/usr"
 TERMUX_SHELL = TERMUX_PREFIX + b"/bin/sh"
 ANDROID_SHELL = b"/system/bin/sh"
-TARGETS = ("python", "nodejs-lts", "git", "npm", "python-pip", "ca-certificates")
+TARGETS = ("python", "nodejs-lts", "git", "npm", "python-pip", "ca-certificates", "proot")
+# The Termux proot package contains a 32-bit loader in addition to its ARM64
+# loader.  The APK's arm64-v8a directory cannot execute that binary and this
+# optional runtime deliberately supports an ARM64 Linux rootfs only.
+EXCLUDED_PACKAGE_FILES = {("proot", "libexec/proot/loader32")}
 SYSTEM_NEEDED = {
     # Bionic and Android platform libraries are supplied by the device, not
     # copied from Termux.  libc++ is intentionally excluded: the APK already
@@ -493,6 +497,12 @@ def stable_native_name(relative_path: str, data: bytes, kind: str) -> str:
         return "libnode.so"
     if relative_path in {"bin/python", "bin/python3", "bin/python3.14"}:
         return "libpython3.so"
+    # These names are a public host-runtime contract.  PRoot needs an
+    # executable loader, and Android permits it only in nativeLibraryDir.
+    if relative_path == "bin/proot":
+        return "libproot.so"
+    if relative_path == "libexec/proot/loader":
+        return "libproot_loader.so"
     prefix = {"tool": "libtool", "python-module": "libpy", "dependency": "libdep"}[kind]
     return f"{prefix}_{digest}.so"
 
@@ -606,9 +616,9 @@ def validate_payload_archive(path: Path) -> None:
                 raise PackagingError(f"payload zip contains executable ELF: {name!r}")
 
 
-def command_aliases(git_native: str) -> dict[str, dict[str, str]]:
+def command_aliases(git_native: str, proot_native: str) -> dict[str, dict[str, str]]:
     launcher = {name: {"native": "", "launcher": "libmc_launch.so"} for name in (
-        "node", "nodejs", "python", "python3", "python3.14", "npm", "npx", "pip", "pip3", "pip3.14", "git",
+        "node", "nodejs", "python", "python3", "python3.14", "npm", "npx", "pip", "pip3", "pip3.14", "git", "mc-linux",
     )}
     launcher["npm"].update({"script": "lib/node_modules/npm/bin/npm-cli.js", "native": "libnode.so"})
     launcher["npx"].update({"script": "lib/node_modules/npm/bin/npx-cli.js", "native": "libnode.so"})
@@ -620,6 +630,8 @@ def command_aliases(git_native: str) -> dict[str, dict[str, str]]:
     for pip in ("pip", "pip3", "pip3.14"):
         launcher[pip].update({"native": "libpython3.so"})
     launcher["git"] = {"native": git_native}
+    launcher["proot"] = {"native": proot_native}
+    launcher["mc-linux"].update({"native": "libpython3.so", "scriptEnvironment": "MC_LINUX_SCRIPT"})
     launcher["sh"] = {"system": "/system/bin/sh"}
     return launcher
 
@@ -701,6 +713,8 @@ def prepare(lock: dict[str, Any] | None = None) -> dict[str, Any]:
                     if member.isdir():
                         continue
                     relative = relative_prefix_path(member.name)
+                    if (package["name"], relative) in EXCLUDED_PACKAGE_FILES:
+                        continue
                     if member.issym():
                         if relative in files or relative in symlinks:
                             raise PackagingError(f"duplicate installed path: {relative}")
@@ -844,7 +858,11 @@ def prepare(lock: dict[str, Any] | None = None) -> dict[str, Any]:
         git_native = path_to_native.get("bin/git")
         if not git_native:
             raise PackagingError("git executable is missing from selected packages")
-        commands = command_aliases(git_native)
+        proot_native = path_to_native.get("bin/proot")
+        proot_loader_native = path_to_native.get("libexec/proot/loader")
+        if not proot_native or not proot_loader_native:
+            raise PackagingError("selected proot package is missing the ARM64 executable or loader")
+        commands = command_aliases(git_native, proot_native)
         for command, spec in commands.items():
             if "native" in spec:
                 links[f"bin/{command}"] = {"native": spec.get("launcher", spec["native"])}
@@ -865,6 +883,7 @@ def prepare(lock: dict[str, Any] | None = None) -> dict[str, Any]:
                 "npm": next(p["version"] for p in lock["packages"] if p["name"] == "npm"),
                 "pip": next(p["version"] for p in lock["packages"] if p["name"] == "python-pip"),
                 "ca-certificates": next(p["version"] for p in lock["packages"] if p["name"] == "ca-certificates"),
+                "proot": next(p["version"] for p in lock["packages"] if p["name"] == "proot"),
             },
             "pythonVersion": next(p["version"] for p in lock["packages"] if p["name"] == "python").split("-")[0],
             "packageIndex": lock["index"], "termuxPackagesRecipeCommit": lock["termuxPackagesRecipeCommit"],
@@ -883,6 +902,23 @@ def prepare(lock: dict[str, Any] | None = None) -> dict[str, Any]:
                     {"from": "/data/data/com.termux/files/usr/tmp", "toEnvironment": "TMPDIR"},
                 ],
                 "note": "MC_PREFIX alone does not redirect compiled Termux paths; libmc_exec.so must be preloaded.",
+            },
+            "linuxRuntime": {
+                "architecture": "arm64-v8a",
+                "proot": {"native": proot_native, "link": "bin/proot"},
+                "loader": {"native": proot_loader_native, "source": "libexec/proot/loader"},
+                "launcher": {"command": "mc-linux", "scriptEnvironment": "MC_LINUX_SCRIPT", "homeEnvironment": "MC_LINUX_HOME"},
+                "hostEnvironment": {
+                    "PROOT_LOADER": "<nativeLibraryDir>/" + proot_loader_native,
+                    "PROOT_TMP_DIR": "<MC_LINUX_HOME>/tmp",
+                    "PROOT_DONT_POLLUTE_ROOTFS": "1",
+                },
+                "clearHostEnvironment": ["LD_PRELOAD", "LD_LIBRARY_PATH"],
+                "limitations": [
+                    "Only an ARM64 loader is bundled; 32-bit Linux guests are unsupported.",
+                    "libandroid-shmem has a fixed Termux temporary path, so System V shared memory is unsupported with the clean host environment.",
+                ],
+                "note": "Run the Android PRoot host with its dynamic-loader environment cleared; pass guest environment only explicitly.",
             },
             "opensslEnvironment": {
                 "OPENSSL_CONF": "etc/tls/openssl.cnf",

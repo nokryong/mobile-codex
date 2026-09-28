@@ -130,6 +130,31 @@
     {
       "architecture": "aarch64",
       "depends": "",
+      "filename": "pool/main/liba/libandroid-shmem/libandroid-shmem_0.7_aarch64.deb",
+      "homepage": "https://github.com/termux/libandroid-shmem",
+      "license": "BSD 3-Clause",
+      "name": "libandroid-shmem",
+      "recipe": "https://github.com/termux/termux-packages/blob/4f795f7ab7c7e0806d47a8891caa280cd8dfbe41/packages/libandroid-shmem/build.sh",
+      "recipeArchive": {
+        "sha256": "ca5cfed866182b1332aa0843c932bbb5067c4e178356c38d081beac81878eca6",
+        "url": "https://codeload.github.com/termux/termux-packages/tar.gz/4f795f7ab7c7e0806d47a8891caa280cd8dfbe41"
+      },
+      "recipeVersion": "0.7",
+      "recipeVersionMatches": true,
+      "sha256": "0da3a24d558b93c92bcf8d611e0826a99ff96e396b148e6cdf33b47c47c57ff6",
+      "size": 7216,
+      "sourceArchiveStatus": "complete",
+      "sources": [
+        {
+          "sha256": "1e5ff8459bc0a8c229dd8a94b27d119987e09ef3414331c2b5ebfff20b98e867",
+          "url": "https://github.com/termux/libandroid-shmem/archive/refs/tags/v0.7.tar.gz"
+        }
+      ],
+      "version": "0.7"
+    },
+    {
+      "architecture": "aarch64",
+      "depends": "",
       "filename": "pool/main/liba/libandroid-support/libandroid-support_29-1_aarch64.deb",
       "homepage": "https://github.com/termux/libandroid-support",
       "license": "Apache-2.0, MIT",
@@ -422,6 +447,31 @@
     },
     {
       "architecture": "aarch64",
+      "depends": "",
+      "filename": "pool/main/libt/libtalloc/libtalloc_2.4.3_aarch64.deb",
+      "homepage": "https://talloc.samba.org/talloc/doc/html/index.html",
+      "license": "GPL-3.0",
+      "name": "libtalloc",
+      "recipe": "https://github.com/termux/termux-packages/blob/4f795f7ab7c7e0806d47a8891caa280cd8dfbe41/packages/libtalloc/build.sh",
+      "recipeArchive": {
+        "sha256": "ca5cfed866182b1332aa0843c932bbb5067c4e178356c38d081beac81878eca6",
+        "url": "https://codeload.github.com/termux/termux-packages/tar.gz/4f795f7ab7c7e0806d47a8891caa280cd8dfbe41"
+      },
+      "recipeVersion": "2.4.3",
+      "recipeVersionMatches": true,
+      "sha256": "ac81ad623d74c209718b9f3acb2dd702cc8a88c431e820d212229910b4db29da",
+      "size": 33128,
+      "sourceArchiveStatus": "complete",
+      "sources": [
+        {
+          "sha256": "dc46c40b9f46bb34dd97fe41f548b0e8b247b77a918576733c528e83abd854dd",
+          "url": "https://www.samba.org/ftp/talloc/talloc-2.4.3.tar.gz"
+        }
+      ],
+      "version": "2.4.3"
+    },
+    {
+      "architecture": "aarch64",
       "depends": "openssl, zlib",
       "filename": "pool/main/libs/libssh2/libssh2_1.11.1-2_aarch64.deb",
       "homepage": "https://www.libssh2.org",
@@ -601,6 +651,31 @@
     },
     {
       "architecture": "aarch64",
+      "depends": "libandroid-shmem, libtalloc",
+      "filename": "pool/main/p/proot/proot_5.1.107.95_aarch64.deb",
+      "homepage": "https://proot-me.github.io/",
+      "license": "GPL-2.0",
+      "name": "proot",
+      "recipe": "https://github.com/termux/termux-packages/blob/4f795f7ab7c7e0806d47a8891caa280cd8dfbe41/packages/proot/build.sh",
+      "recipeArchive": {
+        "sha256": "ca5cfed866182b1332aa0843c932bbb5067c4e178356c38d081beac81878eca6",
+        "url": "https://codeload.github.com/termux/termux-packages/tar.gz/4f795f7ab7c7e0806d47a8891caa280cd8dfbe41"
+      },
+      "recipeVersion": "5.1.107.95",
+      "recipeVersionMatches": true,
+      "sha256": "0a1b3d0f6ef76436c5ed924cd8e8f5a6b7186e99e1650eb2d9bc734e218a74cb",
+      "size": 98732,
+      "sourceArchiveStatus": "complete",
+      "sources": [
+        {
+          "sha256": "dbb50381c2f0b5c342bdf3d3467d80c21d2a4677d9dadd14159fa3b32f11b319",
+          "url": "https://github.com/termux/proot/archive/v5.1.107.95.zip"
+        }
+      ],
+      "version": "5.1.107.95"
+    },
+    {
+      "architecture": "aarch64",
       "depends": "gdbm, libandroid-posix-semaphore, libandroid-support, libbz2, libcrypt, libexpat, libffi, liblzma, libsqlite, ncurses, ncurses-ui-libs, openssl, readline, zlib, zstd",
       "filename": "pool/main/p/python/python_3.14.6-1_aarch64.deb",
       "homepage": "https://python.org/",
@@ -769,7 +844,8 @@
     "git",
     "npm",
     "python-pip",
-    "ca-certificates"
+    "ca-certificates",
+    "proot"
   ],
   "termuxPackagesRecipeCommit": "40a00dd69107b62d7c9cc71109b3c8fab9802b07"
 }

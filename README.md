@@ -26,7 +26,7 @@ The APK-opening app may separately require **Allow from this source**. Menu name
 
 Mobile Codex is an independent Android client built around the Codex app-server. It bundles an Android port of Codex, Python, Node.js, and Git, so you do not need to install Termux or keep a separate PC server running.
 
-**0.1.28 alpha** · **ARM64 / Android 10+** · Created by [nokryong](https://github.com/nokryong)
+**0.1.41 alpha** · **ARM64 / Android 10+** · Created by [nokryong](https://github.com/nokryong)
 
 [Download APK](https://github.com/nokryong/mobile-codex/releases) · [Builds](https://github.com/nokryong/mobile-codex/actions/workflows/android.yml) · [Report an issue](https://github.com/nokryong/mobile-codex/issues)
 
@@ -45,7 +45,7 @@ Chat opens the official ChatGPT website in an app WebView. Its own model picker,
 | Projects and chats | Separate chat lists per project, general chats without a folder, saved history, streaming, interruption, and additional instructions during a task |
 | Files | Browse, search, read, create, edit, move, rename, and delete files; confirm changes and keep recovery copies |
 | Attachments and images | Attach multiple files, preview images, browse generated image galleries, zoom, swipe, and save originals |
-| Developer tools | Bundled Python/pip, Node.js/npm/npx, and Git; enter commands and stream output |
+| Developer tools | Bundled Python/pip, Node.js/npm/npx, and Git; optional Linux development environment; enter commands and stream output |
 | Change review | Inspect Git status and differences against HEAD, restore working files, and use recovery copies |
 | Plugins, skills, and MCP | Install and enable plugins, connect accounts, import skill folders, and configure MCP servers |
 | Accounts and limits | Save multiple ChatGPT accounts locally, switch safely with separate chat histories, and see remaining Codex limits as compact and detailed charts |
@@ -62,7 +62,7 @@ You need an **ARM64 device running Android 10 or later**, an up-to-date Android 
 
 ### Download the APK
 
-Open [Releases](https://github.com/nokryong/mobile-codex/releases) and download **`mobile-codex-0.1.28-alpha-arm64.apk`** from the release assets. Open the APK and follow Android’s installation prompts. If requested, allow installation from the app you used to download/open it.
+Open [Releases](https://github.com/nokryong/mobile-codex/releases) and download **`mobile-codex-0.1.41-alpha-arm64.apk`** from the release assets. Open the APK and follow Android’s installation prompts. If requested, allow installation from the app you used to download/open it.
 
 New app versions are published automatically after the `main` workflow passes its tests, builds, and original-key signature verification. Alpha versions are marked as prereleases. A published version is never silently replaced; maintainers must increment both `versionName` and `versionCode` for the next release.
 
@@ -106,6 +106,12 @@ Open **Plugins · Skills · MCP** in the sidebar.
 - **Skills:** Import a folder with `SKILL.md` directly inside it. Scripts, references, and assets are copied too. Select a skill with `$` in chat.
 - **MCP:** Inspect server status and tools, connect with OAuth where supported, or edit `config.toml`. Commands for stdio servers must run on Android.
 
+### Optional Linux development environment
+
+Open **Settings → Tools → Linux environment** to download and install Arch Linux ARM on demand, then turn on **Use Linux environment**. The root filesystem is a separate download of about 152 MB; it is not included in the APK. The installer checks free space and download integrity, and offers cancellation and retry.
+
+When enabled, the app terminal runs Linux commands. Codex can use `mc-linux -- /bin/bash -lc 'command'` through its normal shell tool and approval flow. The current project is mounted at `/workspace`; Linux packages and the guest home remain in app-private storage. Removing Linux deletes that environment, while preserving connected project folders. See [Linux setup and limitations](docs/linux-runtime.md).
+
 ### Phone controls and floating chat
 
 In **Settings → Tools → Phone controls**, connect the accessibility service, explicitly enable controls, and start a **new chat**. Use the on-screen stop button to disable controls. They are disabled after the app process restarts.
@@ -131,7 +137,7 @@ This is alpha software. Core workflows have user reports of successful use on ph
 - **File access:** Android permissions apply. Full file access is not root and cannot access other apps’ private data or protected system areas. Cloud document providers use document tools rather than ordinary shell paths.
 - **Approvals:** Choose **Ask**, **Auto review**, or **Allow all** beside the model in the chat composer. Auto review routes approval requests to Codex's risk reviewer; task file access remains a separate setting.
 - **Task permissions:** The Android port does not provide the desktop command sandbox; the OS boundary for shell commands is the Android app’s permissions.
-- **Command compatibility:** Python, JavaScript, and Android-compatible packages are supported. A compiler, JDK, Perl, and SSH client are not bundled. Arbitrary Linux/Windows executables and native extensions may not work.
+- **Command compatibility:** Python, JavaScript, and Android-compatible packages are supported. A compiler, JDK, Perl, and SSH client are not bundled. The optional Linux environment supports additional ARM64 Linux tools installed inside it; Windows/x86 executables, kernel services, and all desktop software are not supported.
 - **Storage:** Shared storage can restrict execution and symbolic links. App-internal paths work better for npm installations and Git operations. General chats use an internal working folder.
 - **Editing and recovery:** The built-in editor supports UTF-8 text up to 1 MiB. Document tools copy files before modification and deleted files up to 32 MiB, but cannot recover every shell change or entire deleted directory. These editor limits do not restrict ordinary Codex tools or shell commands.
 - **Dedicated interfaces:** An interactive PTY, Git commit/worktree management, and scheduled automation do not yet have dedicated screens. The current terminal provides command entry and streaming output.
@@ -182,6 +188,7 @@ Additional technical documents are currently mostly in Korean.
 | --- | --- |
 | [Input and attachments](docs/input-protocol.md) | File/app mentions, skills, and attachment storage |
 | [Android developer tools](docs/android-devtools.md) | Python, Node.js, Git, packaging, and limitations |
+| [Optional Linux environment](docs/linux-runtime.md) | On-demand installation, shell usage, and compatibility |
 | [Git runtime fix](docs/git-runtime-fix.md) | Shared-library loading and verification |
 | [Updates and releases](docs/app-updates.md) | APK checks, signing compatibility, and publication |
 | [Localization](docs/localization.md) | UI translations and adding languages |

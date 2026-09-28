@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import os
 from pathlib import Path
 import shutil
@@ -44,11 +45,42 @@ class NativeBuildTests(unittest.TestCase):
 
     def test_launcher_accepts_only_packaged_aliases(self):
         source = (ROOT / "tools" / "native" / "mc_launch.c").read_text()
-        for alias in ('"node"', '"nodejs"', '"python"', '"python3"', '"npm"', '"npx"', '"pip"', '"pip3"'):
+        for alias in ('"node"', '"nodejs"', '"python"', '"python3"', '"npm"', '"npx"', '"pip"', '"pip3"', '"mc-linux"'):
             self.assertIn(alias, source)
         self.assertIn("unsupported runtime alias", source)
         self.assertIn("lib/node_modules/npm/bin/npm-cli.js", source)
         self.assertIn("lib/node_modules/npm/bin/npx-cli.js", source)
+
+    def test_linux_alias_uses_only_the_app_owned_python_and_script(self):
+        source = (ROOT / "tools" / "native" / "mc_launch.c").read_text()
+        self.assertIn('getenv("MC_LINUX_HOME")', source)
+        self.assertIn('getenv("MC_LINUX_SCRIPT")', source)
+        self.assertIn('is_safe_linux_script(linux_script, linux_home)', source)
+        self.assertIn('next[0] = python_owned;', source)
+        self.assertIn('next[1] = (char *)linux_script;', source)
+        self.assertIn('MC_LINUX_SCRIPT must be an absolute script below MC_LINUX_HOME', source)
+
+    def test_linux_alias_executes_packaged_python_with_literal_arguments(self):
+        cc = shutil.which("cc")
+        if cc is None:
+            self.skipTest("C compiler unavailable")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            launcher = root / "mc-linux"
+            subprocess.run([cc, "-std=c11", "-Wall", "-Werror", "-o", str(launcher), str(ROOT / "tools/native/mc_launch.c")], check=True)
+            os.symlink(sys.executable, root / "libpython3.so")
+            home = root / "linux"; home.mkdir()
+            script = home / "runtime.py"
+            script.write_text("import json,sys;print(json.dumps(sys.argv[1:]))")
+            environment = os.environ | {"MC_PREFIX":str(root), "MC_NATIVE_DIR":str(root), "MC_LINUX_HOME":str(home),
+                                        "MC_LINUX_SCRIPT":str(script), "MC_PYTHON":"/must-not-be-used"}
+            args = ["--", "echo", "two words", "literal;$(not-expanded)"]
+            result = subprocess.run([str(launcher), *args], env=environment, text=True, capture_output=True)
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertEqual(args, json.loads(result.stdout))
+            environment["MC_LINUX_SCRIPT"] = str(home / ".." / "runtime.py")
+            rejected = subprocess.run([str(launcher), "status"], env=environment, text=True, capture_output=True)
+            self.assertEqual(127, rejected.returncode)
 
     def test_preload_only_maps_known_script_interpreters(self):
         source = (ROOT / "tools" / "native" / "mc_exec.c").read_text()

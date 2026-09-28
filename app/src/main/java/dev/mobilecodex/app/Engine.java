@@ -53,6 +53,7 @@ public final class Engine {
     private String permissionMode, approvalMode;
     private final Map<String, PendingRequest> requests = new LinkedHashMap<>();
     private volatile Process terminalProcess;
+    private volatile boolean terminalUsesLinux;
     private String status = t("시작할 준비가 됐습니다"), threadId = "", turnId = "", serverThreadId = "";
     private JSONObject account = new JSONObject();
     private JSONObject rateLimits = new JSONObject();
@@ -73,6 +74,7 @@ public final class Engine {
     private final AccountProfiles accountProfiles;
     private final PersonalInstructions instructions;
     private final DevTools devTools;
+    private final LinuxRuntime linux;
     private String addAccountRestoreKey = "";
     private record PendingRequest(RpcClient connection, Object id, String method, JSONObject params) {}
 
@@ -90,6 +92,7 @@ public final class Engine {
         processHome = codexHome.root();
         instructions = new PersonalInstructions(codexHome);
         devTools = new DevTools(context);
+        linux = new LinuxRuntime(context, devTools, this::linuxChanged);
         changes = new ChangeReview(new File(context.getFilesDir(), "change-backups"), this::git);
         workDir = new File(context.getFilesDir(), "workspace"); workDir.mkdirs();
         stateFile = new File(context.getFilesDir(), "sessions.json");
@@ -130,7 +133,7 @@ public final class Engine {
         return obj("ready", ready, "busy", busy, "status", t(status), "account", account,
             "accounts", accountProfiles.list(), "rateLimits", rateLimits, "models", models, "workspace", documents.workspace(), "projects", documents.projects(), "sessions", summaries,
             "threadId", threadId, "turnId", turnId, "turnDiff", active == null ? "" : active.optString("turnDiff"), "messages", active == null ? new JSONArray() : active.optJSONArray("messages"),
-            "pendingDeletionCount", pendingDeletionCount(), "devtools", devTools.status(),
+            "pendingDeletionCount", pendingDeletionCount(), "devtools", devTools.status(), "linux", linux.status(),
             "phone", PhoneUseService.status(context), "phoneToolsAvailable", active == null || active.optInt("phoneToolsVersion") >= 1,
             "permissions", permissionMode, "approvalMode", approvalMode, "allFilesAccess", (Build.VERSION.SDK_INT >= 30 ? Environment.isExternalStorageManager() : context.checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE) == android.content.pm.PackageManager.PERMISSION_GRANTED),
             "directWorkspace", documents.directDirectory() != null, "cwd", projectDirectory().getAbsolutePath());
@@ -184,12 +187,14 @@ public final class Engine {
         if (changed) persist();
     }
     public void updatesChanged(JSONObject data) { event("updates.changed", data); }
-    public boolean canInstallUpdate() { return runningTurns.isEmpty() && !VoiceInput.active() && (terminalProcess == null || !terminalProcess.isAlive()); }
+    public boolean canInstallUpdate() { return runningTurns.isEmpty() && !VoiceInput.active() && !linux.status().optBoolean("busy") && (terminalProcess == null || !terminalProcess.isAlive()); }
     public void voiceInputChanged() { event("voice.changed", obj()); }
     public void phoneStateChanged() { io.execute(this::publish); }
     public void handle(String action, JSONObject args, Reply reply) {
         // Never queue consent revocation behind a slow engine/tool operation.
         if (Set.of("phone.stop", "chat.stop", "runtime.stop", "auth.logout").contains(action)) PhoneUseService.stopControl();
+        // Installation cancellation must not queue behind a long Codex RPC.
+        if (action.equals("linux.cancel")) { linux.cancel(); reply.complete(linux.status(), null); return; }
         io.execute(() -> {
             try {
                 switch (action) {
@@ -203,7 +208,22 @@ public final class Engine {
                         models = latest; publish(); reply.complete(obj("models", models), null);
                     }
                     case "devtools.check" -> { JSONObject result = devTools.check(codexHome.root(), runtimeAliases()); publish(); reply.complete(result, null); }
-                    case "runtime.stop" -> { stopNow(); reply.complete(snapshot(), null); }
+                    case "linux.status" -> reply.complete(linux.status(), null);
+                    case "linux.install" -> {
+                        context.startForegroundService(new Intent(context, EngineService.class));
+                        try { linux.install(codexHome.root(), runtimeAliases()); reply.complete(linux.status(), null); }
+                        catch (Exception error) { stopServiceIfIdle(); throw error; }
+                    }
+                    case "linux.enable" -> {
+                        ensureRuntimeSettingsIdle(); linux.setEnabled(args.getBoolean("enabled"));
+                        // Re-read developer instructions on the next turn, including restored chats.
+                        serverThreadId = ""; publish(); reply.complete(linux.status(), null);
+                    }
+                    case "linux.remove" -> {
+                        ensureRuntimeSettingsIdle(); linux.remove(); serverThreadId = "";
+                        publish(); reply.complete(linux.status(), null);
+                    }
+                    case "runtime.stop" -> { linux.cancel(); stopNow(); reply.complete(snapshot(), null); }
                     case "auth.login" -> reply.complete(beginLogin(false), null);
                     case "auth.add" -> reply.complete(beginLogin(true), null);
                     case "auth.cancel" -> {
@@ -274,7 +294,7 @@ public final class Engine {
                         reply.complete(obj("ok", true), null);
                     }
                     case "terminal.run" -> { runTerminal(args.getString("command")); reply.complete(obj("ok", true), null); }
-                    case "terminal.stop" -> { if (terminalProcess != null) terminalProcess.destroyForcibly(); reply.complete(obj("ok", true), null); }
+                    case "terminal.stop" -> { stopTerminalProcess(); reply.complete(obj("ok", true), null); }
                     case "files.list" -> reply.complete(documents.list(args.optString("path", "")), null);
                     case "files.search" -> reply.complete(documents.search(args.getString("query")), null);
                     case "files.read" -> reply.complete(documents.read(args.getString("path")), null);
@@ -342,6 +362,19 @@ public final class Engine {
     private boolean hasRunningTurns() { return !runningTurns.isEmpty(); }
     private void ensureIdle() throws IOException { if (busy) throw new IOException(t("현재 대화의 작업을 먼저 중지해 주세요.")); }
     private void ensureEngineIdle() throws IOException { if (hasRunningTurns()) throw new IOException(t("진행 중인 작업을 먼저 중지해 주세요.")); }
+    private void ensureRuntimeSettingsIdle() throws IOException {
+        ensureEngineIdle();
+        if (terminalProcess != null && terminalProcess.isAlive()) throw new IOException(t("터미널 명령을 마친 뒤 Linux 설정을 변경해 주세요."));
+        if (linux.status().optBoolean("busy")) throw new IOException(t("Linux 설치 작업을 마친 뒤 다시 시도해 주세요."));
+    }
+    private void linuxChanged() {
+        if (io.isShutdown()) return;
+        io.execute(() -> { event("linux.changed", linux.status()); stopServiceIfIdle(); });
+    }
+    private void stopServiceIfIdle() {
+        if (!linux.status().optBoolean("busy") && !ready && (process == null || !process.isAlive())
+                && (terminalProcess == null || !terminalProcess.isAlive())) context.stopService(new Intent(context, EngineService.class));
+    }
     private void clearRunningState() {
         runningTurns.clear();
         for (int i = 0; i < sessions.length(); i++) {
@@ -381,6 +414,7 @@ public final class Engine {
         ProcessBuilder builder = new ProcessBuilder(binary.getAbsolutePath(), "app-server", "--listen", "stdio://");
         builder.directory(projectDirectory());
         devTools.configure(builder, processHome, runtimeAliases());
+        linux.configureEnvironment(builder.environment());
         builder.environment().put("CODEX_SELF_EXE", binary.getAbsolutePath());
         context.startForegroundService(new Intent(context, EngineService.class));
         RuntimeFailure.Tail stderrTail = new RuntimeFailure.Tail();
@@ -558,7 +592,17 @@ public final class Engine {
             + ". Folder available: " + workspace.optBoolean("available") + ". Direct shell access to that folder: "
             + (documents.directDirectory() != null) + ". The exact model requested for this thread is "
             + (model == null || model.isBlank() ? "not available from the runtime" : model)
-            + ". When the user asks which model you are, report that exact requested model id.";
+            + ". When the user asks which model you are, report that exact requested model id."
+            + linuxInstructions(linux.status());
+    }
+    static String linuxInstructions(JSONObject state) {
+        if (!state.optBoolean("installed") || !state.optBoolean("enabled"))
+            return " Optional Linux development environment is disabled. Do not download or enable it automatically. The user can install and enable it in Settings > Tools.";
+        return " Optional Arch Linux ARM64 environment is enabled. For Linux development commands use the existing shell tool with `mc-linux -- /bin/bash -lc 'command'`; `mc-linux status` reports readiness. "
+            + "It uses the shell's current working directory as /workspace in Linux, so change the host working directory to the requested project first. Files in /workspace are the same project files. "
+            + "Linux packages and /root persist separately from the Android toolchain. Check available commands before assuming a compiler or package is installed. "
+            + "Use the normal approval policy for Linux commands and package installations. PRoot does not grant Android root or provide a security sandbox. "
+            + "Host credentials are not automatically available inside Linux. Do not copy them to work around login requirements. Model inference remains online.";
     }
     private String approvalPolicy() { return "allow-all".equals(approvalMode) ? "never" : "on-request"; }
     private String approvalsReviewer() { return "auto-review".equals(approvalMode) ? "auto_review" : "user"; }
@@ -1130,6 +1174,7 @@ public final class Engine {
     }
     public void stop() {
         PhoneUseService.stopControl();
+        linux.cancel();
         // Closing approval first allows a pending action to resolve without changes.
         Approval approval = pendingApproval; if (approval != null) approval.decision.complete(false);
         io.execute(this::stopNow);
@@ -1150,11 +1195,11 @@ public final class Engine {
         if (rpc != null) rpc.close(); rpc = null;
         requests.forEach((key, value) -> event("server.resolved", obj("key", key)));
         requests.clear();
-        if (terminalProcess != null) terminalProcess.destroyForcibly();
+        stopTerminalProcess();
         clearRunningState();
         ready = false; serverThreadId = ""; status = t("연결 종료");
         persist(); publish();
-        context.stopService(new Intent(context, EngineService.class));
+        stopServiceIfIdle();
     }
     private File projectDirectory() { File dir = documents.directDirectory(); return dir == null ? workDir : dir; }
     /**
@@ -1195,16 +1240,37 @@ public final class Engine {
         documents.requireWorkspaceAvailable();
         if (documents.workspace().optBoolean("selected") && documents.directDirectory() == null)
             throw new IOException(t("이 문서 제공자 폴더에서는 셸을 실행할 수 없습니다. 기기 파일 접근 권한을 확인하거나 일반 대화의 앱 내부 작업 폴더를 사용해 주세요."));
-        ProcessBuilder builder = new ProcessBuilder("/system/bin/sh", "-c", command).directory(projectDirectory()).redirectErrorStream(true);
-        devTools.configure(builder, codexHome.root(), runtimeAliases());
-        Process running = builder.start(); terminalProcess = running;
+        ProcessBuilder builder;
+        boolean useLinux = linux.status().optBoolean("enabled");
+        if (useLinux) builder = linux.command(command, projectDirectory(), codexHome.root(), runtimeAliases());
+        else {
+            builder = new ProcessBuilder("/system/bin/sh", "-c", command).directory(projectDirectory());
+            devTools.configure(builder, codexHome.root(), runtimeAliases());
+            linux.configureEnvironment(builder.environment());
+        }
+        builder.redirectErrorStream(true);
+        context.startForegroundService(new Intent(context, EngineService.class));
+        Process running;
+        try { running = builder.start(); terminalUsesLinux = useLinux; terminalProcess = running; }
+        catch (Exception error) { stopServiceIfIdle(); throw error; }
         Thread reader = new Thread(() -> {
             try (Reader out = new InputStreamReader(running.getInputStream(), StandardCharsets.UTF_8)) {
                 char[] buffer = new char[2048]; int n;
                 while ((n = out.read(buffer)) != -1) event("terminal.output", obj("text", new String(buffer, 0, n)));
                 int code = running.waitFor(); event("terminal.exit", obj("code", code));
             } catch (Exception e) { event("error", obj("message", t("터미널 연결이 종료되었습니다."))); }
-            finally { if (terminalProcess == running) terminalProcess = null; }
+            finally { if (terminalProcess == running) terminalProcess = null; if (!io.isShutdown()) io.execute(this::stopServiceIfIdle); }
         }, "mobile-terminal"); reader.setDaemon(true); reader.start();
+    }
+    private void stopTerminalProcess() {
+        Process running = terminalProcess;
+        if (running == null) return;
+        if (terminalUsesLinux) {
+            // Let PRoot's signal handler reap its tracees before using SIGKILL.
+            running.destroy();
+            try { if (running.waitFor(3, TimeUnit.SECONDS)) return; }
+            catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); }
+        }
+        if (running.isAlive()) running.destroyForcibly();
     }
 }

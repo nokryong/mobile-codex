@@ -50,7 +50,7 @@
         <service android:name=".EngineService" android:exported="false"
             android:foregroundServiceType="specialUse">
             <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="User-initiated on-device AI file assistant and interactive account sign-in" />
+                android:value="User-initiated on-device AI file assistant, command execution, optional Linux installation and interactive account sign-in" />
         </service>
     </application>
 </manifest>

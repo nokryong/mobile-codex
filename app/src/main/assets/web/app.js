@@ -19,6 +19,7 @@
   let resetCredits = null, resetCreditBusy = false, resetCreditScope = '', resetCreditIdempotencyKey = '', resetCreditSelectedId = '', usageGeneration = 0;
   const toolCache = [null, null, null];
   let updateState = {}, updateSourceDirty = false, updateRequestPending = false;
+  let linuxStatusError = '', linuxRequestPending = false;
   function call(action, args = {}) {
     return new Promise((resolve, reject) => {
       if (!window.Native) return reject(new Error(t('Android 앱에서 실행해 주세요.')));
@@ -814,6 +815,78 @@
     $('devtools-check').disabled = devtoolsChecking;
     $('devtools-check').textContent = devtoolsChecking ? t('실행 확인 중…') : t('도구 실행 확인');
   }
+  function linuxStatus(value) {
+    return value && typeof value === 'object' ? value : null;
+  }
+  function linuxBytes(value) { return Number.isFinite(Number(value)) && Number(value) >= 0 ? C.size(Number(value)) : ''; }
+  function linuxPhase(info) {
+    const phases = {not_installed:t('설치되지 않음'), downloading:t('다운로드 중…'), verifying:t('검증 중…'), extracting:t('압축 해제 중…'), checking:t('확인 중…'), ready:t('준비됨'), error:t('설치 실패'), cancelled:t('설치 취소됨')};
+    return phases[info?.state] || '';
+  }
+  function ensureLinuxUi() {
+    if ($('linux-environment-card')) return;
+    const tools = document.querySelector('[data-settings-panel="tools"]'); if (!tools) return;
+    const card = node('section', null, 'devtools-card linux-environment-card'); card.id = 'linux-environment-card';
+    const heading = node('div', null, 'card-heading'); const copy = node('span'), title = node('strong', t('Linux 환경')), description = node('small', t('필요할 때만 내려받아 Codex와 터미널 명령에 사용합니다. 프로젝트 파일은 그대로 유지됩니다.')); title.id = 'linux-environment-title'; description.id = 'linux-environment-description'; copy.append(title, description); heading.append(copy);
+    const details = node('p', '', 'muted'); details.id = 'linux-environment-details';
+    const status = node('p', '', 'muted'); status.id = 'linux-environment-status'; status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');
+    const progress = node('progress'); progress.id = 'linux-environment-progress'; progress.hidden = true; progress.setAttribute('aria-label', t('Linux 환경 설치 진행률'));
+    const actions = node('div', null, 'linux-environment-actions');
+    const install = node('button', t('설치'), 'primary-button'); install.id = 'linux-install'; install.type = 'button';
+    const cancel = node('button', t('취소'), 'secondary-button'); cancel.id = 'linux-cancel'; cancel.type = 'button'; cancel.hidden = true;
+    const remove = node('button', t('Linux 환경 삭제'), 'secondary-button subtle-danger'); remove.id = 'linux-remove'; remove.type = 'button'; remove.hidden = true;
+    actions.append(install, cancel, remove);
+    const enabled = node('input'); enabled.id = 'linux-enabled'; enabled.type = 'checkbox'; enabled.setAttribute('role', 'switch');
+    const toggle = node('label', null, 'toggle-switch linux-environment-toggle'); toggle.append(enabled, node('span', null, 'toggle-track'));
+    const enableRow = node('div', null, 'settings-row linux-enable-row'); const enableCopy = node('span'), enableTitle = node('strong', t('Linux 환경 사용')), enableDescription = node('small', t('Codex와 기본 터미널에서 Linux 명령을 실행합니다.')); enableTitle.id = 'linux-enable-title'; enableDescription.id = 'linux-enable-description'; enableCopy.append(enableTitle, enableDescription); enableRow.append(enableCopy, toggle);
+    card.append(heading, details, status, progress, actions, enableRow); tools.append(card);
+    install.addEventListener('click', async () => { if (linuxRequestPending) return; linuxRequestPending = true; try { linuxStatusError = ''; renderLinux(); const result = await call('linux.install'); if (linuxStatus(result)) state.linux = result; } catch (error) { linuxStatusError = error.message || t('Linux 환경을 설치하지 못했습니다. 다시 시도해 주세요.'); } finally { linuxRequestPending = false; renderLinux(); } });
+    cancel.addEventListener('click', async () => { try { await call('linux.cancel'); } catch (error) { linuxStatusError = error.message; renderLinux(); } });
+    enabled.addEventListener('change', async () => { if (linuxRequestPending) return; const wanted = enabled.checked; linuxRequestPending = true; try { linuxStatusError = ''; renderLinux(); enabled.checked = wanted; const result = await call('linux.enable', {enabled:wanted}); if (linuxStatus(result)) state.linux = result; } catch (error) { linuxStatusError = error.message || t('Linux 환경을 전환하지 못했습니다.'); } finally { linuxRequestPending = false; renderLinux(); } });
+    remove.addEventListener('click', async () => { if (linuxRequestPending || !confirm(t('Linux 환경과 설치된 패키지를 삭제할까요? 프로젝트 파일은 유지됩니다.'))) return; linuxRequestPending = true; try { linuxStatusError = ''; renderLinux(); const result = await call('linux.remove'); if (linuxStatus(result)) state.linux = result; } catch (error) { linuxStatusError = error.message; } finally { linuxRequestPending = false; renderLinux(); } });
+  }
+  function renderLinux() {
+    ensureLinuxUi(); const card = $('linux-environment-card'); if (!card) return;
+    const info = linuxStatus(state.linux), supported = !!info && info.supported !== false;
+    card.hidden = false;
+    const details = $('linux-environment-details'), status = $('linux-environment-status'), progress = $('linux-environment-progress'), install = $('linux-install'), cancel = $('linux-cancel'), remove = $('linux-remove'), enabled = $('linux-enabled'), enableRow = card.querySelector('.linux-enable-row');
+    $('linux-environment-title').textContent = t('Linux 환경'); $('linux-environment-description').textContent = t('필요할 때만 내려받아 Codex와 터미널 명령에 사용합니다. 프로젝트 파일은 그대로 유지됩니다.'); $('linux-enable-title').textContent = t('Linux 환경 사용'); $('linux-enable-description').textContent = t('Codex와 기본 터미널에서 Linux 명령을 실행합니다.'); cancel.textContent = t('취소'); remove.textContent = t('Linux 환경 삭제');
+    if (!supported) {
+      details.textContent = t('이 앱 버전에서는 Linux 환경을 사용할 수 없습니다.'); status.textContent = info?.error || ''; status.classList.toggle('error', !!info?.error); progress.hidden = true; install.hidden = true; cancel.hidden = true; remove.hidden = true; enableRow.hidden = true; return;
+    }
+    const total = Number(info.totalBytes ?? info.downloadBytes), downloaded = Number(info.downloadedBytes);
+    const parts = [info.label || t('Linux 환경')];
+    if (Number.isFinite(total) && total > 0) parts.push(t('다운로드 {size}', {size:linuxBytes(total)}));
+    if (Number.isFinite(Number(info.requiredFreeBytes))) parts.push(t('필요 공간 {size}', {size:linuxBytes(info.requiredFreeBytes)}));
+    if (Number.isFinite(Number(info.availableBytes))) parts.push(t('사용 가능 {size}', {size:linuxBytes(info.availableBytes)}));
+    details.textContent = parts.join(' · ');
+    const busy = !!info.busy, ready = !!info.installed && info.state === 'ready';
+    const progressState = ['downloading','verifying','extracting','checking'].includes(info.state);
+    progress.hidden = !progressState;
+    if (progressState) { if (info.state === 'downloading' && Number.isFinite(total) && total > 0) { progress.max = total; progress.value = Math.min(Math.max(downloaded || 0, 0), total); } else progress.removeAttribute('value'); }
+    status.textContent = linuxStatusError || info.error || linuxPhase(info);
+    status.classList.toggle('error', !!(linuxStatusError || info.error || info.state === 'error'));
+    install.hidden = !!info.installed || busy;
+    install.textContent = info.state === 'error' || info.state === 'cancelled' ? t('다시 시도') : t('설치');
+    install.disabled = busy || linuxRequestPending;
+    cancel.hidden = !busy; cancel.disabled = !busy;
+    remove.hidden = !info.installed && !info.hasFiles; remove.disabled = busy || linuxRequestPending;
+    enableRow.hidden = !ready; enabled.checked = !!info.enabled; enabled.disabled = !ready || busy || linuxRequestPending;
+    $('terminal-tools-note').textContent = info.enabled && ready
+      ? t('{label}에서 현재 프로젝트 폴더로 Linux 명령을 실행합니다.', {label:info.label || t('Linux 환경')})
+      : terminalDefaultNote();
+  }
+  function terminalDefaultNote() {
+    const info = state.devtools;
+    if (!info || typeof info !== 'object') return t('현재 프로젝트 폴더에서 셸 명령을 실행합니다. 개발 도구 상태는 설정 > 도구에서 확인하세요.');
+    const names = (Array.isArray(info.tools) ? info.tools.map(tool => tool?.name).filter(Boolean) : []).join(' · ');
+    return info.bundled ? t('현재 프로젝트 폴더에서 {tools} 명령을 실행합니다.', {tools:names || 'Python · Node.js · Git · npm · pip'}) : t('현재 프로젝트 폴더에서 셸 명령을 실행합니다. 번들 개발 도구는 사용할 수 없습니다.');
+  }
+  async function refreshLinuxStatus() {
+    if (!linuxStatus(state.linux) || state.linux.supported === false) return;
+    try { const result = await call('linux.status'); if (linuxStatus(result)) { state.linux = result; linuxStatusError = ''; renderLinux(); } }
+    catch (_) { /* Older native apps can omit this optional API. */ }
+  }
   async function checkDevtools() {
     devtoolsChecking = true; renderDevtools();
     try {
@@ -982,6 +1055,7 @@
     $('storage-status').textContent = state.directWorkspace ? t('선택한 폴더에서 셸 명령을 실행합니다.') : t('폴더의 셸 접근은 기기 파일 권한이 필요합니다. 문서 제공자 폴더는 파일 도구로 접근합니다.');
     $('storage-access').textContent = state.allFilesAccess ? t('기기 파일 접근 설정') : t('기기 파일 접근 허용');
     renderDevtools();
+    renderLinux();
     renderPhone();
     if (changesScope !== reviewScope()) { changesGeneration++; changesScope = reviewScope(); selectedChange = null; $('change-preview').hidden = true; $('change-restore').disabled = true; $('changes-list').replaceChildren(); if ($('changes-dialog').open) $('changes-status').textContent = t('대화 또는 프로젝트가 바뀌었습니다. 새로고침해 주세요.'); }
     $('changes-turn-diff').textContent = state.turnDiff || t('이 대화에 기록된 작업 diff가 없습니다.');
@@ -1482,6 +1556,7 @@
     else if (name === 'agent.event') { if (data.threadId && data.threadId !== state.threadId) return; if (!data.method.endsWith('/delta')) logEvent(data.method, data.params); if (data.method === 'turn/diff/updated') logEvent(t('변경 사항'), data.params.diff); }
     else if (name === 'files.changed' && (!data.threadId || data.threadId === state.threadId) && !$('file-panel').hidden) listFiles().catch(e => toast(e.message));
     else if (name === 'updates.changed') drawUpdates(data);
+    else if (name === 'linux.changed') { state.linux = linuxStatus(data); linuxStatusError = ''; renderDevtools(); renderLinux(); }
     else if (name === 'voice.state') drawDictation(data);
     else if (name === 'voice.changed') recoverVoiceInput();
     else if (name === 'attachments.picked') acceptPickedAttachments(data, data.draftKey || '');
@@ -1650,6 +1725,7 @@
     const selected = tab.dataset.settingsTab; selectSettingsTab(selected);
     if (selected === 'personal' && !instructionsLoaded) loadInstructions();
     if (selected === 'account') loadUsage();
+    if (selected === 'tools') refreshLinuxStatus();
     if (selected === 'updates') loadUpdates();
   }));
   on('device-code', async () => { if (login) { await call('ui.copyCode', {code: login.userCode}); toast(t('코드를 복사했습니다.')); } });

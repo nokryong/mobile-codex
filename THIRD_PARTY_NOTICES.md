@@ -22,6 +22,12 @@ Python, Node.js, Git, and their runtime libraries are pinned in `tools/devtools-
 
 App license notices are also packaged under `assets/legal/`.
 
+## Optional Linux runtime
+
+PRoot 5.1.107.95 (GPL version 2 `COPYING` file), libtalloc 2.4.3 (LGPL version 3 `LICENSE` file), and libandroid-shmem 0.7 (three-clause BSD `LICENSE` file) are included as small Android native components. Their exact package archives, source archives, and Termux recipes are pinned in `tools/devtools-lock.json` and included in the corresponding-source process above. PRoot source: https://github.com/termux/proot. Termux build recipes: https://github.com/termux/termux-packages.
+
+The optional Arch Linux ARM root filesystem is downloaded only at the user's request from the official Termux proot-distro v4.29.0 release. It is not bundled in the APK. Its URL, SHA-256, size, and provenance are pinned in `app/src/main/assets/linux/manifest.json`. The distribution's packages retain their own licenses and source obligations; their notices and package metadata remain in the installed root filesystem. Upstream: https://github.com/termux/proot-distro/releases/tag/v4.29.0 and https://archlinuxarm.org.
+
 ## Chat icon vocabulary and renderer adaptation
 
 The Chat WebView icon renderer uses the vocabulary and category mappings from nokryong/ChatGPT-DCCon-Renderer-Optimized, userscript.js at commit 98e9aee413c2ff6a91531f46f4a92da008b19a95, integrated at the same repository owner's request. Source: https://github.com/nokryong/ChatGPT-DCCon-Renderer-Optimized. Public icon artwork is read from the owner's Firebase Storage bucket with the existing packaged artwork as fallback. No Firebase authentication credentials or SDK are bundled.
