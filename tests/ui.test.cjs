@@ -968,7 +968,7 @@ test('language switch preserves drafts, model content and editor values',async()
 });
 test('system locale defaults to English outside Korean and catalog copies match',async()=>{
  const {w}=setup({}, {language:'system',systemLanguage:'ja-JP'});await tick();
- assert.equal(w.document.documentElement.lang,'en');assert.match(w.document.getElementById('prompt').placeholder,/Ask anything/);
+ assert.equal(w.document.documentElement.lang,'en');assert.match(w.document.getElementById('prompt').placeholder,/Ask Codex/);
  assert.deepEqual(JSON.parse(JSON.stringify(w.MobileCodexEnglish)), JSON.parse(fs.readFileSync('app/src/main/assets/translations-en.json','utf8')));
 });
 test('inline dictation displays partial text, supports done and cancel, and cannot auto-send',async()=>{

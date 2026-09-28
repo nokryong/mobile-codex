@@ -69,11 +69,15 @@ async function checkComposer(page) {
  return result;
 }
 async function checkCompactComposer(page) {
+ const draft=await page.locator('#prompt').inputValue();
+ await page.locator('#prompt').fill('');
+ await page.locator('#prompt').blur();
  await page.waitForFunction(()=>!document.getElementById('composer')?.classList.contains('composer-expanded'));
  const result=await page.evaluate(()=>{
   const box=id=>document.getElementById(id).getBoundingClientRect().toJSON();
   return {expanded:document.getElementById('composer').classList.contains('composer-expanded'),
    composer:box('composer'),prompt:box('prompt'),attach:box('add-attachment'),voice:box('voice-input'),
+   promptScrollHeight:document.getElementById('prompt').scrollHeight,promptClientHeight:document.getElementById('prompt').clientHeight,
    attachVisible:getComputedStyle(document.getElementById('add-attachment')).display!=='none',
    voiceVisible:getComputedStyle(document.getElementById('voice-input')).display!=='none'};
  });
@@ -83,6 +87,8 @@ async function checkCompactComposer(page) {
  assert.ok(result.attach.right<=result.prompt.x+1,'Attach button overlaps compact prompt');
  assert.ok(result.prompt.right<=result.voice.x+1,'Voice button overlaps compact prompt');
  assert.ok(result.voice.right<=result.composer.right+1,'Voice button leaves compact composer');
+ assert.ok(result.promptScrollHeight<=result.promptClientHeight+1,'Compact placeholder is clipped');
+ await page.locator('#prompt').fill(draft);await page.locator('#prompt').blur();
 }
 async function checkSidebar(page,width) {
  await page.locator('.topbar .sidebar-toggle').click();await page.waitForTimeout(180);
