@@ -4,6 +4,7 @@ import static org.junit.Assert.*;
 import android.app.Application;
 import android.content.Context;
 import java.io.File;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import org.json.JSONObject;
@@ -38,9 +39,9 @@ public class LinuxRuntimeTest {
         Context context = RuntimeEnvironment.getApplication();
         Path root = new File(context.getFilesDir(), "linux/rootfs").toPath();
         Files.createDirectories(root);
-        Files.writeString(root.resolve(".mobile-codex-ready"), "wrong-version");
+        Files.write(root.resolve(".mobile-codex-ready"), "wrong-version".getBytes(StandardCharsets.UTF_8));
         Path project = new File(context.getFilesDir(), "retained-project").toPath();
-        Files.createDirectories(project); Files.writeString(project.resolve("keep.txt"), "keep");
+        Files.createDirectories(project); Files.write(project.resolve("keep.txt"), "keep".getBytes(StandardCharsets.UTF_8));
         Files.createSymbolicLink(root.resolve("workspace"), project);
         LinuxRuntime runtime = new LinuxRuntime(context, new DevTools(context), () -> {});
         try {
@@ -48,7 +49,7 @@ public class LinuxRuntimeTest {
             assertFalse(runtime.status().getBoolean("installed"));
             runtime.remove();
             assertFalse(runtime.status().getBoolean("hasFiles"));
-            assertEquals("keep", Files.readString(project.resolve("keep.txt")));
+            assertEquals("keep", new String(Files.readAllBytes(project.resolve("keep.txt")), StandardCharsets.UTF_8));
         } finally { runtime.close(); }
     }
 
@@ -65,12 +66,12 @@ public class LinuxRuntimeTest {
             while ((count = input.read(block)) != -1) bytes.write(block, 0, count);
             pinned = new JSONObject(bytes.toString("UTF-8"));
         }
-        Files.writeString(root.resolve(".mobile-codex-ready"), pinned.getString("id"));
+        Files.write(root.resolve(".mobile-codex-ready"), pinned.getString("id").getBytes(StandardCharsets.UTF_8));
         try {
             runtime.setEnabled(true);
-            assertTrue(new JSONObject(Files.readString(home.resolve("state.json"))).getBoolean("enabled"));
+            assertTrue(new JSONObject(new String(Files.readAllBytes(home.resolve("state.json")), StandardCharsets.UTF_8)).getBoolean("enabled"));
             runtime.setEnabled(false);
-            assertFalse(new JSONObject(Files.readString(home.resolve("state.json"))).getBoolean("enabled"));
+            assertFalse(new JSONObject(new String(Files.readAllBytes(home.resolve("state.json")), StandardCharsets.UTF_8)).getBoolean("enabled"));
             Files.createDirectory(home.resolve("state.json.new"));
             try { runtime.setEnabled(true); fail("Expected atomic state write to fail"); }
             catch (IllegalStateException expected) { assertFalse(runtime.status().getBoolean("enabled")); }

@@ -175,7 +175,7 @@ public final class LinuxRuntime implements AutoCloseable {
             runTool(List.of(python.getAbsolutePath(), script.getAbsolutePath(), "smoke", "--root", new File(stage, ROOTFS).getAbsolutePath(),
                 "--workspace", smokeWorkspace.getAbsolutePath(), "--proot", proot.getAbsolutePath(), "--loader", loader.getAbsolutePath(), "--runtime-home", stage.getAbsolutePath()), codexHome, aliases, TimeUnit.SECONDS.toMillis(45));
             checkCancelled();
-            Files.writeString(new File(stage, ROOTFS + "/" + READY).toPath(), manifest.optString("id"), StandardCharsets.UTF_8,
+            Files.write(new File(stage, ROOTFS + "/" + READY).toPath(), manifest.optString("id").getBytes(StandardCharsets.UTF_8),
                 StandardOpenOption.CREATE_NEW);
             synchronized (this) {
                 checkCancelled(); committing = true;
@@ -282,7 +282,7 @@ public final class LinuxRuntime implements AutoCloseable {
         Path marker = new File(rootfs, READY).toPath();
         try { return Files.isDirectory(rootfs.toPath(), LinkOption.NOFOLLOW_LINKS) &&
             Files.isRegularFile(marker, LinkOption.NOFOLLOW_LINKS) && Files.size(marker) <= 128 && manifest != null &&
-            manifest.optString("id").equals(Files.readString(marker, StandardCharsets.UTF_8)); }
+            manifest.optString("id").equals(new String(Files.readAllBytes(marker), StandardCharsets.UTF_8)); }
         catch (IOException e) { return false; }
     }
     private boolean hasFiles() { return Files.exists(rootfs.toPath(), LinkOption.NOFOLLOW_LINKS); }
@@ -304,7 +304,7 @@ public final class LinuxRuntime implements AutoCloseable {
         Files.createDirectories(home.toPath());
         File temporary = new File(home, "state.json.new");
         String value = obj("enabled", enabled && installed(), "rootfs", rootfs.getAbsolutePath()).toString();
-        Files.writeString(temporary.toPath(), value, StandardCharsets.UTF_8, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+        Files.write(temporary.toPath(), value.getBytes(StandardCharsets.UTF_8), StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
         Files.move(temporary.toPath(), wrapperState.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
     }
 
