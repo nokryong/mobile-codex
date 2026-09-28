@@ -69,6 +69,7 @@ async function checkComposer(page) {
  return result;
 }
 async function checkCompactComposer(page) {
+ await page.waitForFunction(()=>!document.getElementById('composer')?.classList.contains('composer-expanded'));
  const result=await page.evaluate(()=>{
   const box=id=>document.getElementById(id).getBoundingClientRect().toJSON();
   return {expanded:document.getElementById('composer').classList.contains('composer-expanded'),
