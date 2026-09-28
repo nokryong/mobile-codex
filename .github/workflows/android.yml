@@ -46,6 +46,10 @@ jobs:
         with:
           path: .runtime-cache
           key: runtime-inputs-${{ runner.os }}-${{ hashFiles('tools/runtime-lock.json', 'tools/devtools-lock.json', 'tools/requirements-devtools.txt') }}
+          # Unchanged package pins can outlive the upstream rolling mirror.
+          # Every restored archive is still checked against its locked SHA-256.
+          restore-keys: |
+            runtime-inputs-${{ runner.os }}-
       - name: Prepare pinned Android runtimes
         run: |
           python3 tools/prepare_runtime.py
