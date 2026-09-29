@@ -36,6 +36,7 @@ public final class Engine {
     }
     private final Context context;
     public final DocumentStore documents;
+    private final ProjectSyncSettings projectSync;
     final ImageStore images;
     final AttachmentStore attachments;
     public final ExecutorService io = Executors.newSingleThreadExecutor();
@@ -91,6 +92,7 @@ public final class Engine {
         permissionMode = context.getSharedPreferences("settings", 0).getString("permissions", "workspace-write");
         approvalMode = context.getSharedPreferences("settings", 0).getString("approvalMode", "auto-review");
         documents = new DocumentStore(context);
+        projectSync = new ProjectSyncSettings(new GitHubProjectSync(context), documents);
         images = new ImageStore(context);
         attachments = new AttachmentStore(context, images);
         try { codexHome = CodexHome.open(context); }
@@ -356,12 +358,22 @@ public final class Engine {
     public void voiceInputChanged() { event("voice.changed", obj()); }
     public void phoneStateChanged() { io.execute(this::publish); }
     public void handle(String action, JSONObject args, Reply reply) {
+        if (action.equals("sync.login.cancel")) projectSync.invalidateLogin(args.optString("flowId", ""));
+        if (action.equals("sync.disconnect")) projectSync.invalidateLogin(null);
         // Never queue consent revocation behind a slow engine/tool operation.
         if (Set.of("phone.stop", "chat.stop", "runtime.stop", "auth.logout").contains(action)) PhoneUseService.stopControl();
         // Installation cancellation must not queue behind a long Codex RPC.
         if (action.equals("linux.cancel")) { linux.cancel(); reply.complete(linux.status(), null); return; }
         io.execute(() -> {
             try {
+                if (action.startsWith("sync.")) {
+                    if (action.equals("sync.preview") || action.equals("sync.apply")) ensureEngineIdle();
+                    JSONObject result;
+                    try { result = projectSync.handle(action, args); }
+                    finally { if (action.equals("sync.apply")) publish(); }
+                    reply.complete(result, null);
+                    return;
+                }
                 switch (action) {
                     case "state" -> reply.complete(snapshot(), null);
                     case "phone.stop" -> { publish(); reply.complete(snapshot(), null); }

@@ -3,6 +3,7 @@ import android.app.Application;
 import android.os.Looper;
 import android.view.*;
 import android.widget.EditText;
+import android.widget.TextView;
 import org.junit.*;
 import org.junit.runner.RunWith;
 import org.robolectric.*;
@@ -47,5 +48,9 @@ public class FloatingChatTest {
         assertEquals(View.VISIBLE,((View)get("root")).getVisibility());assertEquals("draft B",input.getText().toString());
         chat.event("state",obj("threadId","a","workspace",obj("key","p"),"messages",array()));Shadows.shadowOf(Looper.getMainLooper()).idle();assertEquals("draft A voice",input.getText().toString());
         assertEquals(0,VoiceInput.pending(service,"floating").length());
+    }
+    @Test public void collapsedChipHidesStatusButExpandedPanelShowsIt()throws Exception{
+        TextView status=(TextView)get("status");chat.event("state",obj("status","A detailed error that belongs in the expanded panel","messages",array()));Shadows.shadowOf(Looper.getMainLooper()).idle();
+        assertEquals(View.GONE,status.getVisibility());expand();assertEquals(View.VISIBLE,status.getVisibility());assertTrue(status.getText().toString().contains("detailed error"));
     }
 }

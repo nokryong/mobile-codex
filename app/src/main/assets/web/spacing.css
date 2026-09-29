@@ -1,0 +1,255 @@
+/* Compact layout contract. See docs/ui-design-system.ko.md.
+   Appearance belongs to visual-system.css; spacing belongs here.
+   Scale: Carbon's 2/4/8/12/16/24. Existing 44px hit areas remain independent. */
+:root {
+  --space-1:2px; --space-2:4px; --space-3:8px;
+  --space-4:12px; --space-5:16px; --space-6:24px;
+  --page-gutter:var(--space-5); --panel-inset:var(--space-4);
+  --stack-gap:var(--space-3); --inline-gap:var(--space-2);
+  --section-gap:var(--space-4); --row-inset:var(--space-2);
+}
+
+/* Navigation, project trees, file pane. */
+.sidebar { padding:var(--space-3); }
+.sidebar-top { gap:var(--inline-gap); margin:0 0 var(--space-2); }
+.sidebar-identity { gap:var(--space-2); }
+.sidebar-scroll { padding-bottom:var(--space-2); }
+.sidebar-bottom { margin:0; padding:var(--space-2) 0 0; }
+.sidebar .nav-button,.sidebar-scroll > #new-chat { padding:var(--row-inset) var(--space-3); }
+.section-title,.sidebar .section-title { margin:var(--space-2) 0 0; padding:0 0 0 var(--space-3); }
+.projects { gap:0; }
+.project-button,.session { padding:var(--row-inset) var(--space-3); gap:var(--space-2); }
+.project-sessions { margin:0 0 var(--space-2) var(--space-6); gap:0; }
+.project-sessions .session { padding:var(--row-inset) var(--space-2); }
+.sidebar-empty,.empty-note { margin:var(--space-3); }
+.account-button { padding:var(--space-2) var(--space-3); margin:0; gap:var(--space-3); }
+.account-button .quota-copy small { white-space:normal; overflow-wrap:anywhere; line-height:1.4; }
+.topbar { padding:0 var(--page-gutter); gap:var(--space-3); }
+.topbar-left { gap:var(--space-2); }
+.topbar .outline-button { padding:0 var(--space-3); }
+.panel-head { padding:0 var(--space-3); }
+.file-search { margin:0 var(--space-3) var(--space-2); padding:var(--space-2) var(--space-3); gap:var(--space-2); min-height:44px; }
+.breadcrumbs { padding:var(--space-2) var(--space-3); }
+.file-list { padding:0 var(--space-2) var(--space-3); }
+.file-row,.file-entry .file-row { padding:var(--row-inset) var(--space-2); gap:var(--space-2); }
+.detached-projects { margin-top:var(--space-3); padding-top:var(--space-2); }
+
+/* Welcome, prose, code, images and execution states. */
+.chat-scroll { padding:var(--space-4) var(--page-gutter); }
+.welcome { margin:var(--space-6) auto var(--space-4); }
+.welcome-mark,.welcome-character { margin-bottom:var(--space-3); }
+.welcome h1 { margin:0 0 var(--space-3); }
+.welcome>p { margin:0 auto var(--space-4); }
+.onboarding { margin:var(--space-4) auto 0; }
+.setup-row,.setup-row+.setup-row { min-height:56px; padding:var(--space-3) var(--space-4); gap:var(--space-3); }
+.setup-row small { margin-top:var(--space-1); }
+.suggestions { margin-top:var(--space-3); gap:var(--space-2); }
+.suggestions button,.suggestions button:last-child:nth-child(odd) { padding:var(--space-2) var(--space-3); }
+.message { margin-bottom:var(--space-4); }
+.message.user { margin:0 0 var(--space-4) auto; padding:var(--space-3) var(--space-4); }
+.message.assistant { margin:0 0 var(--space-4); padding:0; }
+.message p { margin:0 0 var(--space-3); }
+.message h3 { margin:var(--space-4) 0 var(--space-2); }
+.message ul,.message ol { margin:var(--space-2) 0 var(--space-3); }
+.message blockquote { margin:var(--space-3) 0; padding:var(--space-2) var(--space-3); }
+.message pre,.code-card { margin:var(--space-3) 0; }
+.message pre,.code-card pre { padding:var(--space-3); }
+.code-card pre { margin:0; }
+.code-head { padding:var(--space-2) var(--space-3); gap:var(--space-2); }
+.markdown-table th,.markdown-table td { padding:var(--space-2) var(--space-3); }
+.prose-hr { margin:var(--space-4) 0; }
+.activity { margin:0 auto var(--space-3); padding:0; gap:var(--space-2); }
+.image-card,.image-gallery { margin:var(--space-3) 0; }
+.image-gallery { gap:var(--space-2); }
+.image-gallery .image-card,.sent-attachments .image-card { margin:0; }
+.image-card figcaption { padding:var(--space-2) var(--space-3); gap:var(--space-2); }
+.image-card p,.image-placeholder,.image-error { padding:var(--space-3); }
+.image-thumbnails { padding:var(--space-2) 0 0; gap:var(--space-2); }
+.image-viewer-bottom { padding-top:var(--space-2); gap:var(--space-2); }
+.sent-attachments { margin-top:var(--space-2); gap:var(--space-2); }
+.attachment-download { padding:var(--space-2) var(--space-3); gap:var(--space-2); min-height:44px; }
+
+/* Composer geometry: outer whitespace is reduced, the two control rows keep 44px targets. */
+.composer-wrap { padding:var(--space-2) var(--page-gutter); }
+.composer,.composer.composer-expanded { padding:var(--space-3) var(--space-3) var(--space-2); }
+.composer:not(.composer-expanded) { padding:var(--space-2) 52px; min-height:calc(24px * var(--text-size-factor) + 26px); }
+.composer:not(.composer-expanded) #prompt { padding:var(--space-3) var(--space-1); }
+.composer-bottom { margin-top:var(--space-1); gap:var(--space-1); }
+.composer.composer-expanded .composer-bottom { row-gap:0; }
+.composer-actions,.composer.composer-expanded .composer-actions { margin:0; gap:var(--space-1); }
+.context-button { padding:0 var(--space-2); gap:var(--space-2); }
+.composer-footnote { padding:0 var(--space-2); margin-top:var(--space-1); }
+.draft-context { margin:0; padding:0 0 var(--space-2); gap:var(--space-2); }
+.dictation { padding:0 0 var(--space-3); margin-bottom:var(--space-2); }
+.dictation-top,.dictation-actions { gap:var(--space-2); }
+.dictation-level { margin:var(--space-3) 0; }
+.dictation-preview { margin:var(--space-2) 0; }
+.autocomplete-heading { padding:var(--space-2) var(--space-3); }
+.autocomplete-status { margin:var(--space-2) var(--space-3); }
+.autocomplete-item { padding:var(--space-2) var(--space-3); gap:var(--space-2); min-height:44px; }
+
+/* All dialogs: menus, options, requests, inputs, images, file/config editors and tools. */
+dialog,.wide-dialog,.editor-dialog,.image-dialog,.options-sheet,.sheet-dialog,.settings-dialog { padding:var(--panel-inset); }
+.dialog-head { gap:var(--space-3); margin:0 0 var(--space-3); }
+.dialog-head h2 { margin:0; }
+dialog>p { margin:var(--space-2) 0 var(--space-3); }
+.primary-button,.secondary-button { min-height:44px; padding:var(--space-2) var(--space-3); }
+.toolbar,.terminal-form { gap:var(--space-2); }
+.toolbar { margin-bottom:var(--space-3); }
+.editor-actions { gap:var(--space-2); padding-top:var(--space-3); }
+.editor-actions .secondary-button { padding:var(--space-2) var(--space-3); }
+#editor,#config-editor,.console,.change-diff { padding:var(--space-3); }
+.text-input { padding:var(--space-3); margin:var(--space-2) 0 var(--space-3); }
+.device-code { padding:var(--space-3); margin:var(--space-3) 0; }
+.option-field { gap:var(--space-2); margin:var(--space-3) 0; }
+.option-field select,#effort { padding:var(--space-2) var(--space-3); min-height:44px; }
+.permission-field { padding:0; gap:var(--space-2); margin:var(--space-3) 0 var(--space-2); }
+.permission-field legend { margin:0 0 var(--space-2); padding:0; }
+.permission-field label,.model-choice { gap:var(--space-3); padding:var(--space-2) var(--space-3); min-height:44px; }
+.model-list { gap:var(--space-2); }
+.permission-field small { margin-top:var(--space-1); }
+.question { margin:var(--space-3) 0; }
+.question select,.question input:not([type="checkbox"]) { padding:var(--space-3); margin-top:var(--space-2); min-height:44px; }
+#file-actions,.project-actions { gap:var(--space-2); }
+#file-actions button,.project-choice { padding:var(--space-2) var(--space-3); min-height:44px; }
+.project-choice { gap:var(--space-1); }
+#project-link-description { margin:0 0 var(--space-3); }
+.tool-card { margin:var(--space-3) 0; padding:var(--space-3); }
+.tool-card button { margin:var(--space-2) var(--space-2) 0 0; }
+.recovery-item { padding:var(--space-2) 0; gap:var(--space-3); flex-wrap:wrap; }
+.recovery-item small { margin-top:var(--space-1); }
+.change-legend { gap:var(--space-3); }
+.event-card { margin:var(--space-2) 0; padding:var(--space-2) 0; }
+
+/* Every settings section uses the same stack/row contract. */
+.settings-layout { grid-template-columns:144px minmax(0,1fr); min-height:0; }
+.settings-nav { padding:var(--space-3) var(--space-3) var(--space-3) 0; gap:var(--space-1); }
+.settings-nav button { padding:var(--space-2) var(--space-3); min-height:44px; }
+.settings-content { padding-left:var(--space-4); }
+.settings-section,.settings-content .settings-section { padding:var(--space-3) 0; }
+.settings-section h3 { margin:0 0 var(--space-3); }
+.settings-section>p,.devtools-card>p { margin:var(--space-2) 0; }
+.settings-row,.settings-section .settings-row,.character-pack-card .settings-row { min-height:44px; padding:var(--space-2) 0; gap:var(--space-3); }
+.settings-row>span:first-child,.text-size-row>label { gap:var(--space-1); }
+.settings-section>.secondary-button { margin-top:var(--space-2); }
+.devtools-card { margin-top:var(--space-3); padding:var(--space-3); }
+.card-heading { gap:var(--space-3); flex-wrap:wrap; }
+.card-heading small,.sync-card .card-heading small { margin-top:var(--space-1); }
+.card-heading .secondary-button { min-height:44px; padding:var(--space-2) var(--space-3); }
+.accounts-list,.usage-limits { margin-top:var(--space-3); gap:var(--space-2); }
+.account-profile { padding:var(--space-2) var(--space-3); gap:var(--space-3); flex-wrap:wrap; }
+.account-profile-copy { flex:1 1 100px; }
+.account-profile-actions { gap:var(--space-2); margin-left:auto; }
+.account-profile-actions button { min-height:44px; padding:var(--space-2) var(--space-3); }
+.usage-limits { grid-template-columns:repeat(auto-fit,minmax(min(190px,100%),1fr)); }
+.usage-gauge { padding:var(--space-3); gap:var(--space-3); }
+.usage-gauge-copy { min-width:0; overflow-wrap:anywhere; }
+.reset-credits { margin-top:var(--space-3); padding:var(--space-3); }
+.reset-credits-head { gap:var(--space-3); flex-wrap:wrap; }
+.reset-credits-status { margin:var(--space-2) 0 0; }
+.account-runtime-actions { margin-top:var(--space-3); gap:var(--space-2); }
+.character-pack-card { margin-top:var(--space-2); padding-top:var(--space-3); }
+.character-pack-list { margin-top:var(--space-2); gap:var(--space-2); }
+.character-pack-actions,.phone-actions,.linux-environment-actions,.instructions-actions { gap:var(--space-2); }
+.character-pack-option { padding:var(--space-2) var(--space-3); gap:var(--space-2); grid-template-columns:minmax(68px,auto) minmax(0,1fr) 20px; min-height:48px; }
+.devtools-versions { margin:var(--space-2) 0; gap:var(--space-2); }
+.devtools-output { margin:var(--space-3) 0 0; }
+.linux-environment-card { gap:var(--space-3); }
+.linux-enable-row { margin:0; padding:var(--space-3) 0 0; }
+.instructions-editor { margin-top:var(--space-3); padding:var(--space-3); }
+.update-actions { margin:var(--space-3) 0; gap:var(--space-2); }
+.about { margin-top:var(--space-3); }
+
+/* Sync inherits settings density, including device login, repository and preview states. */
+.sync-card { gap:var(--space-3); }
+.sync-card label[for="sync-repository"] { gap:var(--space-2); }
+#sync-repository { padding:var(--space-2) var(--space-3); }
+.sync-actions { gap:var(--space-2); }
+.sync-device-flow,.sync-preview-result { padding:var(--space-3); }
+.sync-device-flow p { margin:0 0 var(--space-2); }
+.sync-device-flow .device-code { margin:0 0 var(--space-2); }
+.sync-project-heading { margin-top:var(--space-2); gap:var(--space-1); }
+.sync-project-list,.sync-incoming-projects { gap:var(--space-2); }
+.sync-project-option,.sync-incoming-project { padding:var(--space-2) var(--space-3); gap:var(--space-3); min-height:44px; }
+.sync-project-option span,.sync-incoming-project { gap:var(--space-1); }
+.sync-preview-result { gap:var(--space-3); }
+
+@media(max-width:760px) {
+  :root { --page-gutter:var(--space-4); }
+  .topbar { padding:0 var(--space-3); }
+  .file-panel { inset:0; padding-top:0; }
+  .settings-layout { display:block; }
+  .settings-nav { display:flex; overflow-x:auto; padding:0 0 var(--space-2); gap:var(--space-1); }
+  .settings-nav button { flex:0 0 auto; width:auto; white-space:nowrap; }
+  .settings-content { padding-left:0; max-height:none; overflow:visible; }
+  .sheet-dialog,.settings-dialog { padding:0 var(--panel-inset) var(--panel-inset); }
+  .sheet-grip { margin:0; padding:0; height:24px; min-height:24px; }
+  .sheet-dialog .dialog-head,.settings-dialog .dialog-head { margin-bottom:var(--space-2); }
+  .options-sheet { padding-bottom:var(--panel-inset); }
+  .editor-dialog,.image-dialog { max-width:none; padding:var(--space-3); }
+  .editor-actions button { padding:var(--space-2) var(--space-3); }
+  .keyboard-open .composer-wrap { padding-bottom:var(--space-2); }
+}
+@media(max-width:360px) { :root { --page-gutter:var(--space-3); } }
+@media(max-height:450px) {
+  .welcome { margin:var(--space-3) auto; }
+  .composer-wrap { padding-top:var(--space-1); padding-bottom:var(--space-1); }
+}
+@media(min-width:761px) and (max-width:1100px) {
+  .chat-scroll { padding-left:var(--page-gutter); padding-right:var(--page-gutter); }
+}
+
+/* Checkbox geometry is independent of text-entry fields. */
+.question label:has(input[type="checkbox"]) { display:flex; align-items:center; gap:var(--space-3); min-height:44px; }
+.question input[type="checkbox"] { width:20px; height:20px; min-height:0; margin:0; padding:0; flex:none; }
+#sync-controls { display:grid; gap:var(--stack-gap); min-width:0; }
+#sync-controls>p { margin:0; }
+.character-pack-actions button { min-height:44px; }
+
+/* Secondary controls and transient surfaces follow the same spacing scale. */
+.brand { gap:var(--space-3); }
+.nav-button { gap:var(--space-3); padding:var(--space-2) var(--space-3); }
+.history-title,.sidebar .history-title,.section-title.history-title { margin-top:var(--space-2); }
+.sidebar-empty { padding:0; }
+.outline-button { padding:var(--space-2) var(--space-3); }
+#login-dialog>.primary-button,#settings-dialog>.secondary-button,#input-dialog>.primary-button { margin-bottom:var(--space-2); }
+.toast { padding:var(--space-3) var(--space-4); }
+#request-fields textarea { padding:var(--space-3); }
+.jump-latest { padding:var(--space-2) var(--space-3); }
+.message ul,.message ol { padding-left:var(--space-6); }
+.new-thread { padding:var(--space-2) var(--space-3); min-height:44px; }
+.context-chip { padding:var(--space-2); gap:var(--space-2); }
+.chat-character { margin:0 0 var(--space-3); }
+.welcome-character .chat-character,.activity-character .chat-character { margin:0; }
+#session-actions button { padding:var(--space-2) var(--space-3); min-height:44px; }
+.table-wrap { margin:var(--space-3) 0; }
+.phone-stop-banner { padding:var(--space-2) var(--space-3); }
+#change-restore { margin-top:var(--space-3); }
+.dictation-actions { margin-top:var(--space-3); }
+.settings-dialog .about { padding-top:var(--space-3); }
+.mode-switch { margin:0; padding:var(--space-1); gap:var(--space-1); }
+.mode-switch button { padding:0 var(--space-3); min-height:44px; }
+.dialog:not(.sheet-dialog):not(.settings-dialog):not(.editor-dialog) { padding-top:var(--panel-inset); padding-bottom:var(--panel-inset); }
+@media(max-width:760px) {
+  .welcome:has(.welcome-character:not([hidden])) { margin-top:var(--space-6); }
+  .account-profile-actions { padding-left:0; }
+}
+@media(max-height:450px) { .welcome:has(.welcome-character:not([hidden])) { margin-top:var(--space-3); } }
+
+.usage-gauge-copy small { margin-top:var(--space-1); white-space:pre-line; }
+
+/* Focus stays visible inside compact scrolling lists without adding blank gutters. */
+:is(.settings-nav,.image-thumbnails,.sidebar-scroll,.file-list) button:focus-visible { outline-offset:-2px; }
+.autocomplete { padding:var(--space-3); }
+#session-actions { gap:var(--inline-gap); }
+.code-copy-btn,.msg-copy-btn { gap:var(--inline-gap); padding:var(--space-2) var(--space-3); min-height:44px; }
+.message-actions { gap:var(--inline-gap); margin-top:var(--space-2); padding-top:0; }
+.message-source-badge { margin:0 0 var(--space-2); padding:var(--space-1) var(--space-3); }
+.message-transport-status { margin:var(--space-2) 0 0; }
+.status-pill { padding:var(--space-2) var(--space-3); }
+.devtools-card > p { margin:var(--space-2) 0; }
+.devtools-version { padding:var(--space-1) var(--space-3); }
+
+.recovery-item button { min-height:44px; padding:var(--space-2) var(--space-3); }
+
+.tool-card p { margin:var(--space-2) 0; }

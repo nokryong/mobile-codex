@@ -78,7 +78,6 @@ public final class MainActivity extends Activity implements Engine.Ui {
     private static final int MICROPHONE_PERMISSION = 82;
     private boolean loaded, foreground;
     private AppUpdates updates;
-    private GitHubProjectSync projectSync;
     private AlertDialog approvalDialog;
     private String approvalId = "", exportId = "";
     private String pendingPickerId, pendingSkillId;
@@ -98,7 +97,6 @@ public final class MainActivity extends Activity implements Engine.Ui {
         engine = ((MobileCodexApp) getApplication()).engine();
         characterPacks = new CharacterPacks(this);
         updates = ((MobileCodexApp) getApplication()).updates();
-        projectSync = new GitHubProjectSync(this);
         if (savedInstanceState != null) { exportId = savedInstanceState.getString("exportId", ""); pendingPickerId = savedInstanceState.getString("pickerId"); pendingSkillId = savedInstanceState.getString("skillId"); }
         // Request IDs belong to the old WebView. A recreated page must start a new import preview.
         if (savedInstanceState != null) { pendingProjectExport = savedInstanceState.getString("projectExport"); }
@@ -274,7 +272,8 @@ public final class MainActivity extends Activity implements Engine.Ui {
             if (isDestroyed() || isFinishing() || approval.decision.isDone() || approvalId.equals(approval.id)) return;
             approvalId = approval.id;
             TextView text = new TextView(this);
-            text.setText(approval.message); text.setTextIsSelectable(true); text.setTextSize(14); text.setPadding(40, 24, 40, 24);
+            int space8 = Math.round(8 * getResources().getDisplayMetrics().density), space12 = Math.round(12 * getResources().getDisplayMetrics().density);
+            text.setText(approval.message); text.setTextIsSelectable(true); text.setTextSize(14); text.setPadding(space12, space8, space12, space8);
             ScrollView scroll = new ScrollView(this); scroll.addView(text);
             approvalDialog = new AlertDialog.Builder(this).setTitle(approval.title).setView(scroll)
                 .setPositiveButton(t("적용"), (dialog, which) -> approval.decision.complete(true))
@@ -304,143 +303,6 @@ public final class MainActivity extends Activity implements Engine.Ui {
         try { startActivityForResult(pick, PICK_CHARACTERS); }
         catch (Exception e) { pendingPickerId = null; respond(id, null, e); }
     }
-    private void chooseProjectTransfer(String id, String content) {
-        if (pendingProjectRequest != null || projectTransferPrompt) {
-            respond(id, null, new IllegalStateException(t("파일 선택이 진행 중입니다."))); return;
-        }
-        JSONObject sync = projectSync.status();
-        boolean connected = sync.optBoolean("connected");
-        String repository = sync.optString("repository", "");
-        String fileLabel = content == null ? t("파일에서 가져오기") : t("파일에 저장");
-        String syncLabel = content == null ? (connected ? t("GitHub에서 가져오기") : t("GitHub 연결 후 가져오기"))
-            : (connected ? t("GitHub에 동기화") : t("GitHub 연결 후 동기화"));
-        java.util.ArrayList<String> choices = new java.util.ArrayList<>();
-        choices.add(fileLabel);
-        choices.add(syncLabel + (connected ? "\n" + repository : ""));
-        if (connected) {
-            choices.add(t("GitHub 연결 변경"));
-            choices.add(t("GitHub 연결 해제"));
-        }
-        projectTransferPrompt = true;
-        new AlertDialog.Builder(this)
-            .setTitle(content == null ? t("프로젝트 가져오기") : t("프로젝트 내보내기"))
-            .setItems(choices.toArray(new String[0]), (dialog, which) -> {
-                projectTransferPrompt = false;
-                if (which == 0) { chooseProjectFile(id, content); return; }
-                if (which == 1) {
-                    if (connected) runProjectSync(id, content);
-                    else promptGitHubConnection(id, content);
-                    return;
-                }
-                if (which == 2) { promptGitHubConnection(id, content); return; }
-                engine.io.execute(() -> {
-                    try {
-                        projectSync.disconnect();
-                        event("notice", obj("message", t("GitHub 연결이 해제되었습니다.")));
-                        respond(id, obj("cancelled", true), null);
-                    } catch (Exception error) { respond(id, null, error); }
-                });
-            })
-            .setNegativeButton(t("취소"), (dialog, which) -> {
-                projectTransferPrompt = false;
-                respond(id, obj("cancelled", true), null);
-            })
-            .setOnCancelListener(dialog -> {
-                projectTransferPrompt = false;
-                respond(id, obj("cancelled", true), null);
-            }).show();
-    }
-
-    private boolean projectTransferPrompt;
-
-    private void promptGitHubConnection(String id, String content) {
-        if (projectTransferPrompt) {
-            respond(id, null, new IllegalStateException(t("GitHub 연결 설정이 진행 중입니다."))); return;
-        }
-        projectTransferPrompt = true;
-        android.widget.EditText repository = new android.widget.EditText(this);
-        repository.setSingleLine(true);
-        repository.setHint("OWNER/REPO");
-        repository.setText(projectSync.status().optString("repository", ""));
-        repository.setSelectAllOnFocus(true);
-        new AlertDialog.Builder(this)
-            .setTitle(t("GitHub 동기화"))
-            .setMessage(t("쓰기 가능한 비공개 GitHub 저장소를 OWNER/REPO 형식으로 입력하세요. 이 저장소에는 프로젝트 ID·이름·병합 이력만 projects.json으로 저장합니다."))
-            .setView(repository)
-            .setPositiveButton(t("계속"), (dialog, which) -> {
-                String value = repository.getText().toString().trim();
-                projectTransferPrompt = false;
-                promptGitHubToken(id, content, value);
-            })
-            .setNegativeButton(t("취소"), (dialog, which) -> {
-                projectTransferPrompt = false;
-                respond(id, obj("cancelled", true), null);
-            })
-            .setOnCancelListener(dialog -> {
-                projectTransferPrompt = false;
-                respond(id, obj("cancelled", true), null);
-            }).show();
-    }
-
-    private void promptGitHubToken(String id, String content, String repository) {
-        if (projectTransferPrompt) {
-            respond(id, null, new IllegalStateException(t("GitHub 연결 설정이 진행 중입니다."))); return;
-        }
-        projectTransferPrompt = true;
-        android.widget.EditText token = new android.widget.EditText(this);
-        token.setSingleLine(true);
-        token.setHint("github_pat_…");
-        token.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        new AlertDialog.Builder(this)
-            .setTitle(t("GitHub 토큰"))
-            .setMessage(t("이 비공개 저장소의 Contents 읽기/쓰기가 가능한 토큰을 입력하세요. 토큰은 Android Keystore로 암호화해 이 기기에만 저장합니다."))
-            .setView(token)
-            .setPositiveButton(t("연결"), (dialog, which) -> {
-                String secret = token.getText().toString();
-                token.setText("");
-                projectTransferPrompt = false;
-                engine.io.execute(() -> {
-                    try {
-                        projectSync.connect(repository, secret);
-                        performProjectSync(id, content);
-                    } catch (Exception error) { respond(id, null, error); }
-                });
-            })
-            .setNegativeButton(t("취소"), (dialog, which) -> {
-                projectTransferPrompt = false;
-                token.setText("");
-                respond(id, obj("cancelled", true), null);
-            })
-            .setOnCancelListener(dialog -> {
-                projectTransferPrompt = false;
-                token.setText("");
-                respond(id, obj("cancelled", true), null);
-            }).show();
-    }
-
-    private void runProjectSync(String id, String content) {
-        engine.io.execute(() -> {
-            try { performProjectSync(id, content); }
-            catch (Exception error) { respond(id, null, error); }
-        });
-    }
-
-    private void performProjectSync(String id, String content) throws Exception {
-        JSONObject sync = projectSync.status();
-        if (content == null) {
-            String raw = projectSync.pull();
-            respond(id, obj("content", raw, "source", "github", "repository", sync.optString("repository")), null);
-        } else {
-            JSONObject result = projectSync.push(content);
-            result.put("saved", true);
-            result.put("synced", true);
-            respond(id, result, null);
-            event("notice", obj("message", result.optBoolean("changed")
-                ? t("프로젝트 정보를 GitHub에 동기화했습니다.")
-                : t("GitHub의 프로젝트 정보가 이미 최신입니다.")));
-        }
-    }
-
     private void chooseProjectFile(String id, String content) {
         if (pendingProjectRequest != null) { respond(id, null, new IllegalStateException(t("파일 선택이 진행 중입니다."))); return; }
         pendingProjectRequest = id;
@@ -840,11 +702,11 @@ public final class MainActivity extends Activity implements Engine.Ui {
                     }); return;
                 }
                 if (action.equals("files.pick")) { String key = args.optString("projectKey", ""); runOnUiThread(() -> chooseFolder(id, key)); return; }
-                if (action.equals("ui.projects.importFile")) { runOnUiThread(() -> chooseProjectTransfer(id, null)); return; }
+                if (action.equals("ui.projects.importFile")) { runOnUiThread(() -> chooseProjectFile(id, null)); return; }
                 if (action.equals("ui.projects.exportFile")) {
                     String content = args.getString("content");
                     dev.mobilecodex.app.core.sync.PortableProjects.parse(content, true);
-                    runOnUiThread(() -> chooseProjectTransfer(id, content)); return;
+                    runOnUiThread(() -> chooseProjectFile(id, content)); return;
                 }
                 if (action.equals("ui.loginBrowser")) {
                     Uri uri = Uri.parse(args.getString("url"));
@@ -856,7 +718,7 @@ public final class MainActivity extends Activity implements Engine.Ui {
                     String code = args.getString("code");
                     runOnUiThread(() -> {
                         ClipboardManager clipboard = getSystemService(ClipboardManager.class);
-                        clipboard.setPrimaryClip(ClipData.newPlainText(t("ChatGPT 로그인 코드"), code)); respond(id, obj("ok", true), null);
+                        clipboard.setPrimaryClip(ClipData.newPlainText(t("로그인 코드"), code)); respond(id, obj("ok", true), null);
                     }); return;
                 }
                 if (action.equals("recovery.export")) {

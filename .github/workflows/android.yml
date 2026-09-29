@@ -43,6 +43,7 @@ jobs:
           name: ui-check-reports
           path: |
             artifacts/ui-preview/
+            artifacts/ui-review/
             artifacts/project-identity-preview/
             artifacts/chat-switch-preview/
             artifacts/text-size-preview/
@@ -54,6 +55,8 @@ jobs:
     if: github.repository != 'SeeUSoon93/mobile-codex' || github.event_name == 'pull_request' || inputs.apk_only
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      GITHUB_OAUTH_CLIENT_ID: ${{ vars.GITHUB_OAUTH_CLIENT_ID }}
     permissions:
       contents: write
     steps:
@@ -63,6 +66,12 @@ jobs:
         env:
           MOBILE_CODEX_SIGNING_JSON: ${{ secrets.MOBILE_CODEX_SIGNING_JSON }}
         run: python3 tools/sign_ci_apk.py --check-config
+      - name: Report GitHub login availability
+        if: github.event_name != 'pull_request'
+        run: |
+          if [ -z "$GITHUB_OAUTH_CLIENT_ID" ]; then
+            echo "::notice::GitHub sign-in is unavailable in this build until the public GITHUB_OAUTH_CLIENT_ID repository variable is configured (Device Flow enabled)."
+          fi
       - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
         with:
           distribution: temurin

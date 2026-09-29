@@ -17,6 +17,7 @@ import static dev.mobilecodex.app.core.Texts.t;
 
 /** Visible official ChatGPT client. No app JavaScript interface or copied credentials. */
 public final class ChatWebActivity extends Activity {
+    private static final int SPACE_8_DP = 8, SPACE_12_DP = 12, TOUCH_48_DP = 48;
     private WebView page;
     private LinearLayout fallback;
     private TextView status;
@@ -54,16 +55,16 @@ public final class ChatWebActivity extends Activity {
         SafeWebViewLayout safe = new SafeWebViewLayout(this);
         FrameLayout content = new FrameLayout(this);
         safe.addView(content, new FrameLayout.LayoutParams(-1, -1));
-        fallback = new LinearLayout(this); fallback.setGravity(Gravity.CENTER); fallback.setOrientation(LinearLayout.VERTICAL);
+        fallback = new LinearLayout(this); fallback.setGravity(Gravity.CENTER); fallback.setOrientation(LinearLayout.VERTICAL); fallback.setPadding(dp(SPACE_12_DP), dp(SPACE_8_DP), dp(SPACE_12_DP), dp(SPACE_8_DP));
         fallback.setBackgroundColor(Color.WHITE);
         fallback.setVisibility(View.GONE);
         status = new TextView(this); status.setTextSize(14); status.setGravity(Gravity.CENTER);
         fallback.addView(status, new LinearLayout.LayoutParams(-1, -2));
-        LinearLayout errorActions = new LinearLayout(this); errorActions.setGravity(Gravity.CENTER);
+        LinearLayout errorActions = new LinearLayout(this); errorActions.setGravity(Gravity.CENTER_HORIZONTAL); errorActions.setOrientation(LinearLayout.VERTICAL);
         Button back = new Button(this); back.setText("Codex"); back.setOnClickListener(v -> returnToCodex());
-        errorActions.addView(back, new LinearLayout.LayoutParams(-2, dp(48)));
+        errorActions.addView(back, new LinearLayout.LayoutParams(-1, dp(TOUCH_48_DP)));
         Button retry = new Button(this); retry.setText(t("새로고침")); retry.setOnClickListener(v -> page.reload());
-        errorActions.addView(retry, new LinearLayout.LayoutParams(-2, dp(48)));
+        errorActions.addView(retry, new LinearLayout.LayoutParams(-1, dp(TOUCH_48_DP)));
         fallback.addView(errorActions, new LinearLayout.LayoutParams(-1, -2));
         page = new WebView(this);
         WebSettings settings = page.getSettings();

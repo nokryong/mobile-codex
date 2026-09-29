@@ -545,6 +545,48 @@ test('sidebar quota shows remaining percent and opens graphed account details',a
  assert.equal(d.querySelector('[data-settings-panel="account"]').hidden,false);assert.match(d.getElementById('usage-limits').textContent,/남은 63%/);assert.equal(d.querySelectorAll('.usage-gauge .quota-ring').length,1);
 });
 
+test('quota captions use the API reset time while settings keep human window labels',async()=>{
+ const now=new Date(), resetDate=new Date(now.getFullYear(),9,2,15,20,0), resetsAt=Math.floor(resetDate.getTime()/1000);
+ const expected=resetDate.toLocaleString('ko-KR',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
+ const limits={rateLimitsByLimitId:{codex:{limitName:'Codex',primary:{usedPercent:37,windowDurationMins:10080,resetsAt},secondary:{usedPercent:20,windowDurationMins:300,resetsAt}},other:{limitName:'Other',primary:{usedPercent:10,windowDurationMins:60,resetsAt}}}};
+ const {w,calls,snapshot}=setup({'rpc':m=>m.args.method==='account/rateLimits/read'?limits:{data:[]}});await tick();
+ w.mobileCodexEvent('state',{...snapshot,rateLimits:limits});const d=w.document;
+ assert.equal(d.getElementById('quota-percent').textContent,'63%');
+ assert.equal(d.getElementById('quota-caption').textContent,expected+' 초기화');
+ assert.doesNotMatch(d.getElementById('quota-caption').textContent,/168시간|5시간/);
+ assert.equal(calls.filter(call=>call.action==='rpc').length,0,'rendering quota never makes another request');
+ d.getElementById('account-button').click();await tick();await tick();
+ const text=d.getElementById('usage-limits').textContent;
+ assert.match(text,new RegExp(expected.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')));assert.match(text,/주간 한도/);assert.match(text,/5시간 한도/);assert.match(text,/사용 한도/);assert.doesNotMatch(text,/168시간|1시간/);
+ assert.equal(calls.filter(call=>call.action==='rpc'&&call.args.method==='account/rateLimits/read').length,1);
+});
+
+test('quota never infers a reset time from a duration when resetsAt is invalid',async()=>{
+ let current={rateLimits:{primary:{usedPercent:37,windowDurationMins:10080,resetsAt:0}}};
+ const {w,calls,snapshot}=setup({'rpc':m=>m.args.method==='account/rateLimits/read'?current:{data:[]}});await tick();const d=w.document;
+ for(const resetsAt of [0,null,NaN,8640000000001]) {
+   current={rateLimits:{primary:{usedPercent:37,windowDurationMins:10080,resetsAt}}};
+   w.mobileCodexEvent('state',{...snapshot,rateLimits:current});
+   assert.equal(d.getElementById('quota-percent').textContent,'63%');
+   assert.equal(d.getElementById('quota-caption').textContent,'초기화 시각 확인 불가');
+ }
+ assert.equal(calls.filter(call=>call.action==='rpc').length,0);
+ d.getElementById('account-button').click();await tick();await tick();
+ assert.match(d.getElementById('usage-limits').textContent,/초기화 시각 확인 불가/);
+ assert.doesNotMatch(d.getElementById('usage-limits').textContent,/168시간/);
+ assert.equal(calls.filter(call=>call.action==='rpc'&&call.args.method==='account\/rateLimits\/read').length,1);
+});
+
+test('quota reset captions localize English without changing the percentage',async()=>{
+ const resetDate=new Date(new Date().getFullYear(),9,2,15,20,0), resetsAt=Math.floor(resetDate.getTime()/1000);
+ const limits={rateLimits:{primary:{usedPercent:37,windowDurationMins:10080,resetsAt}}};
+ const {w,snapshot}=setup({'rpc':m=>m.args.method==='account/rateLimits/read'?limits:{data:[]}}, {language:'en'});await tick();
+ w.mobileCodexEvent('state',{...snapshot,rateLimits:limits});const d=w.document;
+ assert.equal(d.getElementById('quota-percent').textContent,'63%');assert.match(d.getElementById('quota-caption').textContent,/^Resets /);
+ d.getElementById('account-button').click();await tick();await tick();
+ assert.match(d.getElementById('usage-limits').textContent,/Resets [\s\S]*Weekly limit/);
+});
+
 test('account profiles can add, switch and remove without exposing credentials',async()=>{
  const {w,calls,snapshot}=setup({
    'auth.add':()=>({loginId:'new',verificationUrl:'https://auth.openai.com/codex/device',userCode:'ABCD'}),
@@ -1382,7 +1424,7 @@ test('inline dictation displays partial text, supports done and cancel, and cann
  const {w,calls}=setup({}, {language:'en'});await tick();const d=w.document;
  d.getElementById('prompt').value='Existing draft';
  w.mobileCodexEvent('voice.state',{phase:'listening',partial:'partial voice',level:0.6,elapsedMs:4200});
- assert.equal(d.getElementById('dictation').hidden,false);assert.match(d.getElementById('dictation-status').textContent,/Listening/);
+ assert.equal(d.getElementById('dictation').hidden,false);assert.equal(d.getElementById('composer').classList.contains('composer-expanded'),true);assert.match(d.getElementById('dictation-status').textContent,/Listening/);
  assert.equal(d.getElementById('dictation-preview').textContent,'partial voice');assert.equal(d.getElementById('prompt').value,'Existing draft');assert.equal(d.getElementById('prompt').readOnly,true);
  d.getElementById('composer').dispatchEvent(new w.Event('submit',{cancelable:true}));await tick();assert.equal(calls.some(x=>x.action==='chat.send'),false);
  d.getElementById('dictation-done').click();await tick();assert.equal(calls.some(x=>x.action==='voice.stop'),true);
@@ -1512,4 +1554,95 @@ test('Codex user messages stay fully visible even when long',async()=>{
  assert.equal(body.textContent,text); assert.equal(body.querySelector('img'),null);
  assert.equal(body.classList.contains('is-collapsed'),false);
  assert.equal(w.document.querySelector('.user-message-toggle'),null);
+});
+
+test('sync is a settings tab and never asks for a personal access token',async()=>{
+ const status={configured:false,authenticated:false,connected:false,account:'',repository:'',branch:'',lastSynced:0,selectedKeys:[],projects:[]};
+ const {w,calls}=setup({'rpc':m=>{assert.equal(m.args.method,'sync.status');return status;}});await tick();
+ const d=w.document;assert.ok(d.querySelector('[data-settings-tab="sync"]'));
+ assert.equal(d.querySelector('#sync-controls input[type="password"]'),null);
+ assert.doesNotMatch(d.getElementById('sync-controls').innerHTML,/<input[^>]*(token|pat|client)/i);
+ d.querySelector('[data-settings-tab="sync"]').click();await tick();await tick();
+ assert.match(d.getElementById('sync-unavailable').textContent,/구성되지 않았습니다/);
+ assert.equal(d.getElementById('sync-controls').hidden,true);
+ assert.equal(calls.some(call=>call.action==='rpc'&&call.args.method==='sync.login.start'),false);
+});
+
+test('sync device login is explicit and cancelling it invalidates the flow',async()=>{
+ const status={configured:true,authenticated:false,connected:false,account:'',repository:'',branch:'main',lastSynced:0,selectedKeys:[],projects:[]};
+ const {w,calls}=setup({'rpc':m=>{
+   if(m.args.method==='sync.status')return status;
+   if(m.args.method==='sync.login.start')return {flowId:'flow-1',userCode:'ABCD-EFGH',verificationUri:'https://github.com/login/device',interval:60,expiresAt:Date.now()+60000};
+   if(m.args.method==='sync.login.cancel')return status;
+   throw Error('unexpected '+m.args.method);
+ }});await tick();const d=w.document;d.querySelector('[data-settings-tab="sync"]').click();await tick();
+ d.getElementById('sync-login').click();await tick();
+ assert.equal(d.getElementById('sync-device-flow').hidden,false);assert.equal(d.getElementById('sync-device-code').textContent,'ABCD-EFGH');
+ assert.equal(calls.some(call=>call.action==='ui.externalBrowser'),false,'login never opens a browser by itself');
+ d.getElementById('sync-cancel-login').click();await tick();
+ assert.ok(calls.some(call=>call.action==='rpc'&&call.args.method==='sync.login.cancel'&&call.args.params.flowId==='flow-1'));
+ assert.equal(d.getElementById('sync-device-flow').hidden,true);
+});
+
+test('sync keeps migrated GitHub credentials usable when device login is not configured',async()=>{
+ const status={configured:false,authenticated:true,connected:false,account:'legacy-octo',repository:'legacy/projects',branch:'main',lastSynced:0,selectedKeys:[],projects:[]};
+ const {w}=setup({'rpc':m=>m.args.method==='sync.status'?status:{repositories:[{fullName:'legacy/projects'}],page:1,hasMore:false}});await tick();
+ const d=w.document;d.querySelector('[data-settings-tab="sync"]').click();await tick();await tick();
+ assert.equal(d.getElementById('sync-controls').hidden,false);
+ assert.equal(d.getElementById('sync-login').hidden,true);
+ assert.equal(d.getElementById('sync-disconnect').hidden,false);
+});
+
+test('a device flow returned after leaving sync is cancelled without starting a poll',async()=>{
+ let resolveStart;
+ const status={configured:true,authenticated:false,connected:false,account:'',repository:'',branch:'main',lastSynced:0,selectedKeys:[],projects:[]};
+ const {w,calls}=setup({'rpc':m=>{
+   if(m.args.method==='sync.status')return status;
+   if(m.args.method==='sync.login.start')return new Promise(resolve=>{resolveStart=resolve;});
+   if(m.args.method==='sync.login.cancel')return status;
+   throw Error('unexpected '+m.args.method);
+ }});await tick();const d=w.document;d.querySelector('[data-settings-tab="sync"]').click();await tick();
+ d.getElementById('sync-login').click();await tick();d.querySelector('[data-settings-tab="general"]').click();
+ resolveStart({flowId:'late-flow',userCode:'LATE-CODE',verificationUri:'https://github.com/login/device',interval:60});await tick();await tick();
+ assert.ok(calls.some(call=>call.action==='rpc'&&call.args.method==='sync.login.cancel'&&call.args.params.flowId==='late-flow'));
+ assert.equal(calls.some(call=>call.action==='rpc'&&call.args.method==='sync.login.poll'),false);
+});
+
+test('sync persists selected uploads, previews incoming projects, applies only the preview, and leaves errors inline',async()=>{
+ let status={configured:true,authenticated:true,connected:true,account:'octo',repository:'octo/projects',branch:'main',lastSynced:0,selectedKeys:[],projects:[{key:'local-a',projectId:'local-a',name:'Local A'}]};
+ const {w,calls}=setup({'rpc':m=>{
+   if(m.args.method==='sync.status')return status;
+   if(m.args.method==='sync.repositories')return {repositories:[{fullName:'octo/projects'}],page:1,hasMore:false};
+   if(m.args.method==='sync.selection'){assert.deepEqual(m.args.params.keys,['local-a']);return status={...status,selectedKeys:['local-a']};}
+   if(m.args.method==='sync.preview'){assert.deepEqual(m.args.params.keys,['local-a']);return {token:'preview-1',summary:{projects:[{projectId:'remote-a',name:'Remote A',nameConflicts:['Local A']}],eventCount:2,linkCount:1,conflictCount:1},addedEvents:0,uploadCount:1};}
+   if(m.args.method==='sync.apply'){assert.deepEqual(m.args.params,{token:'preview-1'});return {...status,account:'octo',lastSynced:Date.UTC(2026,8,29),projects:[{key:'local-a',projectId:'local-a',name:'Merged A'}],workspace:{selected:false},changed:true};}
+   throw Error('unexpected '+m.args.method);
+ }});await tick();const d=w.document;d.querySelector('[data-settings-tab="sync"]').click();await tick();await tick();
+ const check=d.querySelector('#sync-project-list input');check.checked=true;check.dispatchEvent(new w.Event('change'));await tick();
+ d.getElementById('sync-preview').click();await tick();
+ assert.match(d.getElementById('sync-incoming-projects').textContent,/Remote A/);assert.match(d.getElementById('sync-incoming-projects').textContent,/이름 충돌/);assert.match(d.getElementById('sync-preview-summary').textContent,/새 변경 0개/);
+ d.getElementById('sync-apply').click();await tick();await tick();
+ assert.ok(calls.some(call=>call.action==='rpc'&&call.args.method==='sync.apply'));
+ assert.equal(d.getElementById('sync-preview-result').hidden,true);
+ assert.equal(d.getElementById('logout').textContent,'로그아웃','sync account text must not replace the app account object');
+ const failed=setup({'rpc':m=>m.args.method==='sync.status'?status:Promise.reject(Error('remote failed'))});await tick();
+ failed.w.document.querySelector('[data-settings-tab="sync"]').click();await tick();await tick();failed.w.document.getElementById('sync-preview').click();await tick();
+ assert.match(failed.w.document.getElementById('sync-status').textContent,/remote failed/);
+ assert.equal(failed.w.document.getElementById('sync-preview-result').hidden,true);
+});
+
+test('a failed sync apply consumes its preview and requires a fresh preview',async()=>{
+ const status={configured:true,authenticated:true,connected:true,account:'octo',repository:'octo/projects',branch:'main',lastSynced:0,selectedKeys:[],projects:[]}; let applyCalls=0;
+ const {w,calls}=setup({'rpc':m=>{
+   if(m.args.method==='sync.status')return status;
+   if(m.args.method==='sync.repositories')return {repositories:[{fullName:'octo/projects'}],page:1,hasMore:false};
+   if(m.args.method==='sync.preview')return {token:'single-use',summary:{projects:[],eventCount:0,linkCount:0,conflictCount:0},addedEvents:0,uploadCount:0};
+   if(m.args.method==='sync.apply'){applyCalls++;throw Error('apply rejected');}
+   throw Error('unexpected '+m.args.method);
+ }});await tick();const d=w.document;d.querySelector('[data-settings-tab="sync"]').click();await tick();await tick();
+ d.getElementById('sync-preview').click();await tick();d.getElementById('sync-apply').click();await tick();
+ assert.equal(applyCalls,1);assert.equal(d.getElementById('sync-preview-result').hidden,true);assert.equal(d.getElementById('sync-apply').disabled,true);
+ d.getElementById('sync-apply').click();await tick();assert.equal(applyCalls,1);
+ assert.match(d.getElementById('sync-status').textContent,/apply rejected/);
+ assert.equal(calls.filter(call=>call.action==='rpc'&&call.args.method==='sync.apply').length,1);
 });

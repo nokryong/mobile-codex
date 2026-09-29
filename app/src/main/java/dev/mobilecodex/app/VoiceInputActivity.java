@@ -13,6 +13,7 @@ import static dev.mobilecodex.app.core.Json.*;
 /** Private trampoline for the installed recognizer's visible microphone UI, also usable from the overlay. */
 public final class VoiceInputActivity extends Activity {
     private static final int RECOGNIZE = 81;
+    private static final int SPACE_8_DP = 8, SPACE_12_DP = 12;
     private JSONObject request;
     private boolean delivered;
     @Override public void onCreate(Bundle saved) {
@@ -20,9 +21,10 @@ public final class VoiceInputActivity extends Activity {
         request = parse(getIntent().getStringExtra("request"));
         if (request.optString("receiptId").isEmpty()) { finish(); return; }
         VoiceInput.activate(this, request.optString("receiptId"));
-        LinearLayout panel = new LinearLayout(this); panel.setOrientation(LinearLayout.VERTICAL); panel.setPadding(32, 48, 32, 32);
+        LinearLayout panel = new LinearLayout(this); panel.setOrientation(LinearLayout.VERTICAL); panel.setPadding(dp(SPACE_12_DP), dp(SPACE_8_DP), dp(SPACE_12_DP), dp(SPACE_8_DP));
         TextView note = new TextView(this); note.setText(t("음성 입력\n인식된 내용은 초안에 넣습니다. 확인한 뒤 보내세요.\n음성 처리는 기기에 설정된 인식 서비스가 담당합니다.")); note.setTextSize(16); panel.addView(note);
-        Button cancel = new Button(this); cancel.setText(t("취소")); cancel.setOnClickListener(v -> deliver("", "")); panel.addView(cancel); setContentView(panel);
+        Button cancel = new Button(this); cancel.setText(t("취소")); cancel.setOnClickListener(v -> deliver("", "")); panel.addView(cancel);
+        ScrollView scroll = new ScrollView(this); scroll.setFillViewport(true); scroll.addView(panel, new ScrollView.LayoutParams(-1, -2)); setContentView(scroll);
         if (android.os.Build.VERSION.SDK_INT >= 33) getOnBackInvokedDispatcher().registerOnBackInvokedCallback(android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT, () -> deliver("", ""));
         if (saved == null) {
             try { startActivityForResult(recognitionIntent(Locale.getDefault()), RECOGNIZE); }
@@ -43,6 +45,7 @@ public final class VoiceInputActivity extends Activity {
         if (alternatives != null) for (String text : alternatives) if (text != null && !text.isBlank()) return text.trim();
         return "";
     }
+    private int dp(int value) { return Math.round(value * getResources().getDisplayMetrics().density); }
     @Override protected void onActivityResult(int code, int result, Intent data) {
         super.onActivityResult(code, result, data);
         if (code == RECOGNIZE) {

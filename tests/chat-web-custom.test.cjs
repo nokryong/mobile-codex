@@ -89,6 +89,7 @@ test('new text-title sidebar gets a switch above its New chat row, not in the ic
  let group=d.getElementById('mc-chat-mode-switch');
  assert.ok(group);assert.equal(group.nextElementSibling.id,'new-chat');
  assert.equal(group.classList.contains('mc-below-title'),true);
+ assert.equal(dom.window.getComputedStyle(group).marginBottom,'4px');
  assert.notEqual(group.previousElementSibling.id,'rail-home');
  let clicks=0;d.getElementById('hide-sidebar').addEventListener('click',()=>clicks++);
  assert.equal(dom.window.__mcChatCustom.closeSidebar(),true);assert.equal(clicks,1);
@@ -174,6 +175,7 @@ test('keeps the switch above New chat when the official title moves outside navi
  assert.equal(group.nextElementSibling.querySelector('button').textContent,'새 채팅');
  assert.equal(nav.querySelector('[data-app-action-sidebar-scroll]').textContent,'History unchanged');
  assert.ok(group.classList.contains('mc-at-sidebar-start'));
+ assert.equal(w.getComputedStyle(group).maxWidth,'calc(100% - 32px)');
  assert.equal(d.querySelector('.segmented').textContent,'ChatWork');
  const close=d.querySelector('#panel > header button');close.getClientRects=()=>[{}];let clicked=0;close.onclick=()=>clicked++;
  assert.equal(w.__mcChatCustom.closeSidebar(),true);assert.equal(clicked,1);

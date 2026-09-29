@@ -132,6 +132,7 @@ final class FloatingChat implements Engine.Ui {
     private void display() {
         if (root==null) return;
         for (int i=2;i<root.getChildCount();i++) root.getChildAt(i).setVisibility(expanded?View.VISIBLE:View.GONE);
+        status.setVisibility(expanded ? View.VISIBLE : View.GONE);
         expand.setText(expanded?t("Codex · 접기"):t("Codex · 열기"));
         status.setText(state.optString("status", t("연결 확인 중")) + (expanded ? t(" · 창을 접으면 휴대폰 조작 가능") : "")); transcript.setText(transcriptText); updateButtons();
     }

@@ -3,6 +3,8 @@ package dev.mobilecodex.app;
 import android.app.*;
 import android.content.*;
 import android.speech.RecognizerIntent;
+import android.view.ViewGroup;
+import android.widget.*;
 import org.json.*;
 import org.junit.*;
 import org.junit.runner.RunWith;
@@ -58,6 +60,15 @@ public class VoiceInputTest {
         Intent result=new Intent().putStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS,new ArrayList<>(List.of("받아쓰기")));
         activity.onActivityResult(81,Activity.RESULT_OK,result);
         assertTrue(activity.isFinishing());assertEquals("받아쓰기",VoiceInput.pending(context,"main").getJSONObject(0).getString("text"));
+        controller.pause().stop().destroy();
+    }
+    @Test public void voiceInstructionsUseCompactDpPaddingInsideAScrollView()throws Exception{
+        Intent intent=new Intent(context,VoiceInputActivity.class).putExtra("request",request().toString());
+        var controller=Robolectric.buildActivity(VoiceInputActivity.class,intent).setup();var activity=controller.get();
+        ViewGroup content=activity.findViewById(android.R.id.content);assertTrue(content.getChildAt(0) instanceof ScrollView);
+        LinearLayout panel=(LinearLayout)((ScrollView)content.getChildAt(0)).getChildAt(0);
+        float density=activity.getResources().getDisplayMetrics().density;
+        assertEquals(Math.round(12*density),panel.getPaddingLeft());assertEquals(Math.round(8*density),panel.getPaddingTop());
         controller.pause().stop().destroy();
     }
 }

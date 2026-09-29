@@ -107,4 +107,40 @@ public class GitHubProjectSyncTest {
         assertTrue(result.getBoolean("changed"));
         assertEquals(2, puts[0]);
     }
+    @Test public void settingsExchangeRejectsChangedPreviewBeforeWriting() throws Exception {
+        String raw = project("proj_remote", "Remote", "device_pc").json().toString();
+        final int[] writes = {0};
+        GitHubProjectSync.Client client = new GitHubProjectSync.Client((method, endpoint, body, token) -> {
+            if (method.equals("PUT")) { writes[0]++; throw new AssertionError("Unreviewed write"); }
+            return endpoint.contains("/contents/") ? file("b".repeat(40), raw) : repo(7, true, true, "main", 2);
+        });
+        assertThrows(java.io.IOException.class, () -> client.exchange(
+            new GitHubProjectSync.Config("owner/sync", 7, "main"), "secret",
+            project("proj_local", "Local", "device_phone").json().toString(), "a".repeat(40)));
+        assertEquals(0, writes[0]);
+    }
+
+    @Test public void settingsExchangeDoesNotSilentlyRetryUnreviewedRace() throws Exception {
+        String raw = new PortableProjects().json().toString();
+        final int[] writes = {0};
+        GitHubProjectSync.Client client = new GitHubProjectSync.Client((method, endpoint, body, token) -> {
+            if (method.equals("PUT")) { writes[0]++; throw new GitHubProjectSync.HttpError(409); }
+            return endpoint.contains("/contents/") ? file("a".repeat(40), raw) : repo(7, true, true, "main", 2);
+        });
+        assertThrows(java.io.IOException.class, () -> client.exchange(
+            new GitHubProjectSync.Config("owner/sync", 7, "main"), "secret",
+            project("proj_local", "Local", "device_phone").json().toString(), "a".repeat(40)));
+        assertEquals(1, writes[0]);
+    }
+
+    @Test public void settingsExchangeWithEmptySelectionNeverWrites() throws Exception {
+        String raw = project("proj_remote", "Remote", "device_pc").json().toString();
+        GitHubProjectSync.Client client = new GitHubProjectSync.Client((method, endpoint, body, token) -> {
+            assertEquals("GET", method);
+            return endpoint.contains("/contents/") ? file("a".repeat(40), raw) : repo(7, true, true, "main", 2);
+        });
+        assertFalse(client.exchange(new GitHubProjectSync.Config("owner/sync", 7, "main"), "secret",
+            new PortableProjects().json().toString(), "a".repeat(40)).getBoolean("changed"));
+    }
+
 }

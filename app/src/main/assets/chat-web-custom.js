@@ -4,13 +4,16 @@
   if (location.protocol !== 'https:' || location.hostname !== 'chatgpt.com' || window.top !== window) return;
   if (window.__mcChatCustom) { window.__mcChatCustom.refresh(); return; }
   const SWITCH = 'mc-chat-mode-switch', SWITCH_SPACE = 160;
+  // Carbon spacing scale for the app-owned switch. The 1px inset below is a
+  // visual separator between its two 44px controls, not layout spacing.
+  const SPACE_2 = 2, SPACE_4 = 4, SPACE_8 = 8, SPACE_16 = 16;
   const CLOSE_SIDEBAR = 'button[aria-label*="Close sidebar" i],button[aria-label="Hide sidebar" i],button[aria-label*="사이드바 닫기"],button[aria-label*="사이드바 접기"],button[aria-label*="사이드바 숨기기"]';
-  const css = `#${SWITCH}{display:inline-flex;align-items:center;gap:2px;padding:1px;border:0;border-radius:999px;background:#eeeef0;font:600 13px/1.2 system-ui,sans-serif;flex:none;margin-inline-start:8px;margin-inline-end:auto;width:max-content;min-width:112px;max-width:calc(100% - 8px);box-sizing:border-box;position:relative;z-index:1}
-#${SWITCH}.mc-below-title{display:flex;margin:2px 0 6px 8px}
-#${SWITCH}.mc-at-sidebar-start{display:flex;margin:0 16px 4px}
-#${SWITCH}.mc-header-fallback{margin:0 8px;align-self:center}
-#${SWITCH}.mc-compact-rail{display:flex;width:44px;min-width:44px;max-width:44px;padding:0;margin:4px auto;justify-content:center}
-#${SWITCH} button,#${SWITCH} a{display:flex;align-items:center;justify-content:center;min-height:44px;min-width:44px;flex:1 1 auto;padding:0 8px;border:0;border-radius:999px;font:inherit;text-decoration:none;color:#64646c;background:transparent;white-space:nowrap;cursor:pointer}
+  const css = `#${SWITCH}{display:inline-flex;align-items:center;gap:${SPACE_2}px;padding:1px;border:0;border-radius:999px;background:#eeeef0;font:600 13px/1.2 system-ui,sans-serif;flex:none;margin-inline-start:${SPACE_8}px;margin-inline-end:auto;width:max-content;min-width:112px;max-width:calc(100% - ${SPACE_8}px);box-sizing:border-box;position:relative;z-index:1}
+#${SWITCH}.mc-below-title{display:flex;margin:${SPACE_2}px 0 ${SPACE_4}px ${SPACE_8}px}
+#${SWITCH}.mc-at-sidebar-start{display:flex;margin:0 ${SPACE_16}px ${SPACE_4}px;max-width:calc(100% - ${SPACE_16 * 2}px)}
+#${SWITCH}.mc-header-fallback{margin:0 ${SPACE_8}px;align-self:center;max-width:calc(100% - ${SPACE_8 * 2}px)}
+#${SWITCH}.mc-compact-rail{display:flex;width:44px;min-width:44px;max-width:44px;padding:0;margin:${SPACE_4}px auto;justify-content:center}
+#${SWITCH} button,#${SWITCH} a{display:flex;align-items:center;justify-content:center;min-height:44px;min-width:44px;flex:1 1 auto;padding:0 ${SPACE_8}px;border:0;border-radius:999px;font:inherit;text-decoration:none;color:#64646c;background:transparent;white-space:nowrap;cursor:pointer}
 #${SWITCH} button{background:#fafafa;color:#202024;box-shadow:0 1px 4px #0001}
 #${SWITCH} a:focus-visible{outline:2px solid #397cf6;outline-offset:2px}
 #${SWITCH}.mc-compact-rail button{display:none}

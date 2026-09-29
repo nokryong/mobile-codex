@@ -22,6 +22,7 @@
   const toolCache = [null, null, null];
   let updateState = {}, updateSourceDirty = false, updateRequestPending = false;
   let linuxStatusError = '', linuxRequestPending = false;
+  let syncState = {loaded:false, status:null, repositories:[], page:0, hasMore:false, selectedKeys:null, selectionTouched:false, preview:null, busy:false, error:'', flow:null, pollTimer:null, pollInFlight:false, generation:0};
   let textSizePercent = 100;
   function call(action, args = {}) {
     return new Promise((resolve, reject) => {
@@ -272,6 +273,7 @@
       chip.append(node('span', item.label)); const remove = button('×', () => removeContext(item.type, item.value.id || item.value.path || item.value.name), 'chip-remove'); remove.setAttribute('aria-label', item.label + t(' 제거')); chip.append(remove); target.append(chip);
     }
     target.hidden = !items.length;
+    updateComposerExpansion();
   }
   function setDraftScope(next) {
     const workspaceKey = Object.prototype.hasOwnProperty.call(next.workspace || {}, 'key') ? next.workspace.key : (next.cwd || '');
@@ -314,6 +316,11 @@
   }
   function updateSend() { const pro = proSelected(), occupied = !!state.proBusy || (pro && !!state.busy); $('voice-input').disabled = !draftScope || voiceStarting || voiceActive || !!sending; $('voice-input').setAttribute('aria-busy', String(voiceStarting || voiceActive)); $('send').disabled = ((!$('prompt').value.trim() && !(draftContext.attachments || []).length) || !!sending || voiceStarting || voiceActive || occupied || (state.workspace?.selected && state.workspace.available === false)); const steering = state.busy && !pro; $('send').setAttribute('aria-label', pro ? t('GPT-6-Pro에 보내기') : steering ? t('진행 중인 작업에 추가 지시') : t('메시지 보내기')); $('send').title = pro ? t('GPT-6-Pro에 보내기') : steering ? t('추가 지시') : t('보내기'); updateFastButton(); }
   function scrollLatest() { following = true; $('chat-scroll').scrollTop = $('chat-scroll').scrollHeight; historyView.top = $('chat-scroll').scrollTop; $('jump-latest').hidden = true; }
+  function updateComposerExpansion() {
+    const composer = $('composer');
+    composer.classList.toggle('composer-expanded', !$('dictation').hidden || !$('draft-context').hidden || composer.contains(document.activeElement));
+    sizeComposer();
+  }
   function sizeComposer() {
     const field = $('prompt'), cap = Math.max(60, Math.min(160, window.innerHeight * .24));
     field.style.height = '0px';
@@ -515,7 +522,7 @@
     const base = Date.now(), elapsed = Number(dictationState.elapsedMs) || 0;
     const tick = () => { const seconds = Math.floor((elapsed + (phase === 'listening' ? Date.now() - base : 0)) / 1000); $('dictation-time').textContent = Math.floor(seconds / 60) + ':' + String(seconds % 60).padStart(2,'0'); };
     tick(); if (phase === 'listening') dictationTimer = setInterval(tick, 1000);
-    voiceActive = active; updateSend(); viewportChanged();
+    voiceActive = active; updateComposerExpansion(); updateSend(); viewportChanged();
   }
   function mergeVoiceText(current, result) {
     if (!result.text) return current;
@@ -1506,15 +1513,26 @@
   }
   let toolsScope = "", toolsGeneration = 0;
   const currentToolsScope = () => JSON.stringify([state.cwd, state.threadId, state.account]);
-  function usageTime(value) { return Number.isFinite(value) ? new Date(value * 1000).toLocaleString(L.language()) : t('알 수 없음'); }
-  function usageDuration(value) { return Number.isFinite(value) ? (value >= 60 ? Math.round(value / 60) + t('시간') : value + t('분')) : t('기간 정보 없음'); }
+  function usageTime(value) {
+    if (!Number.isSafeInteger(value) || value <= 0 || value > 8640000000000) return '';
+    const date = new Date(value * 1000); if (!Number.isFinite(date.getTime())) return '';
+    const options = {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'};
+    if (date.getFullYear() !== new Date().getFullYear()) options.year = 'numeric';
+    return date.toLocaleString(L.language() === 'ko' ? 'ko-KR' : 'en-US', options);
+  }
+  function usageDuration(value) {
+    if (value === 10080) return t('주간 한도');
+    if (value === 300) return t('5시간 한도');
+    return t('사용 한도');
+  }
   function usageRows(result) {
     const buckets = result?.rateLimitsByLimitId && Object.keys(result.rateLimitsByLimitId).length ? Object.entries(result.rateLimitsByLimitId) : [['codex', result?.rateLimits]];
     return buckets.filter(([, value]) => value && (value.primary || value.secondary)).flatMap(([key, value]) => [[t('기본'), value.primary], [t('보조'), value.secondary]].filter(([, window]) => window && Number.isFinite(window.usedPercent)).map(([label, window]) => {
       const remaining = Math.max(0, Math.min(100, 100 - window.usedPercent));
+      const resetTime = usageTime(window.resetsAt);
       return {label:(value.limitName || value.normalModelSlug || key) + ' · ' + label, used:window.usedPercent, remaining,
-        duration:usageDuration(window.windowDurationMins), reset:usageTime(window.resetsAt),
-        text:t('사용 ') + window.usedPercent + t('% · 남은 ') + remaining + '% · ' + usageDuration(window.windowDurationMins) + t(' · 재설정 ') + usageTime(window.resetsAt)};
+        duration:usageDuration(window.windowDurationMins), resetTime, reset:resetTime || t('초기화 시각 확인 불가'),
+        text:t('사용 ') + window.usedPercent + t('% · 남은 ') + remaining + '% · ' + usageDuration(window.windowDurationMins) + t(' · 재설정 ') + (resetTime || t('초기화 시각 확인 불가'))};
     }));
   }
   function quotaRing(remaining, label, large = false) {
@@ -1536,13 +1554,14 @@
     }
     const remaining = Math.round(row.remaining);
     ring.style.setProperty('--remaining',String(remaining)); ring.setAttribute('aria-label',t('남은 한도 ') + remaining + '%'); value.textContent='';
-    percent.textContent=remaining + '%'; caption.textContent=t('남은 한도') + ' · ' + row.duration;
+    percent.textContent=remaining + '%'; caption.textContent=row.resetTime ? t('{time} 초기화', {time:row.resetTime}) : t('초기화 시각 확인 불가');
   }
   function renderUsage(rows) {
     const target = $('usage-limits'); target.replaceChildren();
     for (const row of rows) {
       const card = node('div', null, 'usage-gauge'), copy = node('span', null, 'usage-gauge-copy');
-      copy.append(node('strong', row.label), node('small', t('남은 ') + Math.round(row.remaining) + '% · ' + row.duration + '\n' + t('재설정 ') + row.reset));
+      const reset = row.resetTime ? t('재설정 {time}', {time:row.resetTime}) : row.reset;
+      copy.append(node('strong', row.label), node('small', reset + '\n' + t('남은 ') + Math.round(row.remaining) + '% · ' + row.duration));
       card.append(quotaRing(row.remaining, row.label + ' ' + t('남은 ') + Math.round(row.remaining) + '%', true), copy); target.append(card);
     }
   }
@@ -1574,7 +1593,7 @@
     const choice = earliestResetCredit(data), canRetry = !!(resetCreditIdempotencyKey && resetCreditSelectedId);
     copy.append(title, node('small', available === null ? t('초기화권 정보를 사용할 수 없습니다.') : (available ? t('{count}개 사용 가능', {count:available}) : t('사용 가능한 초기화권이 없습니다.'))));
     if (available > 0 && !choice && !canRetry) copy.append(node('small', t('만료일 전체를 확인할 수 없어 사용을 보류합니다.')));
-    else if (choice?.expiresAt != null && !canRetry) copy.append(node('small', t('가장 먼저 만료: ') + usageTime(choice.expiresAt)));
+    else if (choice?.expiresAt != null && !canRetry) copy.append(node('small', t('가장 먼저 만료: ') + (usageTime(choice.expiresAt) || t('알 수 없음'))));
     head.append(copy);
     if (available > 0) {
       const use = button(t('1개 사용'), consumeResetCredit, 'secondary-button'); use.id = 'reset-credit-use'; use.disabled = resetCreditBusy || (!choice && !canRetry); head.append(use);
@@ -1647,7 +1666,185 @@
     }
     if (!profiles.length) target.append(node('p',t('등록된 계정이 없습니다.'),'empty-note'));
   }
+  function syncStatus(value) {
+    return value && typeof value === 'object' && typeof value.configured === 'boolean' ? value : null;
+  }
+  function syncLocalProjects() {
+    return Array.isArray(syncState.status?.projects) ? syncState.status.projects : (state.projects || []);
+  }
+  function syncBusy() { return !!syncState.busy || projectWorkBusy(); }
+  function syncTime(value) {
+    const date = new Date(Number(value));
+    return Number.isFinite(date.getTime()) && Number(value) > 0 ? date.toLocaleString(L.language()) : '';
+  }
+  function setSyncStatus(value, resetSelection = false) {
+    const status = syncStatus(value);
+    if (!status) return false;
+    syncState.status = status; syncState.loaded = true;
+    const projects = Array.isArray(status.projects) ? status.projects : (state.projects || []);
+    const validKeys = new Set(projects.map(project => project?.key || project?.workspaceKey || project?.projectId).filter(Boolean));
+    const wanted = resetSelection || syncState.selectedKeys === null || !syncState.selectionTouched ? (status.selectedKeys || []) : syncState.selectedKeys;
+    syncState.selectedKeys = new Set([...wanted].filter(key => validKeys.has(key)));
+    return true;
+  }
+  function invalidateSyncPreview(cancel = true) {
+    const preview = syncState.preview; syncState.preview = null;
+    if (cancel && preview) rpc('sync.cancel').then(result => { if (syncStatus(result)) { setSyncStatus(result); renderSync(); } }).catch(() => {});
+  }
+  function renderSync() {
+    const status = syncState.status, unavailable = syncState.loaded && status?.configured === false && !status?.authenticated;
+    const controls = $('sync-controls'); if (!controls) return;
+    $('sync-unavailable').hidden = !unavailable;
+    $('sync-unavailable').textContent = unavailable ? t('이 빌드에는 GitHub 로그인이 아직 구성되지 않았습니다. 동기화를 사용할 수 없습니다.') : '';
+    controls.hidden = unavailable;
+    const message = syncState.error || (syncState.loaded ? (unavailable ? '' : (syncState.busy ? t('처리 중입니다…') : (status?.authenticated ? (status.connected ? t('동기화할 준비가 되었습니다.') : t('저장소를 선택해 연결하세요.')) : t('GitHub 로그인이 필요합니다.')))) : t('상태를 확인하는 중입니다.'));
+    $('sync-status').textContent = message; $('sync-status').classList.toggle('error', !!syncState.error);
+    if (unavailable) return;
+    const authenticated = !!status?.authenticated, connected = !!status?.connected, flow = syncState.flow;
+    $('sync-account').textContent = authenticated ? (status.account || t('GitHub 계정 연결됨')) : t('연결되지 않음');
+    $('sync-indicator').textContent = connected ? t('연결됨') : (authenticated ? t('로그인됨') : t('연결 안 됨'));
+    $('sync-indicator').classList.toggle('online', connected);
+    $('sync-login-disclosure').hidden = authenticated || !!flow;
+    $('sync-login').hidden = authenticated || !!flow; $('sync-login').disabled = syncBusy() || syncState.busy;
+    $('sync-open-browser').hidden = !flow; $('sync-open-browser').disabled = syncState.busy;
+    $('sync-cancel-login').hidden = !flow; $('sync-cancel-login').disabled = syncState.busy;
+    $('sync-device-flow').hidden = !flow; $('sync-device-code').textContent = flow?.userCode || '';
+    const repository = status?.repository || '';
+    const names = new Set(syncState.repositories.map(item => item.fullName).filter(Boolean)); if (repository) names.add(repository);
+    const select = $('sync-repository'), previous = select.value;
+    select.replaceChildren(new Option(t('저장소를 선택하세요'), ''));
+    for (const name of names) select.add(new Option(name, name));
+    select.value = names.has(repository) ? repository : (names.has(previous) ? previous : '');
+    select.disabled = !authenticated || syncBusy() || syncState.busy;
+    $('sync-more-repositories').hidden = !authenticated || !syncState.hasMore;
+    $('sync-more-repositories').disabled = syncBusy() || syncState.busy;
+    $('sync-repository-note').textContent = connected ? t('연결된 저장소: {repository} · 브랜치: {branch}', {repository:repository, branch:status.branch || 'main'}) : '';
+    const projectList = $('sync-project-list'); projectList.replaceChildren();
+    const selected = syncState.selectedKeys || new Set();
+    for (const project of syncLocalProjects()) {
+      const key = project.key || project.workspaceKey || project.projectId; if (!key) continue;
+      const row = node('label', null, 'sync-project-option'), input = node('input'); input.type = 'checkbox'; input.value = key; input.checked = selected.has(key); input.disabled = !connected || syncBusy() || syncState.busy;
+      input.addEventListener('change', () => { if (input.checked) selected.add(key); else selected.delete(key); saveSyncSelection(); });
+      const copy = node('span'); copy.append(node('strong', project.name || t('이름 없는 프로젝트'))); row.append(input, copy); projectList.append(row);
+    }
+    if (!projectList.children.length) projectList.append(node('p', t('동기화할 로컬 프로젝트가 없습니다.'), 'empty-note'));
+    $('sync-preview').disabled = !connected || syncBusy() || syncState.busy;
+    const preview = syncState.preview, previewBox = $('sync-preview-result'); previewBox.hidden = !preview;
+    if (preview) {
+      const summary = preview.summary || {}, incoming = summary.projects || [];
+      $('sync-preview-summary').textContent = t('원격 프로젝트 {projects}개 · 새 변경 {events}개 · 연결 {links}개 · 충돌 {conflicts}개 · 업로드 {uploads}개', {projects:incoming.length, events:preview.addedEvents ?? summary.eventCount ?? 0, links:summary.linkCount || 0, conflicts:summary.conflictCount || 0, uploads:preview.uploadCount || 0});
+      const items = $('sync-incoming-projects'); items.replaceChildren();
+      for (const project of incoming) {
+        const item = node('div', null, 'sync-incoming-project'), title = node('strong', project.name || project.projectId || t('이름 없는 프로젝트'));
+        item.append(title);
+        if (project.nameConflicts?.length) item.append(node('small', t('이름 충돌: ') + project.nameConflicts.join(' / ')));
+        items.append(item);
+      }
+      if (!incoming.length) items.append(node('p', t('가져올 원격 프로젝트가 없습니다.'), 'empty-note'));
+    }
+    $('sync-apply').disabled = !preview || syncBusy() || syncState.busy;
+    $('sync-last-synced').textContent = status?.lastSynced ? t('마지막 동기화: {time}', {time:syncTime(status.lastSynced)}) : t('아직 성공한 동기화가 없습니다.');
+    $('sync-disconnect').hidden = !authenticated; $('sync-disconnect').disabled = syncBusy() || syncState.busy;
+  }
+  async function loadSyncStatus() {
+    if (syncState.busy) return;
+    syncState.error = ''; renderSync();
+    try { setSyncStatus(await rpc('sync.status')); }
+    catch (error) { syncState.loaded = true; syncState.error = error.message || t('동기화 상태를 불러오지 못했습니다.'); }
+    renderSync();
+  }
+  async function loadSyncRepositories(page = 1) {
+    if (syncState.busy || !syncState.status?.authenticated) return;
+    syncState.busy = true; syncState.error = ''; renderSync();
+    try {
+      const result = await rpc('sync.repositories', {page});
+      const existing = page === 1 ? [] : syncState.repositories;
+      const byName = new Map(existing.map(item => [item.fullName, item]));
+      for (const item of result.repositories || []) if (item?.fullName) byName.set(item.fullName, item);
+      syncState.repositories = [...byName.values()]; syncState.page = result.page || page; syncState.hasMore = !!result.hasMore;
+    } catch (error) { syncState.error = error.message || t('저장소 목록을 불러오지 못했습니다.'); }
+    finally { syncState.busy = false; renderSync(); }
+  }
+  function stopSyncPolling(cancel = false) {
+    if (syncState.pollTimer) clearTimeout(syncState.pollTimer);
+    syncState.pollTimer = null; syncState.generation++;
+    const flow = syncState.flow; syncState.flow = null;
+    if (cancel && flow?.flowId) rpc('sync.login.cancel', {flowId:flow.flowId}).catch(() => {});
+  }
+  function scheduleSyncPoll(flow, delay) {
+    const generation = syncState.generation;
+    syncState.pollTimer = setTimeout(async () => {
+      if (generation !== syncState.generation || syncState.flow?.flowId !== flow.flowId) return;
+      if (syncState.pollInFlight) { scheduleSyncPoll(flow, 1); return; }
+      syncState.pollInFlight = true;
+      try {
+        const result = await rpc('sync.login.poll', {flowId:flow.flowId});
+        if (generation !== syncState.generation || syncState.flow?.flowId !== flow.flowId) return;
+        if (result?.pending) { scheduleSyncPoll(flow, result.interval || flow.interval || 5); return; }
+        syncState.flow = null; setSyncStatus(result); renderSync();
+        if (syncState.status?.authenticated) loadSyncRepositories(1);
+      } catch (error) {
+        if (generation === syncState.generation) {
+          const current = syncState.flow; syncState.flow = null; syncState.generation++;
+          if (current?.flowId) rpc('sync.login.cancel', {flowId:current.flowId}).catch(() => {});
+          syncState.error = error.message || t('GitHub 로그인을 확인하지 못했습니다.'); renderSync();
+        }
+      } finally { syncState.pollInFlight = false; }
+    }, Math.max(1, Number(delay) || 5) * 1000);
+  }
+  async function startSyncLogin() {
+    if (syncState.busy || projectWorkBusy()) return;
+    const generation = ++syncState.generation;
+    syncState.busy = true; syncState.error = ''; renderSync();
+    try {
+      const flow = await rpc('sync.login.start');
+      if (generation !== syncState.generation) { if (flow?.flowId) rpc('sync.login.cancel', {flowId:flow.flowId}).catch(() => {}); return; }
+      syncState.flow = flow;
+      scheduleSyncPoll(flow, flow.interval || 5);
+    } catch (error) { syncState.error = error.message || t('GitHub 로그인을 시작하지 못했습니다.'); }
+    finally { syncState.busy = false; renderSync(); }
+  }
+  async function connectSyncRepository(repository) {
+    if (!repository || syncState.busy || projectWorkBusy()) return;
+    syncState.busy = true; syncState.error = ''; invalidateSyncPreview(); renderSync();
+    try { setSyncStatus(await rpc('sync.connect', {repository}), true); syncState.repositories = syncState.repositories.length ? syncState.repositories : [{fullName:repository}]; }
+    catch (error) { syncState.error = error.message || t('저장소를 연결하지 못했습니다.'); }
+    finally { syncState.busy = false; renderSync(); }
+  }
+  async function saveSyncSelection() {
+    if (syncState.busy || projectWorkBusy()) return;
+    syncState.busy = true; syncState.error = ''; syncState.selectionTouched = true; invalidateSyncPreview(); renderSync();
+    try { setSyncStatus(await rpc('sync.selection', {keys:[...(syncState.selectedKeys || [])]})); }
+    catch (error) { syncState.error = error.message || t('업로드할 프로젝트를 저장하지 못했습니다.'); }
+    finally { syncState.busy = false; renderSync(); }
+  }
+  async function previewSync() {
+    if (syncBusy() || !syncState.status?.connected) return;
+    syncState.busy = true; syncState.error = ''; invalidateSyncPreview(); renderSync();
+    try { syncState.preview = await rpc('sync.preview', {keys:[...(syncState.selectedKeys || [])]}); }
+    catch (error) { syncState.error = error.message || t('동기화 미리보기를 만들지 못했습니다.'); }
+    finally { syncState.busy = false; renderSync(); }
+  }
+  async function applySync() {
+    const preview = syncState.preview;
+    if (!preview || syncBusy() || !confirm(t('미리보기의 원격 프로젝트와 선택한 프로젝트를 지금 동기화할까요?'))) return;
+    syncState.preview = null; syncState.busy = true; syncState.error = ''; renderSync();
+    try {
+      const result = await rpc('sync.apply', {token:preview.token}); setSyncStatus(result);
+      if (result?.projects || result?.workspace) render({...state, ...(result.projects ? {projects:result.projects} : {}), ...(result.workspace ? {workspace:result.workspace} : {})});
+      await loadSyncStatus();
+    } catch (error) { syncState.error = error.message || t('동기화하지 못했습니다. 미리보기를 다시 확인해 주세요.'); }
+    finally { syncState.busy = false; renderSync(); }
+  }
+  async function disconnectSync() {
+    if (syncBusy() || !confirm(t('GitHub 연결을 해제할까요? 저장소의 데이터는 삭제하지 않습니다.'))) return;
+    syncState.busy = true; syncState.error = ''; stopSyncPolling(true); invalidateSyncPreview(); renderSync();
+    try { setSyncStatus(await rpc('sync.disconnect'), true); syncState.repositories = []; }
+    catch (error) { syncState.error = error.message || t('GitHub 연결을 해제하지 못했습니다.'); }
+    finally { syncState.busy = false; renderSync(); }
+  }
   function selectSettingsTab(name) {
+    if (name !== 'sync') stopSyncPolling(true);
     document.querySelectorAll('[data-settings-tab]').forEach(button => {
       const selected = button.dataset.settingsTab === name;
       button.classList.toggle('active', selected);
@@ -1655,6 +1852,15 @@
       else button.removeAttribute('aria-current');
     });
     document.querySelectorAll('[data-settings-panel]').forEach(panel => panel.hidden = panel.dataset.settingsPanel !== name);
+    $('settings-dialog').scrollTop = 0;
+    const content = document.querySelector('.settings-content'); if (content) content.scrollTop = 0;
+    frame(() => {
+      const selected = document.querySelector('.settings-nav button.active'), nav = selected?.parentElement;
+      if (!$('settings-dialog').open || !selected || !nav) return;
+      const item = selected.getBoundingClientRect(), bounds = nav.getBoundingClientRect();
+      if (item.left < bounds.left) nav.scrollLeft -= bounds.left - item.left;
+      else if (item.right > bounds.right) nav.scrollLeft += item.right - bounds.right;
+    });
   }
   function setFilePanelOpen(open) {
     $('file-panel').hidden = !open;
@@ -1987,8 +2193,8 @@
   });
   let autocompleteTimer; $('prompt').addEventListener('input', () => { saveDraft(); sizeComposer(); clearTimeout(autocompleteTimer); hideAutocomplete(); if (/[@$]$/.test($('prompt').value.slice(0, $('prompt').selectionStart))) queryAutocomplete(); else autocompleteTimer = setTimeout(queryAutocomplete, 120); });
   $('prompt').addEventListener('focus', () => { if (following) frame(() => { if (following) scrollLatest(); }); });
-  $('composer').addEventListener('focusin', () => $('composer').classList.add('composer-expanded'));
-  $('composer').addEventListener('focusout', () => frame(() => { if (!$('composer').contains(document.activeElement)) $('composer').classList.remove('composer-expanded'); }));
+  $('composer').addEventListener('focusin', updateComposerExpansion);
+  $('composer').addEventListener('focusout', () => frame(updateComposerExpansion));
   $('composer').addEventListener('click', e => { if (! $('composer').classList.contains('composer-expanded') && e.target === $('composer')) $('prompt').focus(); });
   $('prompt').addEventListener('click', () => queryAutocomplete());
   $('chat-scroll').addEventListener('scroll', () => {
@@ -2037,9 +2243,18 @@
     const selected = tab.dataset.settingsTab; selectSettingsTab(selected);
     if (selected === 'personal' && !instructionsLoaded) loadInstructions();
     if (selected === 'account') loadUsage();
+    if (selected === 'sync') { loadSyncStatus().then(() => { if (syncState.status?.authenticated) return loadSyncRepositories(1); }); }
     if (selected === 'tools') refreshLinuxStatus();
     if (selected === 'updates') loadUpdates();
   }));
+  on('sync-refresh', async () => { await loadSyncStatus(); if (syncState.status?.authenticated) await loadSyncRepositories(1); });
+  on('sync-login', startSyncLogin);
+  on('sync-open-browser', () => { if (syncState.flow?.verificationUri) return call('ui.externalBrowser', {url:syncState.flow.verificationUri}); });
+  on('sync-cancel-login', () => { stopSyncPolling(true); syncState.error = ''; renderSync(); });
+  on('sync-copy-code', () => { if (syncState.flow?.userCode) return copyText(syncState.flow.userCode, $('sync-copy-code')); });
+  on('sync-more-repositories', () => loadSyncRepositories((syncState.page || 1) + 1));
+  on('sync-preview', previewSync); on('sync-apply', applySync); on('sync-disconnect', disconnectSync);
+  $('sync-repository').addEventListener('change', () => connectSyncRepository($('sync-repository').value));
   on('device-code', async () => { if (login) { await call('ui.copyCode', {code: login.userCode}); toast(t('코드를 복사했습니다.')); } });
   on('open-login', () => login && call('ui.loginBrowser', {url: login.verificationUrl}));
   $('login-dialog').addEventListener('close', () => { if (login?.loginId) call('auth.cancel', {loginId: login.loginId}).catch(() => {}); login = null; });
@@ -2067,6 +2282,8 @@
   $('chat-icons-toggle').checked = chatIconsEnabled; drawStatusIcons();
   on('instructions-reload', loadInstructions); on('instructions-save', saveInstructions);
   $('settings-dialog').addEventListener('cancel', event => { event.preventDefault(); dismiss('settings-dialog'); });
+  $('settings-dialog').addEventListener('close', () => stopSyncPolling(true));
+  window.addEventListener('beforeunload', () => stopSyncPolling(true));
   on('storage-access', () => call('ui.storageAccess')); on('theme', setTheme, 'change');
   on('devtools-check', checkDevtools);
   on('floating-chat', () => call('ui.floatingChat')); on('phone-settings', () => call('ui.phoneSettings')); on('phone-enable', enablePhone);
