@@ -26,3 +26,13 @@ Pull requests keep validation/build checks and never sign or publish releases.
 
 Published release versions remain immutable. Bump the version for a new release;
 do not replace an existing official APK to repair CI or UI changes.
+
+A push that only fixes Android test sources can reuse a completed main-branch
+UI/source checks job. The gate compares the Git blob identities of all checked
+inputs and the exact checks-job commands, and verifies that the original JS,
+Python and browser steps succeeded. PRs cannot reuse results. Android tests,
+Gradle build, lint, signing and release validation always run again. The small
+reuse gate and its regression tests run every time; their routing files and this
+CI document are excluded from the UI input fingerprint. A reused job cannot be
+used as evidence for another reuse: the original successful validation steps
+must still be present.

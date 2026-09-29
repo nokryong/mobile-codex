@@ -29,9 +29,7 @@ public class GitHubDeviceAuthTest {
     }
 
     private static JSONObject object(Object... values) {
-        JSONObject result = new JSONObject();
-        for (int index = 0; index < values.length; index += 2) result.put((String) values[index], values[index + 1]);
-        return result;
+        return dev.mobilecodex.app.core.Json.obj(values);
     }
 
     private static JSONObject startReply() {
