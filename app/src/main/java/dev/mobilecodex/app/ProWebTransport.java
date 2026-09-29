@@ -25,7 +25,7 @@ import java.nio.charset.StandardCharsets;
 /** Fail-closed transport for the official ChatGPT web UI. Remote content receives no Android JS bridge. */
 final class ProWebTransport {
     interface Done { void complete(JSONObject result, Exception error); }
-    static final int FEATURE_VERSION = 1;
+    static final int FEATURE_VERSION = 2;
     static final String PROJECT_NAME = "mobile-codex-chat";
 
     private final Activity activity;
@@ -112,6 +112,7 @@ final class ProWebTransport {
         if (expired()) { finish(status("web_changed", "ChatGPT 프로젝트를 확인하지 못했습니다.")); return; }
         if (!pageLoaded) { retry(() -> ensureProject(current, attempt + 1), attempt, 40, "login_required", "ChatGPT 로그인이 필요합니다."); return; }
         if (projectVerified) { openTarget(current); return; }
+        if (projectCreationStage == 1) { finishProjectCreation(current, attempt); return; }
         evaluate("inspectProject(" + JSONObject.quote(PROJECT_NAME) + ")", project -> {
             if (!live(current)) return;
             String state = project.optString("status");
@@ -132,20 +133,29 @@ final class ProWebTransport {
                 evaluate("startProjectCreation()", opened -> {
                     if (!live(current)) return;
                     if (!"creation_opened".equals(opened.optString("status"))) { finish(status(opened.optString("status", "unavailable"), reason(opened))); return; }
-                    projectCreationStage = 1; page.postDelayed(() -> ensureProject(current, attempt + 1), 350);
-                });
-                return;
-            }
-            if (("missing".equals(state) || "unavailable".equals(state)) && projectCreationStage == 1) {
-                evaluate("finishProjectCreation(" + JSONObject.quote(PROJECT_NAME) + ")", created -> {
-                    if (!live(current)) return;
-                    if (!"creation_submitted".equals(created.optString("status"))) { finish(status(created.optString("status", "web_changed"), reason(created))); return; }
-                    projectCreationStage = 2; page.postDelayed(() -> ensureProject(current, attempt + 1), 700);
+                    projectCreationStage = 1; page.postDelayed(() -> ensureProject(current, 0), 200);
                 });
                 return;
             }
             if (projectCreationStage == 2 && attempt < 40) { page.postDelayed(() -> ensureProject(current, attempt + 1), 500); return; }
             finish(status(state.isBlank() ? "web_changed" : state, reason(project)));
+        });
+    }
+
+    private void finishProjectCreation(long current, int attempt) {
+        if (!live(current) || clicked || projectCreationStage != 1) return;
+        evaluate("finishProjectCreation(" + JSONObject.quote(PROJECT_NAME) + ")", created -> {
+            if (!live(current) || projectCreationStage != 1) return;
+            String state = created.optString("status");
+            if ("waiting".equals(state) && attempt < 60 && !expired()) {
+                page.postDelayed(() -> finishProjectCreation(current, attempt + 1), 200); return;
+            }
+            if (!"creation_submitted".equals(state)) {
+                finish(status("web_changed", "waiting".equals(state)
+                    ? "프로젝트 생성창이 준비되지 않았습니다. 잠시 후 다시 시도해 주세요." : reason(created))); return;
+            }
+            projectCreationStage = 2;
+            page.postDelayed(() -> ensureProject(current, 0), 350);
         });
     }
 
@@ -171,6 +181,7 @@ final class ProWebTransport {
             String status = state.optString("status");
             if ("login_required".equals(status)) { finish(status("login_required", "ChatGPT 웹 로그인이 필요합니다.")); return; }
             if (!"available".equals(status)) { finish(status(status.isBlank() ? "web_changed" : status, reason(state))); return; }
+            if ("GPT-6 Pro".equals(state.optString("currentModel"))) { confirmModel(current, 0); return; }
             evaluate("openModelPicker()", opened -> page.postDelayed(() -> chooseModel(current), 250));
         });
     }
@@ -296,7 +307,15 @@ final class ProWebTransport {
     }
     private boolean live(long current) { return !destroyed && pending != null && generation == current; }
     private boolean expired() { return SystemClock.elapsedRealtime() > deadline; }
-    private static String reason(JSONObject value) { String reason = value.optString("reason"); return reason.isBlank() ? "ChatGPT 웹 화면이 변경되었습니다." : reason; }
+    private static String reason(JSONObject value) {
+        String reason = value.optString("reason");
+        return switch (reason) {
+            case "project_dialog_ambiguous" -> "프로젝트 생성창이 여러 개 열려 있습니다. ChatGPT 화면을 확인해 주세요.";
+            case "project_name_input_ambiguous" -> "프로젝트 이름 입력란을 구분하지 못했습니다. ChatGPT 화면을 확인해 주세요.";
+            case "project_create_button_ambiguous" -> "프로젝트 만들기 버튼을 구분하지 못했습니다. ChatGPT 화면을 확인해 주세요.";
+            default -> reason.isBlank() ? "ChatGPT 웹 화면이 변경되었습니다." : reason;
+        };
+    }
     private JSONObject status(String value, String reason) {
         JSONObject result = new JSONObject();
         try { result.put("status", value).put("operationId", operationId).put("reason", reason).put("clicked", clicked)

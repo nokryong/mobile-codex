@@ -50,13 +50,45 @@ test('expands the project section before deciding that the project is missing', 
 });
 
 test('creates the dedicated project only through an exact dialog', () => {
-  const {w,adapter}=setup('<button id="new">New project</button><dialog open role="dialog"><input type="text"><button id="create">Create project</button></dialog>');
-  let openedProject=false,created=false;w.document.getElementById('new').addEventListener('click',()=>openedProject=true);
+  const {w,adapter}=setup('<button id="new">New project</button><dialog open hidden role="dialog"><h2>Create project</h2><input type="text"><button id="create">Create project</button></dialog>');
+  let openedProject=false,created=false;w.document.getElementById('new').addEventListener('click',()=>{openedProject=true;w.document.querySelector('dialog').hidden=false;});
   w.document.getElementById('create').addEventListener('click',()=>created=true);
   assert.equal(adapter.inspectProject('mobile-codex-chat').status,'missing');
   assert.equal(adapter.startProjectCreation().status,'creation_opened');assert.equal(openedProject,true);
   assert.equal(adapter.finishProjectCreation('mobile-codex-chat').status,'creation_submitted');
   assert.equal(w.document.querySelector('input').value,'mobile-codex-chat');assert.equal(created,true);
+});
+
+test('ignores the mobile sidebar dialog while filling the project creation dialog', () => {
+  const {w,adapter}=setup('<div role="dialog" aria-label="사이드바"><h2>사이드바</h2><button>새 프로젝트</button></div>'+
+    '<dialog open aria-labelledby="project-title"><h2 id="project-title">프로젝트 만들기</h2><input type="text"><button id="create">프로젝트 만들기</button></dialog>');
+  let submitted=0;w.document.getElementById('create').addEventListener('click',()=>submitted++);
+  assert.equal(adapter.finishProjectCreation('mobile-codex-chat').status,'creation_submitted');
+  assert.equal(w.document.querySelector('input').value,'mobile-codex-chat');assert.equal(submitted,1);
+});
+
+test('waits for project dialog rendering and React button enablement without duplicate create clicks', async () => {
+  const {w,adapter}=setup('<div role="dialog" aria-label="사이드바"><h2>사이드바</h2></div>');
+  assert.equal(adapter.finishProjectCreation('mobile-codex-chat').status,'waiting');
+  w.document.body.insertAdjacentHTML('beforeend','<dialog open><h2>Create project</h2><input type="text"><button id="create" disabled>Create project</button></dialog>');
+  const input=w.document.querySelector('input'),button=w.document.getElementById('create');let submitted=0,changed=0;
+  input.addEventListener('input',()=>{changed++;w.setTimeout(()=>{button.disabled=false;},0);});
+  button.addEventListener('click',()=>submitted++);
+  assert.equal(adapter.finishProjectCreation('mobile-codex-chat').status,'waiting');
+  assert.equal(submitted,0);
+  await new Promise(resolve=>w.setTimeout(resolve,5));
+  assert.equal(adapter.finishProjectCreation('mobile-codex-chat').status,'creation_submitted');
+  assert.equal(adapter.finishProjectCreation('mobile-codex-chat').status,'creation_submitted');
+  assert.equal(changed,1);assert.equal(submitted,1);
+});
+
+test('does not fill unrelated forms or choose between two real project dialogs', () => {
+  let {w,adapter}=setup('<dialog open><h2>Rename conversation</h2><input type="text"><button>Create</button></dialog>');
+  assert.equal(adapter.finishProjectCreation('mobile-codex-chat').status,'waiting');
+  assert.equal(w.document.querySelector('input').value,'');
+  ({w,adapter}=setup('<dialog open><h2>Create project</h2><input type="text"><button>Create project</button></dialog>'.repeat(2)));
+  assert.equal(adapter.finishProjectCreation('mobile-codex-chat').reason,'project_dialog_ambiguous');
+  assert.ok([...w.document.querySelectorAll('input')].every(input=>input.value===''));
 });
 
 test('observes the current conversation id and never needs a credential or API fetch', () => {

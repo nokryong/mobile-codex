@@ -1,7 +1,7 @@
 /* Isolated adapter for the official ChatGPT page. It never reads cookies, tokens, or storage. */
 (function (root) {
   'use strict';
-  if (root.MCProWeb?.version === 1) return;
+  if (root.MCProWeb?.version === 2) return;
   const d = root.document;
   const normalize = value => String(value || '').normalize('NFKC').replace(/\s+/g, ' ').trim();
   const exactPro = value => /^(?:GPT[ -]?6[ -]?Pro|6[ -]?Pro)$/i.test(normalize(value).replace(/^(?:model|모델)\s*:?\s*/i, ''));
@@ -10,11 +10,9 @@
     const style = root.getComputedStyle(element), box = element.getBoundingClientRect();
     return style.display !== 'none' && style.visibility !== 'hidden' && box.width > 0 && box.height > 0;
   };
-  const label = element => normalize([
-    element?.getAttribute?.('aria-label'),
-    (element?.getAttribute?.('aria-labelledby') || '').split(/\s+/).map(id => d.getElementById(id)?.textContent || '').join(' '),
-    element?.textContent
-  ].join(' '));
+  const label = element => normalize(element?.getAttribute?.('aria-label'))
+    || normalize((element?.getAttribute?.('aria-labelledby') || '').split(/\s+/).map(id => d.getElementById(id)?.textContent || '').join(' '))
+    || normalize(element?.textContent);
   const prompt = () => d.querySelector('#prompt-textarea,[data-testid="prompt-textarea"],textarea[placeholder]');
   const modelTriggers = () => {
     const composer = prompt()?.closest('form') || prompt()?.parentElement;
@@ -75,25 +73,54 @@
     matches[0].element.click(); return {status:'opened', projectPath:matches[0].path};
   }
   function startProjectCreation() {
+    const existing = projectCreationForm();
+    if (existing.dialog) return {status:'creation_opened'};
+    if (existing.status === 'web_changed') return {status:existing.status, reason:existing.reason};
     const controls = [...d.querySelectorAll('button,[role="button"]')].filter(element => visible(element)
       && /^(?:New project|새 프로젝트)$/i.test(label(element)));
     if (controls.length !== 1) return {status:'unavailable', reason:'new_project_unavailable'};
     controls[0].click(); return {status:'creation_opened'};
   }
-  function finishProjectCreation(name) {
-    const dialogs = [...d.querySelectorAll('[role="dialog"],dialog')].filter(visible);
+  const dialogSelector = '[role="dialog"],dialog';
+  const projectTitle = value => /^(?:New project|Create (?:a )?project|새 프로젝트|프로젝트 만들기)$/i.test(normalize(value));
+  const createLabel = value => /^(?:Create project|Create|프로젝트 만들기|만들기)$/i.test(normalize(value));
+  const submittedProjects = new WeakMap();
+  const owned = (dialog, selector) => [...dialog.querySelectorAll(selector)].filter(element => element.closest(dialogSelector) === dialog && visible(element));
+  function projectCreationForm() {
+    const dialogs = [...d.querySelectorAll(dialogSelector)].filter(dialog => visible(dialog) && (
+      projectTitle(dialog.getAttribute('aria-label'))
+      || (dialog.getAttribute('aria-labelledby') || '').split(/\s+/).some(id => projectTitle(d.getElementById(id)?.textContent))
+      || owned(dialog, 'h1,h2,h3,[role="heading"]').some(heading => projectTitle(heading.textContent))));
+    if (!dialogs.length) return {status:'waiting', reason:'project_dialog_pending'};
     if (dialogs.length !== 1) return {status:'web_changed', reason:'project_dialog_ambiguous'};
     const dialog = dialogs[0];
-    const fields = [...dialog.querySelectorAll('input:not([type]),input[type="text"]')].filter(element => visible(element) && !element.disabled);
+    const fields = owned(dialog, 'input:not([type]),input[type="text"]').filter(element => !element.disabled);
+    if (!fields.length) return {status:'waiting', reason:'project_name_input_pending'};
     if (fields.length !== 1) return {status:'web_changed', reason:'project_name_input_ambiguous'};
-    const field = fields[0], setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(field), 'value')?.set;
-    if (setter) setter.call(field, name); else field.value = name;
-    field.dispatchEvent(new InputEvent('input', {bubbles:true, inputType:'insertText', data:name}));
-    field.dispatchEvent(new Event('change', {bubbles:true}));
-    const create = [...dialog.querySelectorAll('button,[role="button"]')].filter(element => visible(element) && !element.disabled
-      && /^(?:Create project|Create|프로젝트 만들기|만들기)$/i.test(label(element)));
+    const create = owned(dialog, 'button,[role="button"]').filter(element => createLabel(label(element)));
+    if (!create.length) return {status:'waiting', reason:'project_create_button_pending'};
     if (create.length !== 1) return {status:'web_changed', reason:'project_create_button_ambiguous'};
-    create[0].click(); return {status:'creation_submitted'};
+    return {status:'ready', dialog, field:fields[0], button:create[0]};
+  }
+  function inspectProjectCreation() {
+    const {status, reason} = projectCreationForm();
+    return reason ? {status, reason} : {status};
+  }
+  function finishProjectCreation(name) {
+    const form = projectCreationForm();
+    if (form.status !== 'ready') return {status:form.status, reason:form.reason};
+    const {dialog, field, button} = form;
+    if (submittedProjects.get(dialog) === name) return {status:'creation_submitted'};
+    if (field.value !== name) {
+      const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(field), 'value')?.set;
+      if (setter) setter.call(field, name); else field.value = name;
+      field.dispatchEvent(new InputEvent('input', {bubbles:true, inputType:'insertText', data:name}));
+      field.dispatchEvent(new Event('change', {bubbles:true}));
+    }
+    if (field.value !== name || button.disabled || button.getAttribute('aria-disabled') === 'true')
+      return {status:'waiting', reason:'project_create_button_pending'};
+    submittedProjects.set(dialog, name);
+    button.click(); return {status:'creation_submitted'};
   }
   function inspect() {
     if (loginVisible()) return {status:'login_required', host:location.host, pathKind:'login'};
@@ -180,7 +207,7 @@
     if (button && visible(button)) { button.click(); return {status:'stop_requested'}; }
     return {status:'not_running'};
   }
-  root.MCProWeb = {version:1, inspectProject, openProject, startProjectCreation, finishProjectCreation,
+  root.MCProWeb = {version:2, inspectProject, openProject, startProjectCreation, finishProjectCreation, inspectProjectCreation,
     inspect, openModelPicker, choosePro, confirmPro, requestFiles, insert, clickSend, observe, stop, exactPro, projectPath, conversationLocation};
   if (typeof module !== 'undefined' && module.exports) module.exports = root.MCProWeb;
 })(typeof window === 'undefined' ? globalThis : window);
