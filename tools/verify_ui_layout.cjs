@@ -261,9 +261,21 @@ async function checkSidebar(page,width) {
  await page.screenshot({path:path.join(output,`sidebar-open-${width}.png`)});
  if(width===320) {
   await page.locator('#settings').click();await page.locator('#settings-dialog').waitFor({state:'visible'});
-  const settings=await page.locator('[data-settings-tab]').evaluateAll(items=>items.map(el=>el.getBoundingClientRect().toJSON()));
-  assert.equal(settings.length,6,'all settings tabs exist at 320px');
-  assert.ok(settings.every(box=>box.width>0&&box.right<=320+1),'settings tab is clipped at 320px');
+  const names=['general','personal','account','sync','tools','advanced','updates'];
+  assert.deepEqual(await page.locator('[data-settings-tab]').evaluateAll(items=>items.map(el=>el.dataset.settingsTab)),names,'all seven settings tabs exist at 320px');
+  for(const name of names) {
+   const tab=page.locator(`[data-settings-tab="${name}"]`);
+   await tab.click();
+   await page.waitForFunction(name=>{
+    const tab=document.querySelector(`[data-settings-tab="${name}"]`),nav=tab.closest('nav');
+    const box=tab.getBoundingClientRect(),viewport=nav.getBoundingClientRect();
+    return tab.classList.contains('active') && box.left>=viewport.left-1 && box.right<=viewport.right+1;
+   },name);
+   assert.equal(await page.locator(`[data-settings-panel="${name}"]`).isVisible(),true,`${name} settings panel is reachable at 320px`);
+   const size=await tab.boundingBox();
+   assert.ok(size.width>=43.5&&size.height>=43.5,`${name} settings tab keeps its touch target`);
+  }
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'settings navigation does not overflow the document');
   await closeDialog(page,'settings-dialog');
   await closeSidebar(page);
  }
