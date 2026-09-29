@@ -52,6 +52,19 @@ public class ProjectIdentityIntegrationTest {
             obj("id", "thread-b", "title", "B chat", "workspaceKey", "b", "messages", array())).toString();
         Utf8Files.write(new File(context.getFilesDir(), "sessions.json").toPath(), sessions);
         engine = new Engine(context);
+        String migratedSessions = Utf8Files.read(new File(context.getFilesDir(), "sessions.json").toPath());
+        JSONArray migrated = new JSONArray(migratedSessions);
+        assertEquals(2, migrated.length());
+        for (int i = 0; i < migrated.length(); i++) {
+            JSONObject value = migrated.getJSONObject(i);
+            String suffix = i == 0 ? "a" : "b";
+            assertEquals("thread-" + suffix, value.getString("id"));
+            assertEquals(i == 0 ? "A chat" : "B chat", value.getString("title"));
+            assertEquals(suffix, value.getString("workspaceKey"));
+            assertEquals(0, value.getJSONArray("messages").length());
+            assertEquals("thread-" + suffix, value.getString("codexThreadId"));
+            assertEquals(2, value.getInt("sessionVersion"));
+        }
         engine.setTestTransport((method, params) -> { throw new AssertionError("Unexpected Codex RPC: " + method); });
         assertEquals(legacy, context.getSharedPreferences("projects", 0).getString("registry-before-identities-v1", ""));
         call("chat.resume", obj("id", "thread-a"));
@@ -61,7 +74,7 @@ public class ProjectIdentityIntegrationTest {
         assertEquals("a", snapshot.getJSONObject("workspace").getString("key"));
         assertEquals("B", snapshot.getJSONObject("workspace").getString("name"));
         assertEquals(1, snapshot.getJSONArray("projects").length());
-        assertEquals(sessions, Utf8Files.read(new File(context.getFilesDir(), "sessions.json").toPath()));
+        assertEquals(migratedSessions, Utf8Files.read(new File(context.getFilesDir(), "sessions.json").toPath()));
         assertEquals("unchanged source", Utf8Files.read(source.toPath()));
         String projectId = snapshot.getJSONObject("workspace").getString("projectId");
         engine.io.shutdownNow(); engine = new Engine(context);
@@ -69,6 +82,7 @@ public class ProjectIdentityIntegrationTest {
         assertEquals("b", snapshot.getJSONObject("workspace").getString("key"));
         assertEquals(projectId, snapshot.getJSONObject("workspace").getString("projectId"));
         assertEquals(2, snapshot.getJSONArray("sessions").length());
+        assertEquals(migratedSessions, Utf8Files.read(new File(context.getFilesDir(), "sessions.json").toPath()));
         assertEquals(legacy, context.getSharedPreferences("projects", 0).getString("registry-before-identities-v1", ""));
     }
     @Test public void unboundProjectIsPersistentAndCannotStartCodex() throws Exception {

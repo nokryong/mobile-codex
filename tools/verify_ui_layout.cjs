@@ -185,10 +185,24 @@ async function checkCompactComposer(page) {
  assert.ok(draftHeight.scroll<=draftHeight.client+1,'Compact draft wraps behind the composer edge');
 }
 async function ensureSidebarOpen(page) {
- const visible=await page.locator('#sidebar').evaluate(el=>{
-  const box=el.getBoundingClientRect();return box.right>0&&box.left<innerWidth&&!el.inert;
- });
- if(!visible) { await page.locator('.topbar .sidebar-toggle').click();await page.waitForTimeout(180); }
+ const ready=async open=>page.waitForFunction(open=>{
+  const side=document.getElementById('sidebar'),box=side.getBoundingClientRect(),mobile=matchMedia('(max-width:760px)').matches;
+  return open ? (mobile ? document.body.classList.contains('sidebar-open')&&!side.inert&&box.left>=-.5&&box.right>0 : box.right>0)
+    : (mobile ? !document.body.classList.contains('sidebar-open')&&side.inert&&box.right<=.5 : box.right<=.5);
+ },open);
+ const open=await page.locator('#sidebar').evaluate(el=>matchMedia('(max-width:760px)').matches?document.body.classList.contains('sidebar-open')&&!el.inert:el.getBoundingClientRect().right>0);
+ if(!open) { await ready(false);await page.locator('.topbar .sidebar-toggle').click(); }
+ await ready(true);
+}
+async function closeSidebar(page) {
+ const mobile=await page.evaluate(()=>matchMedia('(max-width:760px)').matches);
+ if(!mobile) return;
+ if(await page.evaluate(()=>document.body.classList.contains('sidebar-open'))) await page.locator('#sidebar .sidebar-toggle').click();
+ await page.waitForFunction(()=>{const side=document.getElementById('sidebar'),box=side.getBoundingClientRect();return !document.body.classList.contains('sidebar-open')&&side.inert&&box.right<=.5;});
+}
+async function closeDialog(page, id) {
+ await page.locator(`#${id} .dialog-head > button[data-close]:visible`).click();
+ await page.locator('#' + id).waitFor({state:'hidden'});
 }
 async function checkFixedSidebar(page,width,height) {
  await page.evaluate(()=>{
@@ -219,21 +233,21 @@ async function checkFixedSidebar(page,width,height) {
  for(const [index,control] of after.controls.entries()) {
   assert.ok(control.width>=43.5&&control.height>=43.5,`Sidebar footer control ${index} loses its 44px target at ${width}×${height}`);
   assert.ok(control.top>=after.bottom.top-1&&control.bottom<=after.bottom.bottom+1,`Sidebar footer control ${index} leaves its fixed area at ${width}×${height}`);
-  assert.ok(control.left>=0&&control.right<=width+1&&control.top>=0&&control.bottom<=height+1,`Sidebar footer control ${index} is unreachable at ${width}×${height}`);
+  assert.ok(control.left>=0&&control.right<=width+1&&control.top>=0&&control.bottom<=height+1,`Sidebar footer control ${index} is unreachable at ${width}×${height}: ${JSON.stringify(control)}`);
  }
  await page.locator('#show-tools').click();await page.locator('#tool-menu-dialog').waitFor({state:'visible'});
- await page.locator('#tool-menu-dialog [data-close]').first().click();await page.locator('#tool-menu-dialog').waitFor({state:'hidden'});
+ await closeDialog(page,'tool-menu-dialog');
  await ensureSidebarOpen(page);
  await page.locator('#settings').click();await page.locator('#settings-dialog').waitFor({state:'visible'});
- await page.locator('#settings-dialog [data-close]').first().click();await page.locator('#settings-dialog').waitFor({state:'hidden'});
+ await closeDialog(page,'settings-dialog');
  await ensureSidebarOpen(page);
  await page.locator('#account-button').click();await page.locator('#settings-dialog').waitFor({state:'visible'});
  assert.equal(await page.locator('[data-settings-tab="account"]').evaluate(el=>el.classList.contains('active')),true,'Account action must remain reachable from the sidebar footer');
- await page.locator('#settings-dialog [data-close]').first().click();await page.locator('#settings-dialog').waitFor({state:'hidden'});
+ await closeDialog(page,'settings-dialog');
  return {before,after};
 }
 async function checkSidebar(page,width) {
- await page.locator('.topbar .sidebar-toggle').click();await page.waitForTimeout(180);
+ await ensureSidebarOpen(page);
  const values=await page.evaluate(()=>{
   const sidebar=document.querySelector('.sidebar-scroll').getBoundingClientRect();
   const project=document.querySelector('.project-more').getBoundingClientRect();
@@ -250,14 +264,14 @@ async function checkSidebar(page,width) {
   const settings=await page.locator('[data-settings-tab]').evaluateAll(items=>items.map(el=>el.getBoundingClientRect().toJSON()));
   assert.equal(settings.length,6,'all settings tabs exist at 320px');
   assert.ok(settings.every(box=>box.width>0&&box.right<=320+1),'settings tab is clipped at 320px');
-  await page.locator('#settings-dialog [data-close="settings-dialog"]').last().click();
-  if(await page.evaluate(()=>document.body.classList.contains('sidebar-open'))) { await page.locator('#sidebar .sidebar-toggle').click();await page.waitForTimeout(180); }
+  await closeDialog(page,'settings-dialog');
+  await closeSidebar(page);
  }
- if(width!==320 && await page.evaluate(()=>document.body.classList.contains('sidebar-open'))) { await page.locator('#sidebar .sidebar-toggle').click();await page.waitForTimeout(180); }
+ if(width!==320) await closeSidebar(page);
  return values;
 }
 async function checkModeSwitch(page,width,theme) {
- await page.locator('.topbar .sidebar-toggle').click();
+ await ensureSidebarOpen(page);
  const toggle=await page.locator('#sidebar .mode-switch').boundingBox();
  const logo=await page.locator('#sidebar .brand').boundingBox();
  assert.ok(toggle.x>=logo.x+logo.width,'Mode switch is beside the logo');
@@ -283,7 +297,7 @@ async function checkModeSwitch(page,width,theme) {
  assert.equal(await page.locator('body').evaluate(el=>el.classList.contains('chat-mode')),false);
 }
 async function checkLinuxSettings(page,width,theme,language) {
- await page.locator('.topbar .sidebar-toggle').click();
+ await ensureSidebarOpen(page);
  await page.locator('#settings').click();
  await page.locator('[data-settings-tab="tools"]').click();
  const card=page.locator('#linux-environment-card');
@@ -301,8 +315,8 @@ async function checkLinuxSettings(page,width,theme,language) {
  await page.locator('#linux-enabled').scrollIntoViewIfNeeded();
  assert.equal(await page.locator('#linux-enabled').isChecked(),false,'Finishing installation must not enable Linux automatically');
  await page.screenshot({path:path.join(output,`linux-settings-${width}-${theme}-${language}.png`)});
- await page.locator('#settings-dialog [data-close="settings-dialog"]').last().click();
- if(await page.evaluate(()=>document.body.classList.contains('sidebar-open'))) await page.locator('#sidebar .sidebar-toggle').click();
+ await closeDialog(page,'settings-dialog');
+ await closeSidebar(page);
 }
 (async()=>{
  const browser=await chromium.launch({headless:true,executablePath:process.env.MOBILE_CODEX_BROWSER_EXECUTABLE||undefined,args:['--no-sandbox','--disable-dev-shm-usage']});
@@ -330,7 +344,7 @@ async function checkLinuxSettings(page,width,theme,language) {
    if(width<=393)await checkLinuxSettings(page,width,theme,language);
    if(width===393){
     // Exercise the actual user path into Settings, then drag its handle.
-    await page.locator('.topbar .sidebar-toggle').click();await page.locator('#settings').click();
+    await ensureSidebarOpen(page);await page.locator('#settings').click();
     await page.locator('#settings-dialog').waitFor({state:'visible'});await page.waitForTimeout(220);
     const sheet=await page.locator('#settings-dialog').boundingBox();assert.ok(sheet.y>=0&&sheet.y+sheet.height<=height+1,'Sheet clipped');
     await page.screenshot({path:path.join(output,`settings-${theme}-${language}.png`)});

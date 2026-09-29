@@ -35,9 +35,15 @@ public class RecoveryRestoreTest {
         public String getType(Uri u){return "text/plain";}public Uri insert(Uri u,ContentValues v){throw new UnsupportedOperationException();}public int delete(Uri u,String s,String[] a){throw new UnsupportedOperationException();}public int update(Uri u,ContentValues v,String s,String[] a){throw new UnsupportedOperationException();}
     }
     @Before public void setup()throws Exception{
-        Context context=RuntimeEnvironment.getApplication();file=new File(context.getCacheDir(),"a.txt");writeText(file.toPath(),"before");
-        Provider provider=new Provider();provider.file=file;android.content.pm.ProviderInfo info=new android.content.pm.ProviderInfo();info.authority="test.documents";provider.attachInfo(context,info);ShadowContentResolver.registerProviderInternal("test.documents",provider);
-        store=new DocumentStore(context);java.lang.reflect.Field field=DocumentStore.class.getDeclaredField("tree");field.setAccessible(true);field.set(store,Uri.parse("content://test.documents/tree/root"));
+        Context context=RuntimeEnvironment.getApplication();
+        context.getSharedPreferences("projects",0).edit().clear().commit();
+        context.getSharedPreferences("workspace",0).edit().clear().commit();
+        file=new File(context.getCacheDir(),"a.txt");writeText(file.toPath(),"before");
+        Provider provider=new Provider();provider.file=file;android.content.pm.ProviderInfo info=new android.content.pm.ProviderInfo();info.authority="test.documents";info.grantUriPermissions=true;provider.attachInfo(context,info);ShadowContentResolver.registerProviderInternal("test.documents",provider);
+        Uri tree=Uri.parse("content://test.documents/tree/root");
+        context.getContentResolver().takePersistableUriPermission(tree,Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+        store=new DocumentStore(context);
+        store.select(tree,"recovery-project");
     }
     private String edit()throws Exception{JSONObject read=store.read("a.txt");return store.commit(store.prepare("mobile_write",obj("path","a.txt","content","after","expectedSha256",read.getString("sha256")))).getString("recoveryId");}
     @Test public void providerWriteCanBePreviewedRestoredAndBackedUpAgain()throws Exception{

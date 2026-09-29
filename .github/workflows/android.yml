@@ -71,7 +71,7 @@ jobs:
       - name: Build and check Android app
         id: android
         if: ${{ !cancelled() && !inputs.apk_only && steps.runtime.conclusion == 'success' }}
-        run: ./gradlew --no-daemon assembleDebug testDebugUnitTest lintDebug assembleDebugAndroidTest
+        run: ./gradlew --no-daemon --continue assembleDebug testDebugUnitTest lintDebug assembleDebugAndroidTest
       - name: Verify Android and desktop project transfer interoperability
         if: ${{ !cancelled() && !inputs.apk_only && steps.android.conclusion == 'success' }}
         run: |

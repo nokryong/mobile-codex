@@ -59,7 +59,29 @@ fs.mkdirSync(output, {recursive:true});
    });
    await page.goto('https://appassets.androidplatform.net/index.html');
    await page.waitForFunction(() => document.querySelectorAll('.project-more').length===2);
-   const openSidebar = async () => { if(width < 761 && !await page.locator('body').evaluate(e => e.classList.contains('sidebar-open'))) await page.locator('.topbar .sidebar-toggle').click(); };
+   const waitSidebarRestored = async (focusAdd=false) => {
+    if (width >= 761) return;
+    await page.waitForFunction(focusAdd => document.body.classList.contains('sidebar-open') && !document.getElementById('sidebar').inert && (!focusAdd || document.activeElement?.id === 'add-project'),focusAdd);
+   };
+   const waitProjectLinkClose = async (focusAdd=false) => {
+    await page.waitForFunction(() => !document.getElementById('project-link-dialog').open);
+    await waitSidebarRestored(focusAdd);
+   };
+   const openSidebar = async () => {
+    if (width >= 761) return;
+    await page.waitForFunction(() => !document.querySelector('dialog[open]'));
+    const open = await page.evaluate(() => { const side=document.getElementById('sidebar'); return document.body.classList.contains('sidebar-open') && !side.inert; });
+    if (!open) {
+     await page.waitForFunction(() => { const side=document.getElementById('sidebar'),box=side.getBoundingClientRect(); return !document.body.classList.contains('sidebar-open') && side.inert && box.right <= .5; });
+     await page.locator('.topbar .sidebar-toggle').click();
+    }
+    await page.waitForFunction(() => { const side=document.getElementById('sidebar'),box=side.getBoundingClientRect(); return document.body.classList.contains('sidebar-open') && !side.inert && box.left >= -.5 && box.right > 0; });
+   };
+   const closeSidebar = async () => {
+    if (width >= 761) return;
+    if (await page.evaluate(() => document.body.classList.contains('sidebar-open'))) await page.locator('#sidebar .sidebar-toggle').click();
+    await page.waitForFunction(() => { const side=document.getElementById('sidebar'),box=side.getBoundingClientRect(); return !document.body.classList.contains('sidebar-open') && side.inert && box.right <= .5; });
+   };
    const geometry = async () => {
     await page.locator('#project-link-dialog').evaluate(e => Promise.all(e.getAnimations({subtree:true}).map(a => a.finished)));
     const value = await page.evaluate(() => {
@@ -83,12 +105,13 @@ fs.mkdirSync(output, {recursive:true});
    page.once('dialog', dialog => dialog.accept());
    await page.locator('#project-link-choices button').click();
    await page.waitForFunction(() => document.querySelectorAll('.project-tree').length===1 && !document.getElementById('project-link-dialog').open);
+   await waitProjectLinkClose();
    assert.equal(await page.locator('#projects .session').count(),2);
    await openSidebar(); await page.locator('.project-more').click();
    await page.locator('#project-actions').getByRole('button',{name:'Default local folder',exact:true}).click();
    await geometry(); await page.screenshot({path:path.join(output,`bindings-${width}.png`)});
    await page.locator('#project-link-choices button').first().click();
-   await page.waitForFunction(() => !document.getElementById('project-link-dialog').open);
+   await waitProjectLinkClose();
    await page.evaluate(() => window.mobileCodexEvent('state',{...window.testState,workspace:{key:'empty',selected:true,name:'No folder',available:false},projects:[{key:'empty',name:'No folder',projectId:'empty-id',available:false,hasLocalFolder:false}],sessions:[]}));
    await openSidebar();
    assert.ok(await page.getByRole('button',{name:'Link local folder',exact:true}).isVisible());
@@ -101,7 +124,7 @@ fs.mkdirSync(output, {recursive:true});
    assert.equal(await page.locator('.detached-projects').count(),0);
    assert.equal(await page.locator('#projects .project-tree').count(),0);
    assert.equal(await page.locator('#sessions .session').count(),1);
-   if(width<761)await page.locator('#sidebar .sidebar-toggle').click();
+   await closeSidebar();
    await page.locator('#files-toggle').click();
    await page.waitForFunction(() => window.testCalls.some(call => call.action==='files.list'));
    await page.screenshot({path:path.join(output,`general-codex-${width}.png`)});
@@ -111,21 +134,21 @@ fs.mkdirSync(output, {recursive:true});
    await page.getByRole('button',{name:'Create project without a folder',exact:true}).click();
    await page.waitForFunction(() => document.getElementById('input-dialog').open && document.activeElement?.id==='input-value');
    await page.locator('#input-value').fill('Metadata only');
-   await page.keyboard.press('Escape');
+   await page.keyboard.press('Escape');await page.waitForFunction(() => !document.getElementById('input-dialog').open);
    assert.equal(await page.evaluate(() => window.testCalls.some(c => c.action==='projects.create')),false);
    await openSidebar(); await page.locator('#add-project').click(); await page.getByRole('button',{name:'Import projects',exact:true}).click();
    await page.locator('#project-link-choices button').filter({has:page.getByText('Import',{exact:true})}).waitFor();
    await geometry(); await page.screenshot({path:path.join(output,`import-preview-${width}.png`)});
-   await page.keyboard.press('Escape');
+   await page.keyboard.press('Escape');await waitProjectLinkClose(true);
    assert.equal(await page.evaluate(() => window.testCalls.some(c => c.action==='projects.import.apply')),false);
    await openSidebar(); await page.locator('#add-project').click(); await page.getByRole('button',{name:'Import projects',exact:true}).click();
    await page.locator('#project-link-choices button').filter({has:page.getByText('Import',{exact:true})}).click();
-   await page.waitForFunction(() => !document.getElementById('project-link-dialog').open);
+   await waitProjectLinkClose();
    await openSidebar(); assert.ok(await page.locator('.project-new').isDisabled());
    await page.getByRole('button',{name:'Resolve name conflict',exact:true}).click();
    await geometry(); await page.screenshot({path:path.join(output,`name-conflict-${width}.png`)});
    await page.locator('#project-link-choices button').first().click();
-   await page.waitForFunction(() => !document.getElementById('project-link-dialog').open);
+   await waitProjectLinkClose();
    await openSidebar(); await page.locator('.project-more').click();
    page.once('dialog',dialog=>dialog.accept()); await page.getByRole('button',{name:'Export project',exact:true}).click();
    await page.waitForFunction(() => window.testCalls.some(c => c.action==='ui.projects.exportFile'));
