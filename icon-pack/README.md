@@ -28,6 +28,3 @@ character-packs/
    ├─ mapping.json
    └─ 01-idle.png ... 32-sleep.png
 ```
-
-이미지의 한글 문구까지 이미지 모델로 생성했습니다.
-
