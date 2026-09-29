@@ -114,13 +114,36 @@ async function checkLazyHistory(browser,width=393,height=852,theme='light',langu
   if(keyboard) await page.evaluate(()=>window.mobileCodexEvent('viewport',{keyboardVisible:true}));
   assert.equal(await page.locator('#messages article').count(),40);
   assert.equal(await page.evaluate(()=>fixtureCalls.filter(call=>call.action==='chat.history').length),0);
+  // Deterministically exercise a queued layout callback after newer upward navigation.
+  // Both real viewport changes and focus must recheck follow mode at callback time.
+  const deferred=await page.evaluate(keyboard=>{
+   const area=document.getElementById('chat-scroll'), original=window.requestAnimationFrame, results=[];
+   try {
+    for(const trigger of ['viewport','focus']) {
+     area.scrollTop=area.scrollHeight;area.dispatchEvent(new Event('scroll'));
+     const queued=[];window.requestAnimationFrame=callback=>queued.push(callback);
+     if(trigger==='viewport')window.mobileCodexEvent('viewport',{keyboardVisible:keyboard});
+     else document.getElementById('prompt').dispatchEvent(new Event('focus'));
+     area.scrollTop=300;area.dispatchEvent(new Event('scroll'));
+     const before=area.scrollTop;
+     for(const callback of queued)callback(performance.now());
+     results.push({trigger,before,after:area.scrollTop,callbacks:queued.length});
+    }
+   } finally {window.requestAnimationFrame=original;}
+   area.scrollTop=area.scrollHeight;area.dispatchEvent(new Event('scroll'));
+   return results;
+  },keyboard);
+  for(const result of deferred) {
+   assert.ok(result.callbacks>0,result.trigger+' queued a layout callback');
+   assert.equal(result.after,result.before,`${result.trigger} callback must preserve upward navigation at ${width}×${height}`);
+  }
   await page.evaluate(()=>{
    const area=document.getElementById('chat-scroll');area.style.scrollBehavior='auto';area.scrollTop=100;
    window.fixtureAnchor={id:'history-81',top:document.querySelector('[data-id="history-81"]').getBoundingClientRect().top};
   });
   await page.waitForFunction(()=>document.querySelectorAll('#messages article').length===80);
   const delta=await page.evaluate(()=>document.querySelector('[data-id="'+fixtureAnchor.id+'"]').getBoundingClientRect().top-fixtureAnchor.top);
-  assert.ok(Math.abs(delta)<2,'Prepending older messages preserves the exact visible position: '+delta);
+  assert.ok(Math.abs(delta)<2,`Prepending older messages preserves the exact visible position at ${width}×${height}${keyboard?' with keyboard':''}: ${delta}`);
   assert.equal(await page.locator('#messages article').first().getAttribute('data-id'),'history-40');
   await page.evaluate(()=>{document.getElementById('chat-scroll').scrollTop=0;});
   await page.waitForFunction(()=>document.querySelectorAll('#messages article').length===120);
@@ -130,6 +153,9 @@ async function checkLazyHistory(browser,width=393,height=852,theme='light',langu
   assert.equal(await page.evaluate(()=>fixtureCalls.filter(call=>call.action==='chat.history').length),2);
   assert.deepEqual(errors,[],'Lazy history browser errors');
   await page.screenshot({path:path.join(output,`lazy-history-${width}-${height}-${theme}-${language}${keyboard?'-keyboard':''}.png`)});
+ } catch (error) {
+  await page.screenshot({path:path.join(output,`lazy-history-failure-${width}-${height}${keyboard?'-keyboard':''}.png`)});
+  throw error;
  } finally {await context.close();}
 }
 async function checkCompactComposer(page) {

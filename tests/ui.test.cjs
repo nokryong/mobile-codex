@@ -13,7 +13,8 @@ const historyMeta = (before, total=100) => ({beforeId:before?'m'+before:'',hasMo
 const resetCredit = (id, expiresAt) => ({id, expiresAt, grantedAt:1900000000, status:'available', resetType:'codexRateLimits'});
 function setup(overrides = {}, options = {}) {
   const dom = new JSDOM(fs.readFileSync(root+'index.html','utf8'), {url: 'https://appassets.androidplatform.net/index.html', runScripts: 'outside-only'}); opened.push(dom);
-  const w = dom.window, calls = [], responses = [];
+  const w = dom.window, calls = [], responses = [], frames = [];
+  if (options.manualFrames) w.requestAnimationFrame = callback => frames.push(callback);
   w.matchMedia = query => ({matches:!!options.mobile && query.includes('max-width'), addEventListener(){}});
   if (options.drafts) for (const [key,value] of Object.entries(options.drafts)) w.localStorage.setItem(key,value);
   w.HTMLDialogElement.prototype.showModal = function(){this.setAttribute('open','');};
@@ -30,7 +31,7 @@ function setup(overrides = {}, options = {}) {
   w.Native.locale = () => JSON.stringify({choice:options.language || 'ko',systemLanguage:options.systemLanguage || 'ko'});
   w.eval(fs.readFileSync(root+'translations.js','utf8')); w.eval(fs.readFileSync(root+'locale.js','utf8'));
   w.eval(fs.readFileSync(root+'ui-core.js','utf8')); w.eval(fs.readFileSync(root+'app.js','utf8'));
-  return {w,calls,responses,snapshot};
+  return {w,calls,responses,snapshot,frames};
 }
 test('Fast is an explicit per-draft lightning toggle first in the bottom row',async()=>{
  const {w,calls,snapshot}=setup();await tick();const d=w.document;
@@ -96,6 +97,22 @@ test('history lazy-loads in the existing scroller and keeps order, nodes and rea
  w.mobileCodexEvent('state',{...recent,messages:historyMessages(62,101),messageHistory:historyMeta(62,101)});
  assert.equal(list.children.length,81);assert.equal(list.firstElementChild.dataset.id,'m21');assert.equal(list.lastElementChild.dataset.id,'m101');
  assert.equal(d.querySelector('[data-id="m61"]'),original);
+});
+test('deferred viewport and focus scrolling respects newer upward navigation',async()=>{
+ for (const trigger of ['viewport','focus']) {
+  const {w,snapshot,frames}=setup({}, {manualFrames:true});await tick();
+  const area=w.document.getElementById('chat-scroll');
+  Object.defineProperty(area,'scrollHeight',{value:4000});
+  Object.defineProperty(area,'clientHeight',{value:300});
+  w.mobileCodexEvent('state',{...snapshot,messages:historyMessages(61,100),messageHistory:historyMeta(0)});
+  for(const callback of frames.splice(0))callback();
+  if(trigger==='viewport')w.mobileCodexEvent('viewport',{keyboardVisible:true});
+  else w.document.getElementById('prompt').dispatchEvent(new w.Event('focus'));
+  assert.ok(frames.length>0,trigger+' schedules a layout follow-up');
+  area.scrollTop=100;area.dispatchEvent(new w.Event('scroll'));
+  for(const callback of frames.splice(0))callback();
+  assert.equal(area.scrollTop,100,trigger+' must not pull the reader back to the tail');
+ }
 });
 test('history never expands the recent window without upward navigation',async()=>{
  const {w,calls,snapshot}=setup();await tick();const list=w.document.getElementById('messages');

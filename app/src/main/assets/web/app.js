@@ -294,7 +294,7 @@
     const visual = window.visualViewport, height = visual && visual.scale === 1 ? Math.min(window.innerHeight, visual.height) : window.innerHeight;
     document.documentElement.style.setProperty('--app-height', height + 'px');
     sizeComposer();
-    if (following) frame(scrollLatest);
+    if (following) frame(() => { if (following) scrollLatest(); });
     if (!matchMedia('(max-width:760px)').matches) {
       document.body.classList.remove('sidebar-open'); $('scrim').hidden = true;
       $('sidebar').inert = false; document.querySelector('main').inert = false;
@@ -1953,7 +1953,7 @@
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); $('composer').requestSubmit(); }
   });
   let autocompleteTimer; $('prompt').addEventListener('input', () => { saveDraft(); sizeComposer(); clearTimeout(autocompleteTimer); hideAutocomplete(); if (/[@$]$/.test($('prompt').value.slice(0, $('prompt').selectionStart))) queryAutocomplete(); else autocompleteTimer = setTimeout(queryAutocomplete, 120); });
-  $('prompt').addEventListener('focus', () => { if (following) frame(scrollLatest); });
+  $('prompt').addEventListener('focus', () => { if (following) frame(() => { if (following) scrollLatest(); }); });
   $('composer').addEventListener('focusin', () => $('composer').classList.add('composer-expanded'));
   $('composer').addEventListener('focusout', () => frame(() => { if (!$('composer').contains(document.activeElement)) $('composer').classList.remove('composer-expanded'); }));
   $('composer').addEventListener('click', e => { if (! $('composer').classList.contains('composer-expanded') && e.target === $('composer')) $('prompt').focus(); });
