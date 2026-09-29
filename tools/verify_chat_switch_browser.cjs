@@ -10,7 +10,7 @@ const output = path.join(root, 'artifacts/chat-switch-preview');
 fs.mkdirSync(output, {recursive:true});
 
 function pageHtml() {
- return `<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><style>
+ return `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>
  *{box-sizing:border-box}body{margin:0;font:14px system-ui,sans-serif;overflow:hidden}body.font150 #mc-chat-mode-switch{font-size:19.5px}#stage-sidebar{position:fixed;inset:0 auto 0 0;width:264px;padding:8px 12px;background:#f7f7f8;transition:none}#stage-sidebar.collapsed{width:56px;padding:8px}#stage-sidebar .wordmark{height:42px;display:flex;align-items:center;font-size:18px;font-weight:650}#stage-sidebar #new-chat{display:block;width:100%;height:44px;text-align:left}#stage-sidebar.collapsed .rail-logo{width:40px;height:40px;border-radius:12px;background:#222}#wide-header{height:56px;margin-left:264px;display:flex;align-items:center;gap:8px;padding:0 8px;border-bottom:1px solid #ddd;transition:none}#stage-sidebar.collapsed+#wide-header{margin-left:56px}.sidebar-toggle{width:44px;height:44px}.official-mode{display:flex;gap:4px}.official-mode button{height:32px}.content{margin-left:264px;padding:16px}#stage-sidebar.collapsed~.content{margin-left:56px}</style>
  <aside id="stage-sidebar"><div class="wordmark">ChatGPT</div><button id="new-chat">New chat</button></aside>
  <header id="wide-header"><button class="sidebar-toggle" aria-label="Open sidebar">Menu</button><div class="official-mode"><button aria-selected="true">Chat</button><button aria-selected="false">Work</button></div><span>Conversation</span></header><main class="content"><p>Unrelated stream content</p></main><script>${source}</script>`;
@@ -18,9 +18,10 @@ function pageHtml() {
 async function verify(browser, width) {
  const context = await browser.newContext({viewport:{width,height:900},deviceScaleFactor:1});
  const page = await context.newPage(), errors=[]; page.on('pageerror', error => errors.push(error.message));
- await page.route('https://chatgpt.com/**', route => route.fulfill({contentType:'text/html',body:pageHtml()}));
+ await page.route('https://chatgpt.com/**', route => route.fulfill({contentType:'text/html; charset=utf-8',body:pageHtml()}));
  await page.goto('https://chatgpt.com/c/fixture');
  try {
+  assert.equal(await page.evaluate(() => document.characterSet),'UTF-8','fixture document encoding');
   const box = async () => page.evaluate(() => {
    const r = el => el.getBoundingClientRect().toJSON(), group = document.getElementById('mc-chat-mode-switch');
    return {width:innerWidth,group:r(group),parent:group.parentElement.id,buttons:[...group.querySelectorAll('button,a')].map(r),rail:r(document.getElementById('stage-sidebar')),header:r(document.getElementById('wide-header')),official:[...document.querySelectorAll('.official-mode button')].map(button => ({text:button.textContent,selected:button.getAttribute('aria-selected')}))};
@@ -66,9 +67,10 @@ async function verifyLandscapeStructure(browser,width) {
  // wordmark whose accessible and SVG text are duplicated. This is a fixture,
  // not a captured ChatGPT DOM or an assertion about a particular web build.
  const panel='<div id="stage-slideover-sidebar"><div class="toolbar"><span class="sidebar-title"><svg role="img"><title>ChatGPT</title></svg><span aria-hidden="true">ChatGPT</span></span><div class="controls"><button aria-label="채팅 검색">Q</button><button aria-label="사이드바 닫기">X</button></div></div><nav><a id="fixture-new-chat" href="/" aria-label="새 채팅">새 채팅<kbd>Ctrl Shift O</kbd></a><p>라이브러리</p></nav></div>';
- await page.route('https://chatgpt.com/**',route=>route.fulfill({contentType:'text/html',body:`<meta name="viewport" content="width=device-width,initial-scale=1"><style>*{box-sizing:border-box}body{margin:0;font:14px system-ui}#stage-slideover-sidebar{width:260px;height:400px;display:flex;flex-direction:column;background:#f8f8f8}.toolbar{height:50px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 8px 0 16px}.sidebar-title{width:90px;font-size:18px}.sidebar-title svg{position:absolute;width:1px;height:1px;overflow:hidden}.controls{display:flex;width:80px}.controls button{width:40px;height:40px}nav{padding:8px}nav a{display:block;padding:12px}kbd{display:none}#stage-sidebar-tiny-bar{width:56px;height:400px;overflow:hidden;background:#f8f8f8}#rail-top{height:50px;display:flex;justify-content:center}#rail-top button{width:44px;height:44px}#stage-sidebar-tiny-bar nav{padding:6px}main{position:absolute;top:0;left:280px}</style>${panel}<main>Conversation unchanged</main><script>${source}</script>`}));
+ await page.route('https://chatgpt.com/**',route=>route.fulfill({contentType:'text/html; charset=utf-8',body:`<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>*{box-sizing:border-box}body{margin:0;font:14px system-ui}#stage-slideover-sidebar{width:260px;height:400px;display:flex;flex-direction:column;background:#f8f8f8}.toolbar{height:50px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 8px 0 16px}.sidebar-title{width:90px;font-size:18px}.sidebar-title svg{position:absolute;width:1px;height:1px;overflow:hidden}.controls{display:flex;width:80px}.controls button{width:40px;height:40px}nav{padding:8px}nav a{display:block;padding:12px}kbd{display:none}#stage-sidebar-tiny-bar{width:56px;height:400px;overflow:hidden;background:#f8f8f8}#rail-top{height:50px;display:flex;justify-content:center}#rail-top button{width:44px;height:44px}#stage-sidebar-tiny-bar nav{padding:6px}main{position:absolute;top:0;left:280px}</style>${panel}<main>Conversation unchanged</main><script>${source}</script>`}));
  try {
   await page.goto('https://chatgpt.com/landscape-fixture');
+  assert.equal(await page.evaluate(() => document.characterSet),'UTF-8','landscape fixture document encoding');
   for(const factor of [.75,.85,1,1.5]) {
    await page.locator('#mc-chat-mode-switch').evaluate((el,factor)=>el.style.fontSize=13*factor+'px',factor);
    const result=await page.evaluate(()=>{const group=document.getElementById('mc-chat-mode-switch'),rect=el=>el.getBoundingClientRect().toJSON();return {parent:group.parentElement.id,before:group.previousElementSibling.className,group:rect(group),panel:rect(group.parentElement),controls:[...group.querySelectorAll('button,a')].map(rect),next:rect(document.querySelector('nav')),count:document.querySelectorAll('#mc-chat-mode-switch').length};});
@@ -78,7 +80,10 @@ async function verifyLandscapeStructure(browser,width) {
    for(const rect of result.controls)assert.ok(rect.width>=44&&rect.height>=44);
   }
   await page.screenshot({path:path.join(output,`landscape-panel-${width}.png`)});
+  // Preserve the original CI regression: the wide panel is completely
+  // replaced by the tiny rail, then the injected switch must reappear there.
   await page.evaluate(()=>{document.getElementById('stage-slideover-sidebar').outerHTML='<div id="stage-sidebar-tiny-bar"><div id="rail-top"><button aria-label="사이드바 열기">Logo</button></div><nav>New</nav></div>';window.__mcChatCustom.refresh();});
+  assert.equal(await page.locator('#stage-sidebar-tiny-bar button').getAttribute('aria-label'),'사이드바 열기','CDP replacement keeps its Korean label');
   const compact=await page.locator('#mc-chat-mode-switch').boundingBox(),rail=await page.locator('#stage-sidebar-tiny-bar').boundingBox();
   assert.equal(compact.width,44);assert.ok(compact.x>=rail.x&&compact.x+compact.width<=rail.x+rail.width);
   assert.equal(await page.locator('#mc-chat-mode-switch button').isVisible(),false);
@@ -86,6 +91,12 @@ async function verifyLandscapeStructure(browser,width) {
   await page.screenshot({path:path.join(output,`landscape-rail-${width}.png`)});
   await page.evaluate(markup=>{document.getElementById('stage-sidebar-tiny-bar').outerHTML=markup;window.__mcChatCustom.refresh();},panel);
   assert.equal(await page.locator('#stage-slideover-sidebar #mc-chat-mode-switch').count(),1);
+  // Additional transition hardening: an old panel can briefly coexist with
+  // the rail. The rail remains the target after the old panel is removed.
+  await page.evaluate(()=>{document.getElementById('stage-slideover-sidebar').insertAdjacentHTML('afterend','<div id="stage-sidebar-tiny-bar" style="position:absolute;left:0;top:0"><div id="rail-top"><button aria-label="사이드바 열기">Logo</button></div><nav>New</nav></div>');window.__mcChatCustom.refresh();});
+  assert.equal(await page.locator('#stage-sidebar-tiny-bar #mc-chat-mode-switch').count(),1);
+  await page.evaluate(()=>document.getElementById('stage-slideover-sidebar').remove());
+  await page.waitForFunction(() => document.querySelector('#stage-sidebar-tiny-bar #mc-chat-mode-switch'));
   console.log(`PASS ${width}px landscape structure: wordmark toolbar, 75/85/100/150%, 44px compact rail, expand again`);
  } finally {await page.close();}
 }

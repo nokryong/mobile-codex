@@ -165,13 +165,17 @@ html.dark #${SWITCH}{background:#25252b}html.dark #${SWITCH} button{background:#
     return {anchor, compact:true, toggle, host:rail};
   }
   function target() {
+    // Prefer the dedicated compact rail when it is the visible navigation
+    // surface; wide panel/header placement cannot fit the full switch there.
+    const compact = findCompactRail();
+    if (compact) return compact;
     const newer = findTitleAndNewChat();
     if (newer) return {anchor:newer.newChat, before:true, title:newer.title, host:sidebarHost(newer.newChat) || newer.newChat.parentElement};
     const navigation = findNavigationPlacement();
     if (navigation) return navigation;
     const logo = findLogo();
     if (logo) return {anchor:logo, before:false, host:logo.parentElement};
-    return findPanelToolbar() || findWideHeaderFallback() || findCompactRail();
+    return findPanelToolbar() || findWideHeaderFallback();
   }
   function refresh() {
     scheduled = false;

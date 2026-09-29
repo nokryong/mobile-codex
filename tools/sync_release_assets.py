@@ -25,6 +25,10 @@ POLL_SECONDS = 15
 TIMEOUT_SECONDS = 10 * 60
 SOURCE_ZIP = 'devtools-corresponding-source.zip'
 LEGAL_ASSETS = ('LICENSE', 'THIRD_PARTY_NOTICES.md')
+FAILED_WORKFLOW_CONCLUSIONS = frozenset({
+    'failure', 'cancelled', 'timed_out', 'action_required', 'startup_failure',
+})
+WORKFLOW_TREE_CACHE: dict[str, str] = {}
 
 
 def gh(*args):
@@ -64,12 +68,69 @@ def canonical_release(tag: str) -> dict | None:
     return release
 
 
-def wait_for_release(tag: str, timeout: int = TIMEOUT_SECONDS, interval: int = POLL_SECONDS, clock=time.monotonic, sleep=time.sleep) -> dict:
+def canonical_commit_tree(commit: str) -> str:
+    """Return a canonical commit's tree, rejecting malformed API responses."""
+    data = api(f'repos/{CANONICAL_REPO}/git/commits/{commit}')
+    tree = data.get('tree', {}).get('sha')
+    if not isinstance(tree, str) or not re.fullmatch(r'[0-9a-f]{40}', tree):
+        raise ValueError('Canonical workflow commit has no valid tree.')
+    return tree
+
+
+def failed_canonical_workflow(expected_tree: str) -> dict | None:
+    """Find the newest canonical Android run whose source tree is expected_tree.
+
+    A mirror checkout can have a different merge commit from the public
+    checkout, so workflow ``head_sha`` alone is not sufficient.  Looking up
+    the commit tree prevents an unrelated (or merely older) main run from
+    ending this bounded wait early.
+    """
+    # Restrict this to the canonical Android release workflow.  A failed
+    # documentation or housekeeping workflow must never block publication.
+    # Do not filter by event: a workflow_dispatch rerun for the same source
+    # tree is the newest authoritative outcome after a failed push run.
+    data = api(f'repos/{CANONICAL_REPO}/actions/workflows/android.yml/runs?branch=main&per_page=30')
+    runs = data.get('workflow_runs')
+    if not isinstance(runs, list):
+        raise ValueError('Canonical workflow runs response is invalid.')
+    matching = []
+    for run in runs:
+        if not isinstance(run, dict) or run.get('head_branch') != 'main':
+            continue
+        head_sha = run.get('head_sha')
+        if not isinstance(head_sha, str) or not re.fullmatch(r'[0-9a-f]{40}', head_sha):
+            continue
+        tree = WORKFLOW_TREE_CACHE.get(head_sha)
+        if tree is None:
+            tree = canonical_commit_tree(head_sha)
+            WORKFLOW_TREE_CACHE[head_sha] = tree
+        if tree == expected_tree:
+            matching.append(run)
+    if not matching:
+        return None
+    # API results are normally newest first, but make that assumption explicit
+    # before deciding whether a prior failed retry is still relevant.
+    newest = max(matching, key=lambda run: (str(run.get('created_at', '')), int(run.get('id', 0))))
+    if newest.get('status') == 'completed' and newest.get('conclusion') in FAILED_WORKFLOW_CONCLUSIONS:
+        return newest
+    return None
+
+
+def wait_for_release(tag: str, timeout: int = TIMEOUT_SECONDS, interval: int = POLL_SECONDS,
+                     clock=time.monotonic, sleep=time.sleep, expected_tree: str | None = None,
+                     failure_check=failed_canonical_workflow) -> dict:
     deadline = clock() + timeout
     while True:
         release = canonical_release(tag)
         if release is not None:
             return release
+        if expected_tree is not None:
+            failed = failure_check(expected_tree)
+            if failed is not None:
+                conclusion = failed.get('conclusion', 'failed')
+                url = failed.get('html_url')
+                detail = f' ({url})' if isinstance(url, str) else ''
+                raise RuntimeError(f'Canonical main workflow for the matching source tree {conclusion}{detail}.')
         if clock() >= deadline:
             raise TimeoutError(f'Canonical public release {tag} was not available before the mirror timeout.')
         sleep(interval)
@@ -87,6 +148,35 @@ def canonical_tag_tree(tag: str) -> str:
     if not isinstance(tree, str) or len(tree) != 40:
         raise ValueError('Canonical release tag has no valid commit tree.')
     return tree
+
+
+def checked_out_identity(build_gradle: Path = Path('app/build.gradle')) -> dict:
+    """Read the literal release identity from the checked-out Gradle file.
+
+    This deliberately supports only the small, literal declarations used by
+    this project.  Expressions, duplicate declarations and unexpected values
+    fail closed instead of guessing what Gradle might evaluate to.
+    """
+    content = build_gradle.read_text(encoding='utf-8')
+
+    def literal(pattern: str, field: str) -> str:
+        values = re.findall(pattern, content, re.MULTILINE)
+        if len(values) != 1:
+            raise ValueError(f'Could not read exactly one literal {field} from app/build.gradle.')
+        return values[0]
+
+    application_id = literal(r"^\s*applicationId\s+'([A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+)'\s*(?://[^\n]*)?$", 'applicationId')
+    version_code = literal(r'^\s*versionCode\s+([1-9][0-9]*)\s*(?://[^\n]*)?$', 'versionCode')
+    version_name = literal(r"^\s*versionName\s+'(\d+\.\d+\.\d+(?:-(?:alpha|beta|rc)(?:[.-]?\d+)?)?)'\s*(?://[^\n]*)?$", 'versionName')
+    if application_id != 'dev.mobilecodex.app':
+        raise ValueError('Unexpected literal applicationId in app/build.gradle.')
+    return {
+        'applicationId': application_id,
+        'versionCode': int(version_code),
+        'versionName': version_name,
+        'fileName': f'mobile-codex-{version_name}-arm64.apk',
+        'signingCertificateSha256': [EXPECTED_CERT_SHA256],
+    }
 
 
 def local_tree() -> str:
@@ -135,20 +225,17 @@ def inspect_apk(apk: Path, build_tools: Path) -> dict:
     return apk_metadata(aapt, signing, apk)
 
 
-def validate_identity(stage: Path, version: str, local: dict, build_tools: Path):
+def validate_identity(stage: Path, version: str, expected: dict, build_tools: Path):
     expected_apk = f'mobile-codex-{version}-arm64.apk'
     remote = json.loads((stage / 'mobile-codex-update.json').read_text(encoding='utf-8'))
     inspected = inspect_apk(stage / expected_apk, build_tools)
-    # The downloaded canonical APK must match all of its own metadata.  The
-    # mirror's locally built APK can legitimately have a different digest and
-    # size because BuildConfig.SOURCE_SHA contains its merge commit; only its
-    # install identity must match before we replace it with canonical bytes.
+    # The downloaded canonical APK must match all of its own metadata.
     for key in ('versionName', 'versionCode', 'applicationId', 'signingCertificateSha256', 'fileName', 'sha256', 'size'):
         if remote.get(key) != inspected.get(key):
             raise ValueError('Canonical APK identity mismatch: ' + key)
     for key in ('versionName', 'versionCode', 'applicationId', 'signingCertificateSha256', 'fileName'):
-        if local.get(key) != remote.get(key):
-            raise ValueError('Mirror APK identity mismatch: ' + key)
+        if expected.get(key) != remote.get(key):
+            raise ValueError('Mirror source identity mismatch: ' + key)
     if remote.get('signingCertificateSha256') != [EXPECTED_CERT_SHA256]:
         raise ValueError('Canonical APK has an unexpected signing certificate.')
     checksum = (stage / (expected_apk + '.sha256')).read_text(encoding='utf-8').strip()
@@ -159,15 +246,16 @@ def validate_identity(stage: Path, version: str, local: dict, build_tools: Path)
             raise ValueError('Canonical public ' + legal + ' differs from this source tree.')
 
 
-def replace_verified_assets(stage: Path, version: str):
+def replace_verified_assets(stage: Path, version: str, include_local_apk: bool = True):
     apk = f'mobile-codex-{version}-arm64.apk'
     targets = [
-        (stage / apk, Path('app/build/outputs/apk/debug/app-debug.apk')),
         (stage / apk, Path('artifacts/update') / apk),
         (stage / (apk + '.sha256'), Path('artifacts/update') / (apk + '.sha256')),
         (stage / 'mobile-codex-update.json', Path('artifacts/update/mobile-codex-update.json')),
         (stage / SOURCE_ZIP, Path('artifacts') / SOURCE_ZIP),
     ]
+    if include_local_apk:
+        targets.insert(0, (stage / apk, Path('app/build/outputs/apk/debug/app-debug.apk')))
     # Stage every replacement beside its destination first.  A failed
     # validation above therefore leaves generated files untouched.
     pending = []
@@ -190,8 +278,9 @@ def sync(build_tools: Path, timeout: int = TIMEOUT_SECONDS, interval: int = POLL
     if not isinstance(version, str):
         raise ValueError('Local update metadata has no versionName.')
     tag = 'v' + version
-    release = wait_for_release(tag, timeout, interval)
-    if canonical_tag_tree(tag) != local_tree():
+    tree = local_tree()
+    release = wait_for_release(tag, timeout, interval, expected_tree=tree)
+    if canonical_tag_tree(tag) != tree:
         raise ValueError('Canonical release tag tree differs from this mirror checkout.')
     names = release_names(version)
     assets = validate_release_assets(release, names)
@@ -206,15 +295,42 @@ def sync(build_tools: Path, timeout: int = TIMEOUT_SECONDS, interval: int = POLL
     Path('artifacts/canonical-release-notes.md').write_text(release.get('body', ''), encoding='utf-8')
 
 
+def sync_without_build(build_tools: Path, timeout: int = TIMEOUT_SECONDS, interval: int = POLL_SECONDS):
+    """Mirror canonical assets without a local Gradle/runtime/signing build."""
+    expected = checked_out_identity()
+    version = expected['versionName']
+    tag = 'v' + version
+    tree = local_tree()
+    release = wait_for_release(tag, timeout, interval, expected_tree=tree)
+    if canonical_tag_tree(tag) != tree:
+        raise ValueError('Canonical release tag tree differs from this mirror checkout.')
+    names = release_names(version)
+    assets = validate_release_assets(release, names)
+    with tempfile.TemporaryDirectory(prefix='mobile-codex-canonical-') as directory:
+        stage = Path(directory)
+        download_assets(tag, stage, names)
+        validate_downloads(stage, assets, names)
+        validate_identity(stage, version, expected, build_tools)
+        # This path intentionally neither reads nor creates a local APK.  The
+        # publisher consumes artifacts/update, and its source ZIP is canonical.
+        replace_verified_assets(stage, version, include_local_apk=False)
+    Path('artifacts/canonical-release-notes.md').write_text(release.get('body', ''), encoding='utf-8')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--build-tools', required=True, type=Path)
     parser.add_argument('--timeout', type=int, default=TIMEOUT_SECONDS)
     parser.add_argument('--interval', type=int, default=POLL_SECONDS)
+    parser.add_argument('--without-build', action='store_true',
+                        help='verify and mirror canonical assets without a local APK build')
     args = parser.parse_args()
     if os.environ.get('GITHUB_REPOSITORY') != MIRROR_REPO or os.environ.get('GITHUB_REF') != 'refs/heads/main' or os.environ.get('GITHUB_EVENT_NAME') == 'pull_request' or os.environ.get('INPUTS_APK_ONLY', '').lower() == 'true':
         return
-    sync(args.build_tools, args.timeout, args.interval)
+    if args.without_build:
+        sync_without_build(args.build_tools, args.timeout, args.interval)
+    else:
+        sync(args.build_tools, args.timeout, args.interval)
 
 
 if __name__ == '__main__':

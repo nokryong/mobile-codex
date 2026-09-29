@@ -229,3 +229,26 @@ test('the observed tiny sidebar has a 44px Codex return action instead of a clip
  assert.equal(group.querySelector('a').href,'mobilecodex://mode/codex');assert.equal(w.getComputedStyle(group.querySelector('a')).minHeight,'44px');
  rail.hidden=true;w.__mcChatCustom.refresh();assert.equal(d.getElementById('mc-chat-mode-switch'),null);
 });
+
+test('the original full panel replacement mounts the compact return action',()=>{
+ const w=setup('<div id="stage-slideover-sidebar"><div id="toolbar"><button aria-label="사이드바 닫기">Close</button></div><nav>History</nav></div>'),d=w.document;
+ assert.equal(d.getElementById('mc-chat-mode-switch').parentElement.id,'stage-slideover-sidebar');
+ d.getElementById('stage-slideover-sidebar').outerHTML='<div id="stage-sidebar-tiny-bar"><div id="rail-top"><button aria-label="사이드바 열기">Menu</button></div><nav>New</nav></div>';
+ const rail=d.getElementById('stage-sidebar-tiny-bar'),rect={left:0,top:0,width:56,height:380,right:56,bottom:380};rail.getBoundingClientRect=()=>rect;rail.getClientRects=()=>[rect];
+ w.__mcChatCustom.refresh();const group=d.getElementById('mc-chat-mode-switch');assert.ok(group);
+ assert.equal(group.parentElement,rail);assert.equal(group.previousElementSibling.id,'rail-top');
+ assert.equal(w.getComputedStyle(group).minWidth,'44px');assert.equal(w.getComputedStyle(group.querySelector('button')).display,'none');
+});
+
+test('a visible tiny rail wins during the panel-to-rail transition',()=>{
+ const html='<div id="stage-slideover-sidebar"><div id="old-toolbar"><button aria-label="사이드바 닫기">Close</button></div><nav>History</nav></div><div id="stage-sidebar-tiny-bar"><div id="rail-top"><button aria-label="사이드바 열기">Menu</button></div><nav>New</nav></div><header id="wide-header"><button aria-label="Open sidebar">Menu</button></header>';
+ const w=setup(html),d=w.document;
+ const rect=(left,top,width,height)=>({left,top,width,height,right:left+width,bottom:top+height});
+ const panel=d.getElementById('stage-slideover-sidebar'),toolbar=d.getElementById('old-toolbar'),rail=d.getElementById('stage-sidebar-tiny-bar'),railTop=d.getElementById('rail-top'),toggle=railTop.querySelector('button'),header=d.getElementById('wide-header');
+ for(const [element,value] of [[panel,rect(0,0,260,380)],[toolbar,rect(0,0,260,50)],[rail,rect(0,0,56,380)],[railTop,rect(0,0,56,50)],[toggle,rect(6,3,44,44)],[header,rect(56,0,744,56)]]) {element.getBoundingClientRect=()=>value;element.getClientRects=()=>[value];}
+ w.__mcChatCustom.refresh();const group=d.getElementById('mc-chat-mode-switch');assert.ok(group);
+ assert.equal(group.parentElement,rail);assert.equal(group.previousElementSibling,railTop);
+ assert.ok(group.classList.contains('mc-compact-rail'));assert.equal(group.querySelector('button').style.display,'');
+ assert.equal(w.getComputedStyle(group.querySelector('button')).display,'none');
+ panel.remove();w.__mcChatCustom.refresh();assert.equal(d.getElementById('mc-chat-mode-switch').parentElement,rail);
+});
