@@ -82,7 +82,7 @@ Codex 입력창의 **GPT-6-Pro**는 로그인된 ChatGPT 웹 세션을 사용하
 | Actions 산출물 | 용도 |
 | --- | --- |
 | `mobile-codex-test-apk` | 수동 테스트 실행의 APK와 검증 파일입니다. ZIP을 풀어 설치하며, 이 실행은 릴리스를 게시하지 않습니다. |
-| `ui-check-reports` | JavaScript·Python·브라우저 검사 결과와 스크린샷입니다. 설치 파일은 없습니다. |
+| `ui-check-reports` | 브라우저 검사 결과와 스크린샷입니다. 설치 파일은 없으며 JavaScript·Python 테스트 결과는 실행 로그에서 확인합니다. |
 | `android-check-reports` | Android 테스트와 Lint 결과입니다. 설치 파일은 없습니다. |
 
 Actions 산출물 다운로드에는 GitHub 로그인이 필요하며, 보관 기간은 7일입니다. 공개 릴리스 파일은 이 로그인 없이 받을 수 있습니다. 실패한 빌드는 새 릴리스를 게시하지 않습니다.

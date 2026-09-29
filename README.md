@@ -84,7 +84,7 @@ Normal builds publish installation files to Releases. [Actions runs](https://git
 | Artifact | Contents |
 | --- | --- |
 | `mobile-codex-test-apk` | APK and verification files from an explicit test run; extract the ZIP to install. This run does not publish a release. |
-| `ui-check-reports` | JavaScript/Python and browser check reports and screenshots; no APK. |
+| `ui-check-reports` | Browser check reports and screenshots; no APK. JavaScript/Python test results are in the run logs. |
 | `android-check-reports` | Android test and lint reports; no APK. |
 
 Actions artifact downloads require GitHub sign-in and expire after 7 days. Public release assets remain available without that artifact sign-in requirement. An unsuccessful build does not publish a new release.
