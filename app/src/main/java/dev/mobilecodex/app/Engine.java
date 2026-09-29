@@ -3,6 +3,7 @@ package dev.mobilecodex.app;
 import static dev.mobilecodex.app.core.Texts.t;
 import android.content.Context;
 import android.content.Intent;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Environment;
 import android.os.SystemClock;
@@ -18,6 +19,8 @@ import static dev.mobilecodex.app.core.Json.*;
 
 /** Owns one local app-server process, outside Activity/WebView lifecycle. */
 public final class Engine {
+    /** State events are frequent and cross the WebView bridge, so only expose a bounded tail. */
+    private static final int SNAPSHOT_MESSAGE_LIMIT = 40;
     public interface Ui {
         void event(String name, JSONObject data);
         void approval(Approval approval);
@@ -110,7 +113,7 @@ public final class Engine {
         io.execute(() -> {
             publish();
             if (pendingApproval != null && !pendingApproval.decision.isDone()) ui.approval(pendingApproval);
-            requests.forEach((key, request) -> event("server.request", obj("key", key, "method", request.method, "params", request.params)));
+            requests.forEach((key, request) -> event("server.request", obj("key", key, "method", request.method, "params", requestUiParams(request))));
         });
     }
     public void detach(Ui ui) { if (this.ui == ui) this.ui = null; }
@@ -146,12 +149,20 @@ public final class Engine {
             publish(); throw error;
         } finally { lastAccountCheckElapsed = SystemClock.elapsedRealtime(); }
     }
-    public void observe(Ui observer) { observers.add(observer); io.execute(() -> { if (observers.contains(observer)) { observer.event("state", snapshot()); if (pendingApproval != null && !pendingApproval.decision.isDone()) observer.approval(pendingApproval); requests.forEach((key, request) -> observer.event("server.request", obj("key", key, "method", request.method, "params", request.params))); } }); }
+    public void observe(Ui observer) { observers.add(observer); io.execute(() -> { if (observers.contains(observer)) { observer.event("state", snapshot()); if (pendingApproval != null && !pendingApproval.decision.isDone()) observer.approval(pendingApproval); requests.forEach((key, request) -> observer.event("server.request", obj("key", key, "method", request.method, "params", requestUiParams(request)))); } }); }
     public void unobserve(Ui observer) { observers.remove(observer); }
     void setTestTransport(TestTransport value) { testTransport = value; }
     void setTestAccountValidation(boolean value) { testAccountValidation = value; }
     File processHomeForTest() { return processHome; }
     private void event(String name, JSONObject data) { Ui current = ui; if (current != null) current.event(name, data); for (Ui observer : observers) if (observer != current) observer.event(name, data); }
+    private JSONObject requestUiParams(PendingRequest request) {
+        try {
+            JSONObject result = new JSONObject(request.params.toString());
+            String local = localIdForCodexThread(result.optString("threadId"));
+            if (!local.isBlank()) result.put("threadId", local);
+            return result;
+        } catch (Exception ignored) { return request.params; }
+    }
     static Intent taskNotificationIntent(Context context, String kind, String title, String message, String thread, String approval) {
         return new Intent(context, CodexNotificationReceiver.class).setAction(CodexNotificationReceiver.ACTION)
             .putExtra("kind", kind).putExtra("title", title).putExtra("message", message)
@@ -165,17 +176,55 @@ public final class Engine {
         for (int i = sessions.length() - 1; i >= 0; i--) {
             JSONObject s = sessions.optJSONObject(i);
             if (s != null && !s.optBoolean("deletionPending")) summaries.put(obj("id", s.optString("id"), "title", s.optString("title"),
-                "workspace", s.optString("workspace"), "workspaceKey", s.optString("workspaceKey"),
-                "busy", runningTurns.containsKey(s.optString("id")), "approvalPending", s.optBoolean("approvalPending")));
+                "workspace", s.optString("workspace"), "workspaceKey", s.optString("workspaceKey"), "projectId", documents.projectId(s.optString("workspaceKey")),
+                "busy", runningTurns.containsKey(s.optString("id")) || s.optJSONObject("proOperation") != null,
+                "approvalPending", s.optBoolean("approvalPending")));
         }
         return obj("ready", ready, "busy", busy, "status", t(status), "account", account,
             "authState", authState, "authError", t(authError),
             "accounts", accountProfiles.list(), "rateLimits", rateLimits, "models", models, "workspace", documents.workspace(), "projects", documents.projects(), "sessions", summaries,
-            "threadId", threadId, "turnId", turnId, "turnDiff", active == null ? "" : active.optString("turnDiff"), "messages", active == null ? new JSONArray() : active.optJSONArray("messages"),
+            "threadId", threadId, "turnId", turnId, "proBusy", active != null && active.optJSONObject("proOperation") != null,
+            "turnDiff", active == null ? "" : active.optString("turnDiff"), "messages", snapshotMessages(),
+            "messageHistory", messageHistory(active == null ? null : active.optJSONArray("messages"), snapshotMessageStart()),
+            "fastMode", active != null && active.optBoolean("fastMode"),
             "pendingDeletionCount", pendingDeletionCount(), "devtools", devTools.status(), "linux", linux.status(),
             "phone", PhoneUseService.status(context), "phoneToolsAvailable", active == null || active.optInt("phoneToolsVersion") >= 1,
             "permissions", permissionMode, "approvalMode", approvalMode, "allFilesAccess", (Build.VERSION.SDK_INT >= 30 ? Environment.isExternalStorageManager() : context.checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE) == android.content.pm.PackageManager.PERMISSION_GRANTED),
             "directWorkspace", documents.directDirectory() != null, "cwd", projectDirectory().getAbsolutePath());
+    }
+    /** Return the most recent messages in their original chronological order. */
+    private JSONArray snapshotMessages() {
+        JSONArray messages = active == null ? null : active.optJSONArray("messages");
+        if (messages == null) return new JSONArray();
+        int start = Math.max(0, messages.length() - SNAPSHOT_MESSAGE_LIMIT);
+        JSONArray result = new JSONArray();
+        // MainActivity serializes events after crossing to the UI thread.
+        // Copy this bounded page so a later streaming delta cannot mutate an
+        // already-emitted state snapshot before WebView serialization.
+        for (int i = start; i < messages.length(); i++) result.put(uiJsonCopy(messages.opt(i)));
+        return result;
+    }
+    private static Object uiJsonCopy(Object value) {
+        try {
+            if (value instanceof JSONObject) return new JSONObject(value.toString());
+            if (value instanceof JSONArray) return new JSONArray(value.toString());
+        } catch (Exception ignored) { }
+        return value;
+    }
+    private int snapshotMessageStart() {
+        JSONArray messages = active == null ? null : active.optJSONArray("messages");
+        return messages == null ? 0 : Math.max(0, messages.length() - SNAPSHOT_MESSAGE_LIMIT);
+    }
+    /** Metadata points to the first returned item; history requests exclude that cursor item. */
+    private JSONObject messageHistory(JSONArray messages, int start) {
+        int total = messages == null ? 0 : messages.length();
+        start = Math.max(0, Math.min(total, start));
+        String beforeId = "";
+        if (start > 0) {
+            JSONObject first = messages.optJSONObject(start);
+            beforeId = first == null ? "" : first.optString("id");
+        }
+        return obj("hasMore", start > 0, "beforeId", beforeId, "total", total);
     }
     private void publish() { if (!suppressStatePublish) event("state", snapshot()); }
     private void persist() {
@@ -203,30 +252,107 @@ public final class Engine {
     }
     /** Test-only state-store seam for durable-write failure coverage. */
     void setStateFileForTest(File file) { stateFile = file; }
-    /** Old session files have no registry entry. Keep their identity distinct from general chat. */
+    /** Reconcile durable sessions with current bindings without changing chat identity or contents. */
     private void restoreSessionProjects() {
-        boolean changed = false;
+        boolean changed = false, generalized = false;
+        String original = sessions.toString();
+        JSONObject proJournal = null;
+        try {
+            String saved = context.getSharedPreferences("pro-web-operation", 0).getString("value", "");
+            if (!saved.isBlank()) proJournal = new JSONObject(saved);
+        } catch (Exception ignored) { }
         for (int i = 0; i < sessions.length(); i++) {
             try {
                 JSONObject session = sessions.optJSONObject(i); if (session == null) continue;
                 // Conversations belong to this app installation, not to the
                 // credential currently used for the next Codex request.
                 if (session.has("accountProfileKey")) { session.remove("accountProfileKey"); changed = true; }
+                // Legacy records used the Codex server thread as the local UI id.
+                // Preserve that local id for drafts while recording the remote id explicitly.
+                if (!session.has("sessionVersion") && !session.optString("id").isBlank()) {
+                    session.put("codexThreadId", session.optString("id")); session.put("sessionVersion", 2); changed = true;
+                }
                 if (session.optBoolean("deletionPending")) continue;
                 if (!session.has("workspaceKey")) {
-                    session.put("workspaceKey", documents.restoreProjectKey(session.optString("id"), "", session.optString("workspace")));
+                    String key = documents.restoreProjectKey(session.optString("id"), "", session.optString("workspace"));
+                    session.put("workspaceKey", key);
+                    if (key.isBlank() && !session.optString("workspace").isBlank()) { session.put("workspace", ""); generalized = true; }
                     changed = true;
                 } else if (!session.optString("workspaceKey").isBlank()) {
                     String key = documents.restoreProjectKey(session.optString("id"), session.optString("workspaceKey"), session.optString("workspace"));
-                    if (!key.equals(session.optString("workspaceKey"))) { session.put("workspaceKey", key); changed = true; }
+                    if (!key.equals(session.optString("workspaceKey"))) {
+                        session.put("workspaceKey", key);
+                        if (key.isBlank()) session.put("workspace", "");
+                        changed = true; generalized |= key.isBlank();
+                    }
+                } else if (!session.optString("workspace").isBlank()) {
+                    session.put("workspace", ""); changed = true; generalized = true;
                 }
                 if (!session.has("messages") || session.optJSONArray("messages") == null) { session.put("messages", new JSONArray()); changed = true; }
+                JSONObject interruptedPro = session.optJSONObject("proOperation");
+                if (interruptedPro != null) {
+                    if (proJournal != null && session.optString("id").equals(proJournal.optString("threadId"))
+                            && interruptedPro.optString("id").equals(proJournal.optString("operationId"))) {
+                        String recoveredConversation = boundedRemoteId(proJournal.optString("chatConversationId"));
+                        String recoveredProject = boundedProjectPath(proJournal.optString("chatProjectPath"));
+                        if (!recoveredConversation.isBlank()) session.put("chatConversationId", recoveredConversation);
+                        if (!recoveredProject.isBlank()) session.put("chatProjectPath", recoveredProject);
+                        String effectiveProject = recoveredProject.isBlank() ? session.optString("chatProjectPath") : recoveredProject;
+                        String recoveredPath = boundedConversationPath(proJournal.optString("chatConversationPath"), recoveredConversation, effectiveProject);
+                        if (!recoveredPath.isBlank()) session.put("chatConversationPath", recoveredPath);
+                    }
+                    JSONObject message = messageIn(session, interruptedPro.optString("messageId"));
+                    if (message != null && "sending".equals(message.optString("status"))) message.put("status", "uncertain")
+                        .put("error", t("앱이 종료되어 웹 전송 결과를 확인하지 못했습니다. 다시 보내기 전에 ChatGPT 웹 대화를 확인해 주세요."));
+                    session.remove("proOperation"); changed = true;
+                }
             } catch (Exception ignored) { }
         }
-        if (changed) persist();
+        if (changed) {
+            try {
+                if (generalized) backupSessionsBeforeGeneralMigration(original);
+                persistSessions(sessions);
+            } catch (IOException error) {
+                try { sessions = new JSONArray(original); } catch (Exception ignored) { }
+                throw new IllegalStateException(t("대화 작업 폴더 이전을 저장하지 못했습니다."), error);
+            }
+        }
+    }
+    private void backupSessionsBeforeGeneralMigration(String original) throws IOException {
+        File backup = new File(stateFile.getParentFile(), "sessions-before-general-workspace-v1.json");
+        if (backup.exists()) return;
+        File pending = new File(stateFile.getParentFile(), "sessions-before-general-workspace-v1.json.tmp");
+        try {
+            dev.mobilecodex.app.core.Utf8Files.write(pending.toPath(), original);
+            try { Files.move(pending.toPath(), backup.toPath(), java.nio.file.StandardCopyOption.ATOMIC_MOVE); }
+            catch (java.nio.file.AtomicMoveNotSupportedException ignored) { Files.move(pending.toPath(), backup.toPath()); }
+        } catch (Exception error) {
+            pending.delete(); throw new IOException(t("대화 이전 복구 사본을 저장하지 못했습니다."), error);
+        }
+    }
+    private void backupSessionsForProjectRemoval(String original) throws IOException {
+        File backup = new File(stateFile.getParentFile(), "sessions-before-project-remove-" + UUID.randomUUID() + ".json");
+        File pending = new File(backup.getPath() + ".tmp");
+        try {
+            dev.mobilecodex.app.core.Utf8Files.write(pending.toPath(), original);
+            try { Files.move(pending.toPath(), backup.toPath(), java.nio.file.StandardCopyOption.ATOMIC_MOVE); }
+            catch (java.nio.file.AtomicMoveNotSupportedException ignored) { Files.move(pending.toPath(), backup.toPath()); }
+        } catch (Exception error) {
+            pending.delete(); throw new IOException(t("프로젝트 연결 해제 전 대화 복구 사본을 저장하지 못했습니다."), error);
+        }
+    }
+    private int moveSessionsToGeneral(JSONArray values, String workspaceKey) throws Exception {
+        if (workspaceKey == null || workspaceKey.isBlank()) return 0;
+        int moved = 0;
+        for (int i = 0; i < values.length(); i++) {
+            JSONObject session = values.optJSONObject(i);
+            if (session == null || !workspaceKey.equals(session.optString("workspaceKey"))) continue;
+            session.put("workspaceKey", "").put("workspace", ""); moved++;
+        }
+        return moved;
     }
     public void updatesChanged(JSONObject data) { event("updates.changed", data); }
-    public boolean canInstallUpdate() { return runningTurns.isEmpty() && !VoiceInput.active() && !linux.status().optBoolean("busy") && (terminalProcess == null || !terminalProcess.isAlive()); }
+    public boolean canInstallUpdate() { return runningTurns.isEmpty() && !hasProOperations() && !VoiceInput.active() && !linux.status().optBoolean("busy") && (terminalProcess == null || !terminalProcess.isAlive()); }
     public void voiceInputChanged() { event("voice.changed", obj()); }
     public void phoneStateChanged() { io.execute(this::publish); }
     public void handle(String action, JSONObject args, Reply reply) {
@@ -309,7 +435,13 @@ public final class Engine {
                     case "rpc" -> {
                         start();
                         String method = args.getString("method");
-                        JSONObject result = call(method, args.optJSONObject("params") == null ? new JSONObject() : args.getJSONObject("params"));
+                        JSONObject rpcParams = args.optJSONObject("params") == null ? new JSONObject() : new JSONObject(args.getJSONObject("params").toString());
+                        if (rpcParams.has("threadId")) {
+                            JSONObject local = session(rpcParams.optString("threadId"));
+                            String remote = codexThreadId(local);
+                            if (remote.isBlank()) rpcParams.remove("threadId"); else rpcParams.put("threadId", remote);
+                        }
+                        JSONObject result = call(method, rpcParams);
                         // Usage reads and reset-credit redemption may rotate an
                         // expired access/refresh token inside app-server.auth.
                         // Keep the profile copy in sync before the next
@@ -328,7 +460,7 @@ public final class Engine {
                         PendingRequest pending = requests.remove(args.getString("key"));
                         if (pending == null) throw new IOException(t("이미 종료된 요청입니다."));
                         if (pending.method.contains("requestApproval")) {
-                            JSONObject approvalSession = session(pending.params.optString("threadId", threadId));
+                            JSONObject approvalSession = sessionByCodexThreadId(pending.params.optString("threadId"));
                             if (approvalSession != null) { approvalSession.put("approvalPending", false); persist(); }
                         }
                         pending.connection.respond(pending.id, args.getJSONObject("result"));
@@ -356,11 +488,40 @@ public final class Engine {
                         JSONObject result = changes.restore(reviewDirectory(), args.getString("token")); event("files.changed", result); reply.complete(result, null);
                     }
                     case "projects.select" -> { documents.selectProject(args.optString("key", "")); clearActive(); publish(); reply.complete(snapshot(), null); }
-                    case "projects.remove" -> { ensureEngineIdle(); String key = args.getString("key"); boolean current = key.equals(documents.key()); JSONObject removed = documents.removeProject(key); if (current) clearActive(); publish(); reply.complete(removed, null); }
+                    case "projects.remove" -> {
+                        ensureEngineIdle(); String key = args.getString("key");
+                        JSONArray replacement = new JSONArray(sessions.toString()); int moved = moveSessionsToGeneral(replacement, key);
+                        if (moved > 0) backupSessionsForProjectRemoval(sessions.toString());
+                        JSONObject removed = documents.removeProject(key);
+                        if (moved > 0) {
+                            try { persistSessions(replacement); }
+                            catch (IOException error) {
+                                // The durable project tombstone is itself the recovery journal:
+                                // startup will idempotently generalize the still-intact sessions file.
+                                replaceSessions(replacement); serverThreadId = ""; syncCurrentTurn(); publish();
+                                throw new IOException(t("프로젝트 연결은 해제됐지만 대화 기록 저장을 마치지 못했습니다. 대화는 보존되며 앱을 다시 시작하면 일반 대화 이전을 재시도합니다."), error);
+                            }
+                            replaceSessions(replacement); serverThreadId = ""; syncCurrentTurn();
+                        }
+                        publish();
+                        removed.put("movedChats", moved).put("workspace", documents.workspace());
+                        reply.complete(removed, null);
+                    }
                     case "projects.rename" -> { ensureEngineIdle(); JSONObject renamed = documents.renameProject(args.getString("key"), args.getString("name")); publish(); reply.complete(renamed, null); }
+                    case "projects.export" -> reply.complete(documents.exportProject(args.getString("key")), null);
+                    case "projects.import.preview" -> reply.complete(documents.previewProjects(args.getString("content")), null);
+                    case "projects.import.apply" -> { ensureEngineIdle(); JSONObject imported = documents.importProjects(args.getString("content"), args.getString("token")); publish(); reply.complete(imported, null); }
+                    case "projects.create" -> { ensureEngineIdle(); JSONObject created = documents.createProject(args.getString("name")); clearActive(); publish(); reply.complete(created, null); }
+                    case "projects.merge" -> { ensureEngineIdle(); JSONObject merged = documents.mergeProjects(args.getString("sourceKey"), args.getString("targetKey")); publish(); reply.complete(merged, null); }
+                    case "projects.prefer" -> { ensureEngineIdle(); JSONObject result = documents.preferProject(args.getString("key")); publish(); reply.complete(result, null); }
                     case "documents.projects" -> reply.complete(obj("projects", documents.projects()), null);
                     case "chat.send" -> { requireChatScope(args); send(args.optString("text", ""), args.optString("model", ""), args.optString("effort", ""),
-                        args.optJSONArray("attachments"), args.optJSONArray("skills"), args.optJSONArray("mentions")); reply.complete(obj("ok", true), null); }
+                        args.optJSONArray("attachments"), args.optJSONArray("skills"), args.optJSONArray("mentions"),
+                        args.has("fastMode") ? args.getBoolean("fastMode") : null); reply.complete(obj("ok", true), null); }
+                    case "chat.history" -> reply.complete(history(args), null);
+                    case "chat.pro.prepare" -> reply.complete(preparePro(args), null);
+                    case "chat.pro.complete" -> reply.complete(completePro(args), null);
+                    case "chat.pro.fail" -> reply.complete(failPro(args), null);
                     case "chat.steer" -> { steer(args); reply.complete(obj("ok", true), null); }
                     case "chat.new" -> {
                         String key = args.has("workspaceKey") ? args.optString("workspaceKey", "") : documents.key();
@@ -375,7 +536,7 @@ public final class Engine {
                         reply.complete(result, null);
                     }
                     case "chat.stop" -> {
-                        if (!turnId.isEmpty()) call("turn/interrupt", obj("threadId", threadId, "turnId", turnId));
+                        if (!turnId.isEmpty()) call("turn/interrupt", obj("threadId", activeCodexThreadId(), "turnId", turnId));
                         if (pendingApproval != null) pendingApproval.decision.complete(false);
                         reply.complete(obj("ok", true), null);
                     }
@@ -393,6 +554,13 @@ public final class Engine {
     public void workspaceChanged() {
         io.execute(() -> { clearActive(); publish(); });
     }
+    /** Runs folder binding on the engine queue and rechecks all background work. */
+    JSONObject selectProjectFolder(Uri uri, String projectKey) throws Exception {
+        ensureEngineIdle();
+        JSONObject workspace = documents.select(uri, projectKey);
+        clearActive(); publish();
+        return workspace;
+    }
     private void syncCurrentTurn() {
         turnId = threadId.isBlank() ? "" : runningTurns.getOrDefault(threadId, "");
         busy = !turnId.isBlank();
@@ -401,8 +569,17 @@ public final class Engine {
     private void clearActive() { active = null; threadId = ""; turnId = ""; serverThreadId = ""; busy = false; if (ready) status = t("연결됨"); }
     public boolean isBusy() { return busy; }
     private boolean hasRunningTurns() { return !runningTurns.isEmpty(); }
+    private boolean hasProOperations() {
+        for (int i = 0; i < sessions.length(); i++) {
+            JSONObject session = sessions.optJSONObject(i);
+            if (session != null && session.optJSONObject("proOperation") != null) return true;
+        }
+        return false;
+    }
     private void ensureIdle() throws IOException { if (busy) throw new IOException(t("현재 대화의 작업을 먼저 중지해 주세요.")); }
-    private void ensureEngineIdle() throws IOException { if (hasRunningTurns()) throw new IOException(t("진행 중인 작업을 먼저 중지해 주세요.")); }
+    private void ensureEngineIdle() throws IOException {
+        if (hasRunningTurns() || hasProOperations()) throw new IOException(t("진행 중인 작업을 먼저 중지해 주세요."));
+    }
     private void ensureRuntimeSettingsIdle() throws IOException {
         ensureEngineIdle();
         if (terminalProcess != null && terminalProcess.isAlive()) throw new IOException(t("터미널 명령을 마친 뒤 Linux 설정을 변경해 주세요."));
@@ -634,12 +811,39 @@ public final class Engine {
         }
     }
     private String resolvedModel(String requested) {
+        if (ProContextBuilder.MODEL_ID.equals(requested))
+            throw new IllegalArgumentException(t("GPT-6-Pro 웹 모델은 Codex 요청으로 보낼 수 없습니다."));
         if (requested != null && !requested.isBlank()) return requested;
         for (int i = 0; i < models.length(); i++) {
             JSONObject model = models.optJSONObject(i);
             if (model != null && model.optBoolean("isDefault")) return model.optString("model", model.optString("id"));
         }
         return "";
+    }
+    /** Catalog-driven Fast selection. Do not infer support from a model id or display name. */
+    private String fastServiceTier(String model) throws IOException {
+        JSONObject selected = null;
+        for (int i = 0; i < models.length(); i++) {
+            JSONObject candidate = models.optJSONObject(i);
+            if (candidate != null && (model.equals(candidate.optString("model")) || model.equals(candidate.optString("id")))) {
+                selected = candidate; break;
+            }
+        }
+        if (selected != null) {
+            JSONArray tiers = selected.optJSONArray("serviceTiers");
+            for (String desired : new String[]{"fast", "priority"}) {
+                if (tiers != null) for (int i = 0; i < tiers.length(); i++) {
+                    JSONObject tier = tiers.optJSONObject(i);
+                    if (tier != null && desired.equals(tier.optString("id"))) return desired;
+                }
+            }
+            JSONArray legacy = selected.optJSONArray("additionalSpeedTiers");
+            for (String desired : new String[]{"fast", "priority"}) {
+                if (legacy != null) for (int i = 0; i < legacy.length(); i++)
+                    if (desired.equals(legacy.optString(i))) return desired;
+            }
+        }
+        throw new IOException(t("선택한 모델에서는 Fast 모드를 지원하지 않습니다."));
     }
     private String workspaceInstructions(String model) {
         JSONObject workspace = documents.workspace();
@@ -668,23 +872,44 @@ public final class Engine {
         if (!model.isEmpty()) params.put("model", model);
         return params;
     }
+    private String codexThreadId(JSONObject session) {
+        if (session == null) return "";
+        if (session.has("codexThreadId")) return session.optString("codexThreadId");
+        return session.has("sessionVersion") ? "" : session.optString("id");
+    }
+    private String activeCodexThreadId() { return codexThreadId(active); }
+    private JSONObject sessionByCodexThreadId(String remoteId) {
+        if (remoteId == null || remoteId.isBlank()) return null;
+        for (int i = 0; i < sessions.length(); i++) {
+            JSONObject value = sessions.optJSONObject(i);
+            if (value != null && remoteId.equals(codexThreadId(value))) return value;
+        }
+        return null;
+    }
+    private String localIdForCodexThread(String remoteId) {
+        JSONObject value = sessionByCodexThreadId(remoteId);
+        return value == null ? "" : value.optString("id");
+    }
     /** thread/resume schema accepts cwd and instructions but not dynamicTools. */
     private void resumeRemote(boolean force) throws Exception { resumeRemote(force, active == null ? "" : active.optString("model")); }
     private void resumeRemote(boolean force, String model) throws Exception {
-        if (active == null || threadId.isEmpty() || (!force && threadId.equals(serverThreadId))) return;
+        String remoteId = activeCodexThreadId();
+        if (active == null || remoteId.isEmpty() || (!force && remoteId.equals(serverThreadId))) return;
         if (!active.optString("workspaceKey").equals(documents.key()))
             throw new IOException(t("이 대화의 원래 작업 폴더를 다시 연결해 주세요."));
         documents.requireWorkspaceAvailable();
-        call("thread/resume", obj("threadId", threadId, "excludeTurns", true, "cwd", projectDirectory().getAbsolutePath(),
+        call("thread/resume", obj("threadId", remoteId, "excludeTurns", true, "cwd", projectDirectory().getAbsolutePath(),
             "sandbox", permissionMode, "approvalPolicy", approvalPolicy(), "approvalsReviewer", approvalsReviewer(), "developerInstructions", workspaceInstructions(resolvedModel(model))));
-        serverThreadId = threadId;
+        serverThreadId = remoteId;
         restoreImageHistory();
     }
     /** Old local records predate persisted image IDs; only recover them after a server resume. */
     private void restoreImageHistory() {
         if (active == null || active.optInt("imageHistoryVersion") >= 1) return;
         try {
-            JSONObject thread = call("thread/read", obj("threadId", threadId, "includeTurns", true)).optJSONObject("thread");
+            String remoteId = activeCodexThreadId();
+            if (remoteId.isBlank()) return;
+            JSONObject thread = call("thread/read", obj("threadId", remoteId, "includeTurns", true)).optJSONObject("thread");
             JSONArray turns = thread == null ? null : thread.optJSONArray("turns");
             if (turns == null) return;
             for (int t = 0; t < turns.length(); t++) {
@@ -756,8 +981,11 @@ public final class Engine {
         if (attachmentIds != null && attachmentIds.length() > 0) return t("첨부 파일 ") + attachmentIds.length() + t("개");
         return t("제목 없는 대화");
     }
+    private String sessionWorkspaceName() {
+        return documents.key().isBlank() ? "" : documents.workspace().optString("name");
+    }
     private JSONObject userMessage(String text, JSONArray attachmentIds, JSONArray skills, JSONArray mentions) throws Exception {
-        JSONObject message = obj("role", "user", "text", text, "id", UUID.randomUUID().toString());
+        JSONObject message = obj("role", "user", "text", text, "id", UUID.randomUUID().toString(), "createdAt", System.currentTimeMillis());
         if (skills != null && skills.length() > 0) message.put("skills", new JSONArray(skills.toString()));
         if (mentions != null && mentions.length() > 0) message.put("mentions", new JSONArray(mentions.toString()));
         if (attachmentIds != null && attachmentIds.length() > 0) {
@@ -778,13 +1006,49 @@ public final class Engine {
         if (args.has("expectedThreadId") && !args.optString("expectedThreadId").equals(threadId)) throw new IOException(t("대화가 바뀌었습니다. 현재 대화에서 다시 보내 주세요."));
         if (args.has("workspaceKey")) requireScope(args);
     }
+    /** Fetch older local display history without exposing another thread or an overlapping cursor item. */
+    private JSONObject history(JSONObject args) throws IOException {
+        // JSONObject#getString throws checked JSONException. Validate the wire
+        // shape explicitly so malformed/stale requests take the normal RPC
+        // error path and this helper remains an IOException-only boundary.
+        Object rawThread = args.opt("threadId");
+        Object rawBeforeId = args.opt("beforeId");
+        if (!(rawThread instanceof String) || !(rawBeforeId instanceof String))
+            throw new IOException(t("이전 메시지 위치가 오래되었습니다. 대화를 다시 열어 주세요."));
+        String requestedThread = (String) rawThread;
+        String beforeId = (String) rawBeforeId;
+        if (requestedThread.isBlank() || beforeId.isBlank() || active == null || !requestedThread.equals(threadId)
+                || !requestedThread.equals(active.optString("id")))
+            throw new IOException(t("대화가 바뀌었습니다. 현재 대화를 다시 열어 주세요."));
+        JSONObject stored = session(requestedThread);
+        if (stored == null || stored.optBoolean("deletionPending")) throw new IOException(t("대화를 찾을 수 없습니다."));
+        JSONArray messages = stored.optJSONArray("messages");
+        if (messages == null) messages = new JSONArray();
+        int cursor = -1;
+        for (int i = 0; i < messages.length(); i++) {
+            JSONObject message = messages.optJSONObject(i);
+            if (message != null && beforeId.equals(message.optString("id"))) {
+                if (cursor >= 0) throw new IOException(t("이전 메시지 위치가 오래되었습니다. 대화를 다시 열어 주세요."));
+                cursor = i;
+            }
+        }
+        if (cursor < 0) throw new IOException(t("이전 메시지 위치가 오래되었습니다. 대화를 다시 열어 주세요."));
+        int requestedLimit = args.has("limit") ? args.optInt("limit", SNAPSHOT_MESSAGE_LIMIT) : SNAPSHOT_MESSAGE_LIMIT;
+        int limit = Math.max(1, Math.min(SNAPSHOT_MESSAGE_LIMIT, requestedLimit));
+        int start = Math.max(0, cursor - limit);
+        JSONArray page = new JSONArray();
+        for (int i = start; i < cursor; i++) page.put(uiJsonCopy(messages.opt(i)));
+        return obj("threadId", requestedThread, "messages", page, "messageHistory", messageHistory(messages, start));
+    }
     private void steer(JSONObject args) throws Exception {
         requireChatScope(args);
         String text = args.optString("text").trim();
         if (text.isEmpty() || text.length() > 50000) throw new IOException(t("추가 지시는 1~50,000자로 입력해 주세요."));
         if (!busy || turnId.isEmpty() || !turnId.equals(args.optString("expectedTurnId"))) throw new IOException(t("진행 중인 작업이 변경되거나 종료되었습니다. 새 메시지로 보내 주세요."));
         JSONArray input = input(text, args.optJSONArray("attachments"), args.optJSONArray("skills"), args.optJSONArray("mentions"));
-        call("turn/steer", obj("threadId", threadId, "expectedTurnId", turnId, "input", input));
+        String remoteId = activeCodexThreadId();
+        if (remoteId.isBlank()) throw new IOException(t("이 대화에는 진행 중인 Codex 작업이 없습니다."));
+        call("turn/steer", obj("threadId", remoteId, "expectedTurnId", turnId, "input", input));
         active.getJSONArray("messages").put(userMessage(text, args.optJSONArray("attachments"), args.optJSONArray("skills"), args.optJSONArray("mentions")));
         persist(); publish();
     }
@@ -800,7 +1064,164 @@ public final class Engine {
         devTools.configure(builder, codexHome.root(), runtimeAliases()); builder.environment().put("GIT_OPTIONAL_LOCKS", "0"); builder.environment().put("GIT_TERMINAL_PROMPT", "0");
         return ProcessOutput.run(builder, 16 * 1024 * 1024, 15);
     }
-    private void send(String text, String model, String effort, JSONArray attachmentIds, JSONArray skills, JSONArray mentions) throws Exception {
+    private String proGitDiff() {
+        try {
+            File directory = documents.directDirectory();
+            if (directory == null || !new File(directory, ".git").exists()) return "";
+            return new String(git(directory, List.of("diff", "--no-ext-diff", "--unified=3", "--", ".")), StandardCharsets.UTF_8);
+        } catch (Exception ignored) { return ""; }
+    }
+    private JSONObject preparePro(JSONObject args) throws Exception {
+        requireChatScope(args);
+        if (!ProContextBuilder.MODEL_ID.equals(args.optString("model"))) throw new IOException(t("잘못된 GPT-6-Pro 모델 요청입니다."));
+        if (busy) throw new IOException(t("현재 Codex 작업을 먼저 중지해 주세요."));
+        if (hasProOperations()) throw new IOException(t("GPT-6-Pro 답변을 기다리는 중입니다."));
+        JSONArray skills = args.optJSONArray("skills");
+        if (skills != null && skills.length() > 0) throw new IOException(t("GPT-6-Pro 읽기 전용 모드에서는 스킬을 사용할 수 없습니다."));
+        documents.requireWorkspaceAvailable();
+        String text = args.optString("text", "");
+        JSONObject contextBundle = new ProContextBuilder(documents, attachments, instructions).build(
+            text, args.optJSONArray("attachments"), args.optJSONArray("mentions"), active, proGitDiff());
+        String operationId = UUID.randomUUID().toString();
+        String localId = active == null ? "local-" + UUID.randomUUID() : threadId;
+        JSONArray replacement = new JSONArray(sessions.toString());
+        JSONObject target = null;
+        for (int i = 0; i < replacement.length(); i++) {
+            JSONObject value = replacement.optJSONObject(i);
+            if (value != null && localId.equals(value.optString("id"))) { target = value; break; }
+        }
+        if (target == null) {
+            target = obj("id", localId, "sessionVersion", 2, "title", titleFor(text, args.optJSONArray("attachments")),
+                "workspace", sessionWorkspaceName(), "workspaceKey", documents.key(),
+                "messages", new JSONArray(), "imageHistoryVersion", 1, "phoneToolsVersion", 1, "fastMode", false);
+            replacement.put(target);
+        }
+        JSONObject message = userMessage(text, args.optJSONArray("attachments"), null, args.optJSONArray("mentions"));
+        message.put("backend", "chatgpt-web").put("source", "ChatGPT Pro")
+            .put("requestedModel", ProContextBuilder.MODEL_ID).put("displayModel", ProContextBuilder.DISPLAY_MODEL)
+            .put("operationId", operationId).put("contextHash", contextBundle.getString("contextHash")).put("status", "sending");
+        target.getJSONArray("messages").put(message);
+        target.put("lastBackend", "chatgpt-web").put("proOperation", obj("id", operationId,
+            "messageId", message.getString("id"), "contextHash", contextBundle.getString("contextHash"),
+            "startedAt", System.currentTimeMillis()));
+        persistSessions(replacement);
+        replaceSessions(replacement);
+        threadId = localId; active = session(localId); syncCurrentTurn(); status = t("Pro 답변 중"); publish();
+        JSONObject result = new JSONObject(contextBundle.toString());
+        result.put("operationId", operationId).put("threadId", localId)
+            .put("requestedModel", ProContextBuilder.MODEL_ID).put("displayModel", ProContextBuilder.DISPLAY_MODEL)
+            .put("chatConversationId", active.optString("chatConversationId"))
+            .put("chatConversationPath", active.optString("chatConversationPath"))
+            .put("chatProjectPath", active.optString("chatProjectPath"));
+        return result;
+    }
+    private JSONObject completePro(JSONObject args) throws Exception {
+        String localId = args.getString("threadId"), operationId = args.getString("operationId");
+        String reply = args.optString("reply").trim();
+        if (reply.isEmpty() || reply.length() > 200_000) throw new IOException(t("ChatGPT Pro 답변 길이가 올바르지 않습니다."));
+        JSONArray replacement = new JSONArray(sessions.toString());
+        JSONObject target = sessionIn(replacement, localId);
+        if (target == null) throw new IOException(t("대화를 찾을 수 없습니다."));
+        if (hasCompletedPro(target, operationId)) return obj("ok", true, "duplicate", true);
+        JSONObject operation = target.optJSONObject("proOperation");
+        if (operation == null || !operationId.equals(operation.optString("id"))) throw new IOException(t("GPT-6-Pro 작업이 변경되었습니다."));
+        JSONObject user = messageIn(target, operation.optString("messageId"));
+        if (user == null || !operationId.equals(user.optString("operationId"))) throw new IOException(t("GPT-6-Pro 사용자 메시지를 찾을 수 없습니다."));
+        user.put("status", "completed");
+        JSONObject assistant = obj("id", UUID.randomUUID().toString(), "role", "assistant", "text", reply,
+            "backend", "chatgpt-web", "source", "ChatGPT Pro", "requestedModel", ProContextBuilder.MODEL_ID,
+            "displayModel", ProContextBuilder.DISPLAY_MODEL, "operationId", operationId,
+            "contextHash", user.optString("contextHash"), "status", "completed");
+        String remoteMessageId = boundedRemoteId(args.optString("remoteMessageId"));
+        if (!remoteMessageId.isBlank()) assistant.put("remoteMessageId", remoteMessageId);
+        String conversationId = boundedRemoteId(args.optString("chatConversationId"));
+        if (!conversationId.isBlank()) target.put("chatConversationId", conversationId);
+        String projectPath = boundedProjectPath(args.optString("chatProjectPath"));
+        if (!projectPath.isBlank()) target.put("chatProjectPath", projectPath);
+        String effectiveProject = projectPath.isBlank() ? target.optString("chatProjectPath") : projectPath;
+        String conversationPath = boundedConversationPath(args.optString("chatConversationPath"), conversationId, effectiveProject);
+        if (!conversationPath.isBlank()) target.put("chatConversationPath", conversationPath);
+        target.getJSONArray("messages").put(assistant); target.remove("proOperation");
+        persistSessions(replacement);
+        replaceSessions(replacement);
+        if (localId.equals(threadId)) { active = session(localId); status = ready ? t("연결됨") : t("시작할 준비가 됐습니다"); }
+        publish();
+        taskNotification("completed", t("답변 완료"), t("ChatGPT Pro가 답변을 마쳤습니다."), localId, "");
+        return obj("ok", true, "threadId", localId);
+    }
+    private JSONObject failPro(JSONObject args) throws Exception {
+        String localId = args.getString("threadId"), operationId = args.getString("operationId");
+        String resultStatus = args.optString("status", "failed");
+        if (!Set.of("not_sent", "uncertain", "failed").contains(resultStatus)) throw new IOException(t("잘못된 GPT-6-Pro 작업 상태입니다."));
+        JSONArray replacement = new JSONArray(sessions.toString());
+        JSONObject target = sessionIn(replacement, localId);
+        if (target == null) throw new IOException(t("대화를 찾을 수 없습니다."));
+        if (hasCompletedPro(target, operationId)) return obj("ok", true, "completed", true);
+        JSONObject operation = target.optJSONObject("proOperation");
+        if (operation == null || !operationId.equals(operation.optString("id"))) return obj("ok", true, "stale", true);
+        JSONObject user = messageIn(target, operation.optString("messageId"));
+        if (user != null) {
+            user.put("status", resultStatus);
+            String reason = args.optString("reason");
+            if (!reason.isBlank()) user.put("error", reason.substring(0, Math.min(1000, reason.length())));
+        }
+        String conversationId = boundedRemoteId(args.optString("chatConversationId"));
+        if (!conversationId.isBlank()) target.put("chatConversationId", conversationId);
+        String projectPath = boundedProjectPath(args.optString("chatProjectPath"));
+        if (!projectPath.isBlank()) target.put("chatProjectPath", projectPath);
+        String effectiveProject = projectPath.isBlank() ? target.optString("chatProjectPath") : projectPath;
+        String conversationPath = boundedConversationPath(args.optString("chatConversationPath"), conversationId, effectiveProject);
+        if (!conversationPath.isBlank()) target.put("chatConversationPath", conversationPath);
+        target.remove("proOperation");
+        persistSessions(replacement); replaceSessions(replacement);
+        if (localId.equals(threadId)) { active = session(localId); status = resultStatus.equals("uncertain") ? t("웹 전송 상태 확인 필요") : t("요청 실패"); }
+        publish(); return obj("ok", true, "status", resultStatus);
+    }
+    private static JSONObject sessionIn(JSONArray values, String id) {
+        for (int i = 0; i < values.length(); i++) {
+            JSONObject value = values.optJSONObject(i);
+            if (value != null && id.equals(value.optString("id"))) return value;
+        }
+        return null;
+    }
+    private static JSONObject messageIn(JSONObject session, String id) {
+        JSONArray messages = session.optJSONArray("messages"); if (messages == null) return null;
+        for (int i = messages.length() - 1; i >= 0; i--) {
+            JSONObject value = messages.optJSONObject(i);
+            if (value != null && id.equals(value.optString("id"))) return value;
+        }
+        return null;
+    }
+    private static boolean hasCompletedPro(JSONObject session, String operationId) {
+        JSONArray messages = session.optJSONArray("messages"); if (messages == null) return false;
+        for (int i = 0; i < messages.length(); i++) {
+            JSONObject value = messages.optJSONObject(i);
+            if (value != null && "assistant".equals(value.optString("role")) && operationId.equals(value.optString("operationId"))
+                    && "completed".equals(value.optString("status"))) return true;
+        }
+        return false;
+    }
+    private static String boundedRemoteId(String value) {
+        if (value == null || value.length() > 200 || !value.matches("[A-Za-z0-9_-]*")) return "";
+        return value;
+    }
+    private static String boundedProjectPath(String value) {
+        if (value == null) return "";
+        String normalized = value.replaceAll("/$", "");
+        return normalized.matches("/g/g-p-[A-Za-z0-9_-]+/project|/projects/[A-Za-z0-9_-]+") ? normalized : "";
+    }
+    private static String boundedConversationPath(String value, String conversationId, String projectPath) {
+        if (value == null || conversationId == null || conversationId.isBlank()) return "";
+        String normalized = value.replaceAll("/$", "");
+        if (normalized.equals("/c/" + conversationId)) return normalized;
+        String scoped = "";
+        if (projectPath != null && projectPath.matches("/g/g-p-[A-Za-z0-9_-]+/project"))
+            scoped = projectPath.substring(0, projectPath.length() - "/project".length()) + "/c/" + conversationId;
+        else if (projectPath != null && projectPath.matches("/projects/[A-Za-z0-9_-]+")) scoped = projectPath + "/c/" + conversationId;
+        return normalized.equals(scoped) ? normalized : "";
+    }
+    private void send(String text, String model, String effort, JSONArray attachmentIds, JSONArray skills, JSONArray mentions, Boolean fastMode) throws Exception {
+        if (ProContextBuilder.MODEL_ID.equals(model)) throw new IOException(t("GPT-6-Pro 웹 모델은 전용 전송 경로를 사용해야 합니다."));
         if (text.length() > 50000) throw new IOException(t("메시지는 최대 50,000자까지 입력할 수 있습니다."));
         documents.requireWorkspaceAvailable();
         JSONArray input = input(text, attachmentIds, skills, mentions);
@@ -808,32 +1229,45 @@ public final class Engine {
         start();
         if (account.length() == 0) throw new IOException(t("ChatGPT 계정으로 로그인해 주세요."));
         String actualModel = resolvedModel(model);
+        // A supplied value applies to this new turn only. Omission deliberately
+        // preserves legacy inheritance and does not alter a session preference.
+        String serviceTierForTurn = fastMode == null ? null : (fastMode ? fastServiceTier(actualModel) : "default");
         JSONObject candidate = null;
-        String candidateThreadId = "";
+        String candidateRemoteId = "", candidateLocalId = "";
         if (active == null) {
             JSONObject params = threadStartParams(actualModel);
             JSONObject thread = call("thread/start", params).getJSONObject("thread");
-            candidateThreadId = thread.getString("id");
-            candidate = obj("id", candidateThreadId, "title", titleFor(text, attachmentIds), "workspace", documents.workspace().optString("name"),
-                "workspaceKey", documents.key(), "model", actualModel,
-                "messages", new JSONArray(), "imageHistoryVersion", 1, "phoneToolsVersion", 1);
+            candidateRemoteId = thread.getString("id");
+            candidateLocalId = "local-" + UUID.randomUUID();
+            candidate = obj("id", candidateLocalId, "sessionVersion", 2, "codexThreadId", candidateRemoteId,
+                "title", titleFor(text, attachmentIds), "workspace", sessionWorkspaceName(), "workspaceKey", documents.key(), "model", actualModel,
+                "messages", new JSONArray(), "imageHistoryVersion", 1, "phoneToolsVersion", 1, "fastMode", false);
         } else {
             if (!active.optString("workspaceKey").equals(documents.key())) throw new IOException(t("이 대화의 원래 작업 폴더를 다시 연결해 주세요."));
-            resumeRemote(!actualModel.equals(active.optString("model")), actualModel);
+            if (activeCodexThreadId().isBlank()) {
+                JSONObject thread = call("thread/start", threadStartParams(actualModel)).getJSONObject("thread");
+                candidateRemoteId = thread.getString("id");
+            } else resumeRemote(!actualModel.equals(active.optString("model")), actualModel);
         }
-        String targetThread = candidate == null ? threadId : candidateThreadId;
+        String targetLocal = candidate == null ? threadId : candidateLocalId;
+        String targetRemote = candidateRemoteId.isBlank() ? activeCodexThreadId() : candidateRemoteId;
         busy = true; status = t("작업 중"); publish();
         try {
-            JSONObject params = obj("threadId", targetThread, "input", input, "cwd", projectDirectory().getAbsolutePath(), "approvalPolicy", approvalPolicy(), "approvalsReviewer", approvalsReviewer());
+            JSONObject params = obj("threadId", targetRemote, "input", input, "cwd", projectDirectory().getAbsolutePath(), "approvalPolicy", approvalPolicy(), "approvalsReviewer", approvalsReviewer());
             if (!actualModel.isEmpty()) params.put("model", actualModel);
             if (!effort.isEmpty()) params.put("effort", effort);
+            if (serviceTierForTurn != null) params.put("serviceTierForTurn", serviceTierForTurn);
             JSONObject turn = call("turn/start", params).optJSONObject("turn");
-            if (candidate != null) { active = candidate; threadId = candidateThreadId; serverThreadId = candidateThreadId; sessions.put(active); }
-            else active.put("model", actualModel);
+            if (candidate != null) { active = candidate; threadId = candidateLocalId; serverThreadId = candidateRemoteId; sessions.put(active); }
+            else {
+                active.put("model", actualModel);
+                if (activeCodexThreadId().isBlank()) { active.put("codexThreadId", targetRemote); serverThreadId = targetRemote; }
+            }
+            if (fastMode != null) active.put("fastMode", fastMode);
             active.getJSONArray("messages").put(userMessage(text, attachmentIds, skills, mentions));
             if (turn != null) {
                 String startedTurn = turn.optString("id", "");
-                if (!startedTurn.isBlank()) runningTurns.put(targetThread, startedTurn);
+                if (!startedTurn.isBlank()) runningTurns.put(targetLocal, startedTurn);
             }
             syncCurrentTurn();
             persist(); publish();
@@ -878,6 +1312,9 @@ public final class Engine {
      */
     private boolean deleteSession(String id) throws Exception {
         ensureIdle();
+        JSONObject existing = session(id);
+        if (existing != null && existing.optJSONObject("proOperation") != null)
+            throw new IOException(t("GPT-6-Pro 답변을 기다리는 대화는 먼저 중지해 주세요."));
         boolean found = false;
         JSONArray marked = new JSONArray(sessions.toString());
         for (int i = 0; i < marked.length(); i++) {
@@ -893,7 +1330,9 @@ public final class Engine {
         persistSessions(marked);
         replaceSessions(marked);
         if (id.equals(threadId)) clearActive();
-        if (!ready || !deleteRemote(id, false)) return true;
+        JSONObject markedSession = session(id);
+        String remoteId = codexThreadId(markedSession);
+        if (!remoteId.isBlank() && (!ready || !deleteRemote(remoteId, false))) return true;
 
         JSONArray remaining = withoutPendingSession(id);
         try {
@@ -950,8 +1389,10 @@ public final class Engine {
         ArrayList<String> completed = new ArrayList<>();
         for (int i = 0; i < sessions.length(); i++) {
             JSONObject session = sessions.optJSONObject(i);
-            if (session != null && session.optBoolean("deletionPending") && deleteRemote(session.optString("id"), true))
-                completed.add(session.optString("id"));
+            if (session != null && session.optBoolean("deletionPending")) {
+                String remoteId = codexThreadId(session);
+                if (remoteId.isBlank() || deleteRemote(remoteId, true)) completed.add(session.optString("id"));
+            }
         }
         for (String id : completed) {
             JSONArray remaining = withoutPendingSession(id);
@@ -1023,7 +1464,7 @@ public final class Engine {
                     if (String.valueOf(entry.getValue().id).equals(String.valueOf(id))) {
                         PendingRequest request = entry.getValue();
                         if (request.method.contains("requestApproval")) {
-                            try { JSONObject approvalSession = session(request.params.optString("threadId", threadId)); if (approvalSession != null) { approvalSession.put("approvalPending", false); persist(); } } catch (Exception ignored) {}
+                            try { JSONObject approvalSession = sessionByCodexThreadId(request.params.optString("threadId")); if (approvalSession != null) { approvalSession.put("approvalPending", false); persist(); } } catch (Exception ignored) {}
                         }
                         event("server.resolved", obj("key", entry.getKey())); return true;
                     }
@@ -1031,10 +1472,11 @@ public final class Engine {
                 });
                 return;
             }
-            String eventThreadId = p.optString("threadId");
-            if (eventThreadId.isBlank()) eventThreadId = threadId;
-            JSONObject target = eventThreadId.isBlank() ? active : session(eventThreadId);
-            boolean currentThread = eventThreadId.isBlank() || eventThreadId.equals(threadId);
+            String remoteEventThreadId = p.optString("threadId");
+            boolean implicitCurrentThread = remoteEventThreadId.isBlank();
+            String eventThreadId = implicitCurrentThread ? threadId : localIdForCodexThread(remoteEventThreadId);
+            JSONObject target = implicitCurrentThread ? active : (eventThreadId.isBlank() ? null : session(eventThreadId));
+            boolean currentThread = implicitCurrentThread || eventThreadId.equals(threadId);
             if (method.equals("item/agentMessage/delta") && target != null) {
                 String id = p.optString("itemId");
                 JSONObject previous = active;
@@ -1092,7 +1534,8 @@ public final class Engine {
                 event("agent.event", obj("method", method, "params", p));
             }
         } catch (Exception e) {
-            String failedThread = p.optString("threadId", threadId);
+            String remoteFailedThread = p.optString("threadId");
+            String failedThread = remoteFailedThread.isBlank() ? threadId : localIdForCodexThread(remoteFailedThread);
             event("error", obj("threadId", failedThread, "message", unwrap(e).getMessage()));
         }
     }
@@ -1161,16 +1604,20 @@ public final class Engine {
             if (!method.equals("item/tool/call")) {
                 String key = UUID.randomUUID().toString();
                 requests.put(key, new PendingRequest(connection, id, method, p));
+                String remoteThread = p.optString("threadId");
+                String localThread = remoteThread.isBlank() ? threadId : localIdForCodexThread(remoteThread);
                 if (method.contains("requestApproval")) {
-                    String approvalThread = p.optString("threadId", threadId);
+                    String approvalThread = localThread;
                     JSONObject approvalSession = session(approvalThread);
                     if (approvalSession != null) { approvalSession.put("approvalPending", true); persist(); publish(); }
                     taskNotification("approval", t("승인 필요"), p.optString("reason", t("Codex 작업의 승인이 필요합니다.")), approvalThread, key);
                 }
-                event("server.request", obj("key", key, "method", method, "params", p));
+                JSONObject uiParams = new JSONObject(p.toString());
+                if (!localThread.isBlank()) uiParams.put("threadId", localThread);
+                event("server.request", obj("key", key, "method", method, "params", uiParams));
                 return;
             }
-            String requestThreadId = p.optString("threadId");
+            String requestThreadId = localIdForCodexThread(p.optString("threadId"));
             JSONObject requestSession = session(requestThreadId);
             if (requestSession == null) throw new IOException(t("대화 작업을 찾을 수 없습니다."));
             String requestWorkspaceKey = requestSession.optString("workspaceKey");

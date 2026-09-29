@@ -15,6 +15,14 @@ class PublishReleaseTests(unittest.TestCase):
         env={'GITHUB_REPOSITORY':'example/app','GITHUB_SHA':'abc','GITHUB_REF':'refs/heads/main','GITHUB_EVENT_NAME':'push'}
         with patch.dict(os.environ,env), patch.object(release,'validate_assets',return_value=({'versionName':'0.1.12-alpha'},[])), patch.object(release,'gh',return_value=json.dumps([[{'tag_name':'v0.1.12-alpha','draft':False}]])) as gh:
             release.publish();self.assertEqual(gh.call_count,1)
+    def test_existing_mirror_public_version_stays_immutable_without_a_notes_staging_file(self):
+        env={'GITHUB_REPOSITORY':'SeeUSoon93/mobile-codex','GITHUB_SHA':'abc','GITHUB_REF':'refs/heads/main','GITHUB_EVENT_NAME':'push'}
+        with tempfile.TemporaryDirectory() as directory:
+            old = Path.cwd(); os.chdir(directory)
+            try:
+                with patch.dict(os.environ,env), patch.object(release,'validate_assets',return_value=({'versionName':'0.2.0'},[])), patch.object(release,'gh',return_value=json.dumps([[{'tag_name':'v0.2.0','draft':False}]])) as gh:
+                    release.publish(); self.assertEqual(gh.call_count,1)
+            finally: os.chdir(old)
     def test_pull_requests_cannot_publish(self):
         with patch.dict(os.environ,{'GITHUB_REPOSITORY':'example/app','GITHUB_SHA':'abc','GITHUB_REF':'refs/pull/1/merge','GITHUB_EVENT_NAME':'pull_request'}), patch.object(release,'gh') as gh:
             with self.assertRaises(ValueError):release.publish()
@@ -33,3 +41,26 @@ class PublishReleaseTests(unittest.TestCase):
         with patch.dict(os.environ,env),patch.object(release,'validate_assets',return_value=({'versionName':'0.1.12-alpha','fileName':'app.apk'},[Path('app.apk')])),patch.object(release,'gh',side_effect=gh) as call:
             with self.assertRaises(RuntimeError):release.publish()
             self.assertFalse(any(c.args[:2]==('release','edit') for c in call.call_args_list))
+    def test_mirror_draft_uses_verified_canonical_notes_but_its_own_target_commit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); (root / 'artifacts/update').mkdir(parents=True)
+            (root / 'artifacts/canonical-release-notes.md').write_text('canonical public notes')
+            (root / 'app.apk').write_bytes(b'x')
+            env={'GITHUB_REPOSITORY':'SeeUSoon93/mobile-codex','GITHUB_SHA':'mirror-merge-commit','GITHUB_REF':'refs/heads/main','GITHUB_EVENT_NAME':'push'}
+            edited_notes=[]
+            def gh(*args):
+                if args[0]=='api': return '[[]]'
+                if args[:2]==('release','view'): return json.dumps({'assets':[{'name':'app.apk','size':1}]})
+                if args[:2]==('release','edit') and '--notes-file' in args:
+                    edited_notes.append(Path(args[args.index('--notes-file') + 1]).read_text())
+                return ''
+            old = Path.cwd(); os.chdir(root)
+            try:
+                with patch.dict(os.environ,env),patch.object(release,'validate_assets',return_value=({'versionName':'0.2.0','fileName':'app.apk'},[Path('app.apk')])),patch.object(release,'gh',side_effect=gh) as call:
+                    release.publish()
+            finally: os.chdir(old)
+            create = next(c for c in call.call_args_list if c.args[:2]==('release','create'))
+            self.assertIn('mirror-merge-commit', create.args)
+            notes_edit = next(c for c in call.call_args_list if c.args[:2]==('release','edit') and '--notes-file' in c.args)
+            self.assertIn('--notes-file', notes_edit.args)
+            self.assertEqual(['canonical public notes'], edited_notes)

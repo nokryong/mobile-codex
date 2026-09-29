@@ -8,6 +8,8 @@ import re
 import subprocess
 import tempfile
 
+MIRROR_REPO = 'SeeUSoon93/mobile-codex'
+
 
 def gh(*args):
     return subprocess.run(['gh', *args], check=True, capture_output=True, text=True).stdout
@@ -48,17 +50,25 @@ def publish():
     if existing and not existing['draft']:
         print(f'::notice::Release {tag} already exists; published assets are immutable. Bump versionName and versionCode for the next release.')
         return
+    canonical_notes = None
+    if repo == MIRROR_REPO:
+        notes_path = Path('artifacts/canonical-release-notes.md')
+        if not notes_path.is_file():
+            raise ValueError('Mirror release is missing verified canonical release notes.')
+        canonical_notes = notes_path.read_text(encoding='utf-8')
     if not existing:
-        notes = (f'## Install\nDownload **{metadata["fileName"]}** below and open it on an ARM64 device running Android 10 or later.\n\n'
-                 'This is an independent alpha client, not an official OpenAI app. Review the README for setup and limitations.\n\n'
-                 'The APK uses the existing release signing key. Your installed app must have a compatible package and signing certificate.\n\n'
-                 '## Source and verification\nThe source archives for this tag contain the app source. '
-                 '`devtools-corresponding-source.zip` contains pinned development-tool sources, patches, and build recipes. '
-                 'The JSON manifest and SHA-256 file describe the verified APK. Third-party licenses are retained.\n\n'
-                 f'Build commit: `{commit}`\n')
-        changes = Path('docs/releases') / (version + '.md')
-        if changes.is_file():
-            notes = changes.read_text(encoding='utf-8').rstrip() + '\n\n' + notes
+        notes = canonical_notes
+        if notes is None:
+            notes = (f'## Install\nDownload **{metadata["fileName"]}** below and open it on an ARM64 device running Android 10 or later.\n\n'
+                     'This is an independent client, not an official OpenAI app. Review the README for setup and limitations.\n\n'
+                     'The APK uses the existing release signing key. Your installed app must have a compatible package and signing certificate.\n\n'
+                     '## Source and verification\nThe source archives for this tag contain the app source. '
+                     '`devtools-corresponding-source.zip` contains pinned development-tool sources, patches, and build recipes. '
+                     'The JSON manifest and SHA-256 file describe the verified APK. Third-party licenses are retained.\n\n'
+                     f'Build commit: `{commit}`\n')
+            changes = Path('docs/releases') / (version + '.md')
+            if changes.is_file():
+                notes = changes.read_text(encoding='utf-8').rstrip() + '\n\n' + notes
         with tempfile.TemporaryDirectory() as directory:
             body = Path(directory) / 'release.md'; body.write_text(notes)
             args = ['release','create',tag,'--repo',repo,'--target',commit,'--title',f'Mobile Codex {version}','--notes-file',str(body),'--draft']
@@ -73,6 +83,10 @@ def publish():
     for path in assets:
         if not any(a['name'] == path.name and a['size'] == path.stat().st_size for a in remote):
             raise ValueError('Release upload incomplete: ' + path.name)
+    if canonical_notes is not None:
+        with tempfile.TemporaryDirectory() as directory:
+            body = Path(directory) / 'release.md'; body.write_text(canonical_notes, encoding='utf-8')
+            gh('release','edit',tag,'--repo',repo,'--notes-file',str(body))
     gh('release','edit',tag,'--repo',repo,'--draft=false')
     print(f'Published https://github.com/{repo}/releases/tag/{tag}')
 

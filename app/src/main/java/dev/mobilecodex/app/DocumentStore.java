@@ -26,10 +26,9 @@ public final class DocumentStore {
     private static final int BACKUP_LIMIT = 32 * 1024 * 1024;
     private final Context context;
     private Uri tree;
-    private String label = "";
-    private String detachedKey = "", detachedName = "";
+    private String label = "Codex";
     private ProjectRegistry projects;
-    private final File backups;
+    private final File backups, generalRoot;
     private static final String[] COLUMNS = {Document.COLUMN_DOCUMENT_ID, Document.COLUMN_DISPLAY_NAME,
         Document.COLUMN_MIME_TYPE, Document.COLUMN_SIZE, Document.COLUMN_LAST_MODIFIED, Document.COLUMN_FLAGS};
 
@@ -37,15 +36,32 @@ public final class DocumentStore {
         this.context = context;
         backups = new File(context.getFilesDir(), "recovery");
         backups.mkdirs();
+        // Preserve the long-standing physical workspace path so an upgrade never
+        // hides or moves existing files. "Codex" is its user-facing name.
+        generalRoot = new File(context.getFilesDir(), "workspace");
+        generalRoot.mkdirs();
         String registry = context.getSharedPreferences("projects", 0).getString("registry", "");
         projects = ProjectRegistry.fromJson(registry);
         // Migrate the old single-folder preference into the multi-project registry once.
         String saved = context.getSharedPreferences("workspace", 0).getString("uri", "");
+        boolean legacyDeferred = false;
         if (registry.isBlank() && !saved.isEmpty()) {
             try {
                 Uri uri = Uri.parse(saved); Node node = query(documentUri(uri));
-                projects.put(uri.toString(), node.name, WorkspacePath.hash(uri.toString())); saveProjects();
-            } catch (Exception ignored) { }
+                ProjectRegistry staged = ProjectRegistry.fromJson(projects.toJson());
+                staged.put(uri.toString(), node.name, WorkspacePath.hash(uri.toString())); projects = staged;
+            } catch (Exception ignored) { legacyDeferred = true; }
+        }
+        if (!legacyDeferred && (registry.isBlank() || !dev.mobilecodex.app.core.Json.parse(registry).has("identities"))) {
+            android.content.SharedPreferences.Editor migration = context.getSharedPreferences("projects", 0).edit();
+            if (!registry.isBlank()) migration.putString("registry-before-identities-v1", registry);
+            if (!migration.putString("registry", projects.toJson()).commit())
+                throw new IllegalStateException(t("프로젝트 목록 변경을 저장하지 못했습니다."));
+        }
+        if (!legacyDeferred && !registry.isBlank() && dev.mobilecodex.app.core.Json.parse(registry).has("identities")
+            && !dev.mobilecodex.app.core.Json.parse(registry).optJSONObject("identities").has("history")) {
+            if (!context.getSharedPreferences("projects", 0).edit().putString("registry-before-portable-v1", registry)
+                .putString("registry", projects.toJson()).commit()) throw new IllegalStateException(t("프로젝트 목록 변경을 저장하지 못했습니다."));
         }
         try { activate(projects.selected()); } catch (Exception ignored) { tree = null; }
     }
@@ -59,55 +75,94 @@ public final class DocumentStore {
         String stableKey = projectKey == null || projectKey.isBlank() ? WorkspacePath.hash(uri.toString()) : projectKey;
         ProjectRegistry.Project existing = projects.get(stableKey);
         String displayName = existing == null ? selected.name : existing.name;
-        projects.put(uri.toString(), displayName, stableKey);
+        ProjectRegistry staged = ProjectRegistry.fromJson(projects.toJson());
+        staged.put(uri.toString(), displayName, stableKey);
+        commitProjects(staged);
         tree = uri;
         label = displayName;
-        detachedKey = ""; detachedName = "";
         context.getSharedPreferences("workspace", 0).edit().putString("uri", uri.toString()).apply();
-        saveProjects();
         return workspace();
     }
     /** Switches among stored projects without asking Android's picker again. Empty selects general chat. */
     public synchronized JSONObject selectProject(String key) throws Exception {
-        if (projects.removed(key)) { detachedKey = key; detachedName = t("연결 해제된 프로젝트"); tree = null; label = detachedName; return workspace(); }
-        detachedKey = ""; detachedName = "";
-        projects.select(key);
+        key = key == null ? "" : key;
+        // Old callbacks or sessions can still mention a tombstoned binding. It is
+        // now the general workspace rather than a detached pseudo-project.
+        if (projects.removed(key)) key = "";
+        ProjectRegistry staged = ProjectRegistry.fromJson(projects.toJson());
+        staged.select(key);
+        commitProjects(staged);
         ProjectRegistry.Project project = projects.selected();
-        tree = null; label = project == null ? "" : project.name;
+        tree = null; label = project == null ? "Codex" : project.name;
         try { activate(project); } catch (Exception ignored) { tree = null; }
-        saveProjects();
         return workspace();
     }
     public synchronized JSONArray projects() { return projects.entries(this::available); }
-    /** Removes only the registry entry. The underlying SAF folder and its files are untouched. */
-    public synchronized JSONObject removeProject(String key) throws IOException {
+    public synchronized String projectId(String key) { return projects.projectId(key); }
+    public synchronized JSONObject exportProject(String key) { return projects.exportProject(key); }
+    public synchronized JSONObject previewProjects(String raw) {
         ProjectRegistry staged = ProjectRegistry.fromJson(projects.toJson());
-        boolean current = key != null && (key.equals(projects.selectedKey()) || key.equals(detachedKey));
-        ProjectRegistry.Project removed = staged.remove(key);
+        JSONObject result = staged.importProjects(raw);
+        return obj("result", result, "projects", staged.entries(this::available), "token", WorkspacePath.hash(projects.toJson() + "\n" + raw));
+    }
+    public synchronized JSONObject importProjects(String raw, String token) throws IOException {
+        if (!WorkspacePath.hash(projects.toJson() + "\n" + raw).equals(token)) throw new IllegalArgumentException(t("프로젝트 목록이 변경되었습니다. 다시 가져와 주세요."));
+        ProjectRegistry staged = ProjectRegistry.fromJson(projects.toJson()); staged.importProjects(raw);
+        commitProjects(staged);
+        if (!projects.selectedKey().isBlank()) label = projects.displayName(projects.selectedKey());
+        return obj("projects", projects(), "workspace", workspace());
+    }
+    public synchronized JSONObject createProject(String name) throws IOException {
+        ProjectRegistry staged = ProjectRegistry.fromJson(projects.toJson());
+        staged.createUnbound(name);
+        commitProjects(staged);
+        tree = null; label = projects.displayName(projects.selectedKey());
+        return workspace();
+    }
+    public synchronized JSONObject mergeProjects(String sourceKey, String targetKey) throws IOException {
+        ProjectRegistry staged = ProjectRegistry.fromJson(projects.toJson());
+        String projectId = staged.merge(sourceKey, targetKey);
+        commitProjects(staged);
+        if (!projects.selectedKey().isBlank()) label = projects.displayName(projects.selectedKey());
+        return obj("projectId", projectId, "projects", projects());
+    }
+    public synchronized JSONObject preferProject(String key) throws IOException {
+        ProjectRegistry staged = ProjectRegistry.fromJson(projects.toJson());
+        staged.prefer(key);
+        commitProjects(staged);
+        return obj("projects", projects());
+    }
+    private void commitProjects(ProjectRegistry staged) throws IOException {
         if (!context.getSharedPreferences("projects", 0).edit().putString("registry", staged.toJson()).commit())
             throw new IOException(t("프로젝트 목록 변경을 저장하지 못했습니다."));
         projects = staged;
-        if (current) { tree = null; label = ""; detachedKey = ""; detachedName = ""; }
+    }
+    /** Removes only the registry entry. The underlying SAF folder and its files are untouched. */
+    public synchronized JSONObject removeProject(String key) throws IOException {
+        ProjectRegistry staged = ProjectRegistry.fromJson(projects.toJson());
+        boolean current = key != null && key.equals(projects.selectedKey());
+        ProjectRegistry.Project removed = staged.remove(key);
+        commitProjects(staged);
+        if (current) { tree = null; label = "Codex"; }
         return obj("key", removed.key, "name", removed.name);
     }
     /** Persists a display-name change without renaming the physical folder or changing its key. */
     public synchronized JSONObject renameProject(String key, String name) throws IOException {
         ProjectRegistry staged = ProjectRegistry.fromJson(projects.toJson());
         ProjectRegistry.Project renamed = staged.rename(key, name);
-        if (!context.getSharedPreferences("projects", 0).edit().putString("registry", staged.toJson()).commit())
-            throw new IOException(t("프로젝트 목록 변경을 저장하지 못했습니다."));
-        projects = staged;
-        if (key != null && key.equals(projects.selectedKey())) label = renamed.name;
+        commitProjects(staged);
+        if (!projects.selectedKey().isBlank()) label = projects.displayName(projects.selectedKey());
         return obj("key", renamed.key, "name", renamed.name);
     }
     public synchronized String restoreProjectKey(String sessionId, String oldKey, String oldName) {
         String before = projects.toJson();
-        String key = projects.restoreLegacyKey(sessionId, oldKey, oldName);
-        if (!before.equals(projects.toJson())) saveProjects();
+        ProjectRegistry staged = ProjectRegistry.fromJson(before);
+        String key = staged.restoreLegacyKey(sessionId, oldKey, oldName);
+        if (!before.equals(staged.toJson())) {
+            try { commitProjects(staged); }
+            catch (IOException error) { throw new IllegalStateException(error.getMessage(), error); }
+        }
         return key;
-    }
-    private void saveProjects() {
-        context.getSharedPreferences("projects", 0).edit().putString("registry", projects.toJson()).apply();
     }
     private Uri documentUri(Uri value) {
         return DocumentsContract.buildDocumentUriUsingTree(value, DocumentsContract.getTreeDocumentId(value));
@@ -130,14 +185,21 @@ public final class DocumentStore {
     }
     public synchronized JSONObject workspace() {
         ProjectRegistry.Project project = projects.selected();
-        if (!detachedKey.isBlank()) return obj("selected", true, "name", detachedName, "key", detachedKey, "available", false, "detached", true);
-        return obj("selected", project != null, "name", project == null ? "" : project.name,
-            "key", project == null ? "" : project.key, "available", project == null || (tree != null && available(project)));
+        if (project == null) return obj("selected", false, "name", "Codex", "key", "", "projectId", "",
+            "hasLocalFolder", true, "available", generalAvailable(), "defaultWorkspace", true);
+        return obj("selected", true, "name", projects.displayName(project.key),
+            "key", project == null ? "" : project.key, "projectId", project == null ? "" : projects.projectId(project.key),
+            "hasLocalFolder", project != null && !project.uri.isBlank(), "available", project == null || (tree != null && available(project)));
     }
-    public synchronized String key() { return detachedKey.isBlank() ? projects.selectedKey() : detachedKey; }
+    public synchronized String key() { return projects.selectedKey(); }
     public synchronized void requireWorkspaceAvailable() throws IOException {
-        if (!detachedKey.isBlank()) throw new IOException(t("연결 해제된 프로젝트 대화입니다. 폴더를 다시 연결하거나 일반 대화에서 새 작업을 시작해 주세요."));
         ProjectRegistry.Project project = projects.selected();
+        if (project == null) {
+            if ((!generalRoot.isDirectory() && !generalRoot.mkdirs()) || !generalRoot.canRead())
+                throw new IOException(t("Codex 작업 폴더를 열 수 없습니다."));
+            safeGeneralRoot();
+            return;
+        }
         if (project != null) {
             try {
                 if (tree == null || !available(project) || !query(documentUri(tree)).directory())
@@ -150,6 +212,11 @@ public final class DocumentStore {
     }
     /** Makes a project-relative mention reachable by Codex, copying SAF-only files into app storage. */
     synchronized JSONObject mention(String path, AttachmentStore attachments) throws Exception {
+        if (generalSelected()) {
+            File value = local(path);
+            if (!value.isFile()) throw new IOException(value.isDirectory() ? t("폴더는 대화에 첨부할 수 없습니다.") : t("파일을 읽을 수 없습니다."));
+            return obj("name", value.getName(), "path", value.getAbsolutePath());
+        }
         Node node = resolve(path);
         if (node.directory()) throw new IOException(t("폴더는 대화에 첨부할 수 없습니다."));
         File direct = directDirectory();
@@ -166,6 +233,11 @@ public final class DocumentStore {
         }
     }
     synchronized JSONObject image(String path, ImageStore images) throws Exception {
+        if (generalSelected()) {
+            File value = local(path);
+            if (!value.isFile()) throw new IOException(t("이미지 파일을 선택해 주세요."));
+            try (InputStream in = new FileInputStream(value)) { return images.store(in, value.getName()); }
+        }
         Node n = resolve(path);
         if (n.directory()) throw new IOException(t("이미지 파일을 선택해 주세요."));
         try (InputStream in = context.getContentResolver().openInputStream(n.uri)) {
@@ -176,6 +248,10 @@ public final class DocumentStore {
     /** Primary-storage document trees have a documented volume:relative-path ID. */
     public synchronized File directDirectory() {
         if (!workspace().optBoolean("available")) return null;
+        if (projects.selected() == null) {
+            try { return safeGeneralRoot(); }
+            catch (IOException ignored) { return null; }
+        }
         if (tree == null || !"com.android.externalstorage.documents".equals(tree.getAuthority())) return null;
         try {
             String id = DocumentsContract.getTreeDocumentId(tree);
@@ -196,6 +272,57 @@ public final class DocumentStore {
     private void requireTree() throws IOException {
         requireWorkspaceAvailable();
         if (tree == null) throw new IOException(t("먼저 작업 폴더를 선택해 주세요."));
+    }
+
+    private boolean generalSelected() { return projects.selected() == null; }
+    private boolean generalAvailable() {
+        try { return generalRoot.isDirectory() && generalRoot.canRead() && safeGeneralRoot().isDirectory(); }
+        catch (IOException ignored) { return false; }
+    }
+    private File safeGeneralRoot() throws IOException {
+        if (Files.isSymbolicLink(generalRoot.toPath()))
+            throw new IOException(t("Codex 작업 폴더는 심볼릭 링크일 수 없습니다."));
+        File files = context.getFilesDir().getCanonicalFile(), root = generalRoot.getCanonicalFile();
+        if (!root.getPath().startsWith(files.getPath() + File.separator))
+            throw new IOException(t("Codex 작업 폴더 경로가 올바르지 않습니다."));
+        return root;
+    }
+    private File local(String path) throws IOException {
+        List<String> segments = WorkspacePath.segments(path);
+        File root = safeGeneralRoot();
+        File unresolved = root;
+        for (String segment : segments) {
+            unresolved = new File(unresolved, segment);
+            if (Files.isSymbolicLink(unresolved.toPath())) throw new IOException(t("심볼릭 링크는 파일 화면에서 열 수 없습니다."));
+        }
+        File value = unresolved.getCanonicalFile();
+        if (!(value.equals(root) || value.getPath().startsWith(root.getPath() + File.separator)))
+            throw new IOException(t("Codex 작업 폴더 안의 경로만 사용할 수 있습니다."));
+        return value;
+    }
+    private JSONObject localJson(File value, String path) throws IOException {
+        boolean directory = value.isDirectory();
+        String mime = directory ? Document.MIME_TYPE_DIR : Files.probeContentType(value.toPath());
+        if (mime == null) mime = "application/octet-stream";
+        return obj("name", value.getName(), "path", path, "directory", directory, "mime", mime,
+            "size", directory ? 0 : value.length(), "modified", value.lastModified());
+    }
+    private List<File> localChildren(File parent) throws IOException {
+        if (!parent.isDirectory()) throw new IOException(t("폴더가 아닙니다."));
+        File[] values = parent.listFiles();
+        if (values == null) throw new IOException(t("폴더를 열 수 없습니다."));
+        if (values.length > 5000) throw new IOException(t("한 폴더의 항목이 5,000개를 초과합니다. 더 작은 폴더를 선택해 주세요."));
+        ArrayList<File> result = new ArrayList<>(Arrays.asList(values));
+        result.sort(Comparator.comparing((File value) -> Files.isSymbolicLink(value.toPath()) || !value.isDirectory())
+            .thenComparing(value -> value.getName().toLowerCase(Locale.ROOT)));
+        return result;
+    }
+    private byte[] localBytes(File value, int limit) throws IOException {
+        if (!value.isFile()) throw new IOException(value.isDirectory() ? t("폴더는 텍스트로 열 수 없습니다.") : t("파일을 찾을 수 없습니다."));
+        if (value.length() > limit) throw new IOException(t("파일 크기 제한을 초과했습니다 (") + (limit / 1024 / 1024) + " MiB).");
+        byte[] data = Files.readAllBytes(value.toPath());
+        if (data.length > limit) throw new IOException(t("파일 크기 제한을 초과했습니다."));
+        return data;
     }
     private Node query(Uri uri) throws IOException {
         try (Cursor c = context.getContentResolver().query(uri, COLUMNS, null, null, null)) {
@@ -241,12 +368,24 @@ public final class DocumentStore {
         try { resolve(path); return true; } catch (FileNotFoundException e) { return false; }
     }
     public synchronized JSONObject list(String path) throws IOException {
+        if (generalSelected()) {
+            JSONArray entries = new JSONArray();
+            File parent = local(path);
+            for (File value : localChildren(parent)) {
+                String childPath = path.isEmpty() ? value.getName() : path + "/" + value.getName();
+                // Resolve through the canonical boundary before exposing an entry.
+                try { entries.put(localJson(local(childPath), childPath)); }
+                catch (IOException ignored) { }
+            }
+            return obj("path", path, "entries", entries);
+        }
         JSONArray entries = new JSONArray();
         for (Node n : children(resolve(path))) entries.put(n.json(path.isEmpty() ? n.name : path + "/" + n.name));
         return obj("path", path, "entries", entries);
     }
     public synchronized JSONObject search(String text) throws IOException {
         if (text == null || text.isBlank()) throw new IllegalArgumentException(t("검색어를 입력해 주세요."));
+        if (generalSelected()) return searchLocal(text);
         String needle = text.toLowerCase(Locale.ROOT);
         ArrayDeque<String> queue = new ArrayDeque<>();
         queue.add("");
@@ -262,6 +401,25 @@ public final class DocumentStore {
                 String childPath = path.isEmpty() ? n.name : path + "/" + n.name;
                 if (n.name.toLowerCase(Locale.ROOT).contains(needle)) results.put(n.json(childPath));
                 if (n.directory() && WorkspacePath.segments(childPath).size() < 32) queue.add(childPath);
+                if (results.length() >= 200) break;
+            }
+        }
+        return obj("entries", results, "truncated", !queue.isEmpty() || visited >= 3000 || results.length() >= 200);
+    }
+    private JSONObject searchLocal(String text) throws IOException {
+        String needle = text.toLowerCase(Locale.ROOT);
+        ArrayDeque<String> queue = new ArrayDeque<>(); queue.add("");
+        HashSet<String> seen = new HashSet<>(); JSONArray results = new JSONArray(); int visited = 0;
+        while (!queue.isEmpty() && visited < 3000 && results.length() < 200) {
+            String path = queue.remove(); File parent = local(path);
+            if (!seen.add(parent.getCanonicalPath())) continue;
+            for (File child : localChildren(parent)) {
+                if (++visited > 3000) break;
+                String childPath = path.isEmpty() ? child.getName() : path + "/" + child.getName();
+                File bounded;
+                try { bounded = local(childPath); } catch (IOException ignored) { continue; }
+                if (child.getName().toLowerCase(Locale.ROOT).contains(needle)) results.put(localJson(bounded, childPath));
+                if (bounded.isDirectory() && WorkspacePath.segments(childPath).size() < 32) queue.add(childPath);
                 if (results.length() >= 200) break;
             }
         }
@@ -289,10 +447,15 @@ public final class DocumentStore {
         } catch (CharacterCodingException e) { throw new IOException(t("UTF-8 텍스트 파일만 편집할 수 있습니다.")); }
     }
     public synchronized JSONObject read(String path) throws IOException {
+        if (generalSelected()) {
+            byte[] data = localBytes(local(path), TEXT_LIMIT);
+            return obj("path", path, "content", decode(data), "sha256", WorkspacePath.hash(data));
+        }
         byte[] data = bytes(resolve(path), TEXT_LIMIT);
         return obj("path", path, "content", decode(data), "sha256", WorkspacePath.hash(data));
     }
     public synchronized Mutation prepare(String operation, JSONObject args) throws Exception {
+        if (generalSelected()) return prepareLocal(operation, args);
         requireTree();
         String path = args.getString("path");
         WorkspacePath.segments(path);
@@ -349,8 +512,88 @@ public final class DocumentStore {
         return new Mutation(operation, parse(args.toString()), tree.toString(), n == null ? "" : n.id,
             n == null ? 0 : n.modified, before, title, preview);
     }
+    private String localScope() throws IOException { return "local:" + safeGeneralRoot().getPath(); }
+    private boolean localExists(String path) throws IOException { return local(path).exists(); }
+    private void requireMutableLocalPath(String path) throws IOException {
+        for (String segment : WorkspacePath.segments(path)) if (segment.equals(".git"))
+            throw new IOException(t(".git 내부 파일은 파일 도구로 변경할 수 없습니다."));
+    }
+    /** Preflight recursive mutations so an ancestor cannot bypass .git or symlink protection. */
+    private void requireSafeLocalTreeMutation(File root) throws IOException {
+        ArrayDeque<File> pending = new ArrayDeque<>(); pending.add(root);
+        int visited = 0;
+        while (!pending.isEmpty()) {
+            File value = pending.remove();
+            if (++visited > 10_000) throw new IOException(t("한 번에 변경할 항목이 10,000개를 초과합니다."));
+            if (Files.isSymbolicLink(value.toPath()))
+                throw new IOException(t("심볼릭 링크가 포함된 폴더는 파일 도구로 변경할 수 없습니다."));
+            if (value.getName().equals(".git"))
+                throw new IOException(t(".git 내부 파일은 파일 도구로 변경할 수 없습니다."));
+            if (!value.isDirectory()) continue;
+            File[] children = value.listFiles();
+            if (children == null) throw new IOException(t("폴더를 열 수 없습니다."));
+            pending.addAll(Arrays.asList(children));
+        }
+    }
+    private Mutation prepareLocal(String operation, JSONObject args) throws Exception {
+        requireWorkspaceAvailable();
+        String path = args.getString("path"); requireMutableLocalPath(path);
+        if (path.isEmpty()) throw new IOException(t("작업 폴더 자체는 변경할 수 없습니다."));
+        File value = local(path); byte[] before = null; String title; String preview = path;
+        if (operation.equals("mobile_create") || operation.equals("mobile_mkdir")) {
+            if (value.exists()) throw new IOException(t("같은 이름의 파일 또는 폴더가 이미 있습니다."));
+            if (!local(WorkspacePath.parent(path)).isDirectory()) throw new IOException(t("상위 폴더가 없습니다."));
+            title = operation.equals("mobile_create") ? t("파일 만들기") : t("폴더 만들기");
+        } else {
+            if (!value.exists()) throw new FileNotFoundException(t("파일을 찾을 수 없습니다: ") + path);
+            title = switch (operation) {
+                case "mobile_write" -> t("파일 수정");
+                case "mobile_delete" -> t("파일 삭제");
+                case "mobile_rename" -> t("이름 변경");
+                case "mobile_move" -> t("파일 이동");
+                default -> throw new IOException(t("지원하지 않는 작업입니다."));
+            };
+        }
+        if (operation.equals("mobile_write")) {
+            before = localBytes(value, TEXT_LIMIT);
+            WorkspacePath.requireVersion(args.getString("expectedSha256"), before);
+            preview += t("\n\n현재 내용\n") + excerpt(decode(before)) + t("\n\n수정할 내용\n") + excerpt(args.getString("content"));
+        }
+        if (operation.equals("mobile_create")) preview += "\n\n" + excerpt(args.getString("content"));
+        if (operation.equals("mobile_create") || operation.equals("mobile_write")) {
+            if (args.getString("content").getBytes(StandardCharsets.UTF_8).length > TEXT_LIMIT)
+                throw new IOException(t("텍스트는 최대 1 MiB까지 저장할 수 있습니다."));
+        }
+        if (operation.equals("mobile_delete")) {
+            requireSafeLocalTreeMutation(value);
+            if (value.isFile() && value.length() <= BACKUP_LIMIT) before = localBytes(value, BACKUP_LIMIT);
+            preview += value.isDirectory() ? t("\n\n폴더와 그 안의 파일을 삭제합니다. 폴더 전체의 복구 사본은 생성하지 않습니다.") :
+                before != null ? t("\n\n삭제 전에 앱 안에 복구용 사본을 보관합니다.") : t("\n\n이 큰 파일은 복구 사본 없이 삭제합니다.");
+        }
+        if (operation.equals("mobile_rename")) {
+            requireSafeLocalTreeMutation(value);
+            String name = args.getString("name"); WorkspacePath.checkName(name);
+            String parent = WorkspacePath.parent(path), target = parent.isEmpty() ? name : parent + "/" + name;
+            requireMutableLocalPath(target);
+            if (localExists(target)) throw new IOException(t("같은 이름의 항목이 이미 있습니다."));
+            preview += "\n→ " + target;
+        }
+        if (operation.equals("mobile_move")) {
+            requireSafeLocalTreeMutation(value);
+            String destination = args.getString("destination"); WorkspacePath.segments(destination);
+            requireMutableLocalPath(destination);
+            if (destination.equals(path) || destination.startsWith(path + "/")) throw new IOException(t("자기 안으로 이동할 수 없습니다."));
+            if (!local(destination).isDirectory()) throw new IOException(t("대상 폴더가 아닙니다."));
+            String target = destination.isEmpty() ? value.getName() : destination + "/" + value.getName();
+            if (localExists(target)) throw new IOException(t("대상 폴더에 같은 이름의 항목이 있습니다."));
+            preview += "\n→ " + target;
+        }
+        return new Mutation(operation, parse(args.toString()), localScope(), value.getCanonicalPath(),
+            value.exists() ? value.lastModified() : 0, before, title, preview);
+    }
     private String excerpt(String s) { return s.length() <= 6000 ? s : s.substring(0, 6000) + t("\n… (미리보기 생략)"); }
     public synchronized JSONObject commit(Mutation m) throws Exception {
+        if (m.tree.startsWith("local:")) return commitLocal(m);
         requireTree();
         if (!tree.toString().equals(m.tree)) throw new IOException(t("작업 폴더가 변경되어 요청을 취소했습니다."));
         String path = m.args.getString("path");
@@ -393,6 +636,58 @@ public final class DocumentStore {
         }
         return obj("ok", true, "operation", m.operation, "path", path, "recoveryId", recoveryId);
     }
+    private JSONObject commitLocal(Mutation m) throws Exception {
+        requireWorkspaceAvailable();
+        if (!generalSelected() || !localScope().equals(m.tree)) throw new IOException(t("작업 폴더가 변경되어 요청을 취소했습니다."));
+        Mutation now = prepareLocal(m.operation, m.args);
+        if (!now.documentId.equals(m.documentId) || now.modified != m.modified ||
+                (m.before != null && !Arrays.equals(now.before, m.before)))
+            throw new IOException(t("확인하는 동안 파일이 변경되었습니다. 다시 시도해 주세요."));
+        String path = m.args.getString("path"); File value = local(path); String recoveryId = "";
+        if (m.before != null) recoveryId = backup(m, value.exists() && value.isDirectory() ? Document.MIME_TYPE_DIR :
+            Optional.ofNullable(Files.probeContentType(value.toPath())).orElse("application/octet-stream"));
+        switch (m.operation) {
+            case "mobile_create" -> {
+                Files.createFile(value.toPath());
+                Files.write(value.toPath(), m.args.getString("content").getBytes(StandardCharsets.UTF_8));
+            }
+            case "mobile_mkdir" -> Files.createDirectory(value.toPath());
+            case "mobile_write" -> Files.write(value.toPath(), m.args.getString("content").getBytes(StandardCharsets.UTF_8));
+            case "mobile_delete" -> deleteLocal(value);
+            case "mobile_rename" -> {
+                File target = local(WorkspacePath.parent(path).isEmpty() ? m.args.getString("name") :
+                    WorkspacePath.parent(path) + "/" + m.args.getString("name"));
+                Files.move(value.toPath(), target.toPath()); path = WorkspacePath.parent(path).isEmpty()
+                    ? target.getName() : WorkspacePath.parent(path) + "/" + target.getName();
+            }
+            case "mobile_move" -> {
+                String destination = m.args.getString("destination");
+                File target = local(destination.isEmpty() ? value.getName() : destination + "/" + value.getName());
+                Files.move(value.toPath(), target.toPath()); path = destination.isEmpty() ? target.getName() : destination + "/" + target.getName();
+            }
+            default -> throw new IOException(t("지원하지 않는 작업입니다."));
+        }
+        if ((m.operation.equals("mobile_create") || m.operation.equals("mobile_write")) &&
+                !Arrays.equals(localBytes(local(path), TEXT_LIMIT), m.args.getString("content").getBytes(StandardCharsets.UTF_8)))
+            throw new IOException(t("저장한 내용을 검증하지 못했습니다. 복구 사본을 확인해 주세요."));
+        if (!recoveryId.isEmpty()) {
+            File metadata = new File(backups, recoveryId + ".json");
+            JSONObject saved = parse(dev.mobilecodex.app.core.Utf8Files.read(metadata.toPath()));
+            if (m.operation.equals("mobile_write")) saved.put("afterSha256", WorkspacePath.hash(localBytes(local(path), TEXT_LIMIT)));
+            else if (m.operation.equals("mobile_delete")) saved.put("afterMissing", true);
+            saved.put("completed", true); dev.mobilecodex.app.core.Utf8Files.write(metadata.toPath(), saved.toString());
+        }
+        return obj("ok", true, "operation", m.operation, "path", path, "recoveryId", recoveryId);
+    }
+    private void deleteLocal(File value) throws IOException {
+        if (Files.isSymbolicLink(value.toPath())) throw new IOException(t("심볼릭 링크는 삭제할 수 없습니다."));
+        if (value.isDirectory()) {
+            File[] children = value.listFiles();
+            if (children == null) throw new IOException(t("폴더를 열 수 없습니다."));
+            for (File child : children) deleteLocal(child);
+        }
+        Files.delete(value.toPath());
+    }
     private void write(Uri uri, byte[] data) throws IOException {
         try (OutputStream out = context.getContentResolver().openOutputStream(uri, "wt")) {
             if (out == null) throw new IOException(t("파일을 저장할 수 없습니다."));
@@ -404,7 +699,7 @@ public final class DocumentStore {
         String id = UUID.randomUUID().toString();
         if (backups.getUsableSpace() < m.before.length + 10 * 1024 * 1024L) throw new IOException(t("복구 사본을 저장할 공간이 부족합니다."));
         Files.write(new File(backups, id + ".bin").toPath(), m.before);
-        JSONObject meta = obj("id", id, "tree", m.tree, "workspace", label, "path", m.args.getString("path"),
+        JSONObject meta = obj("id", id, "tree", m.tree, "workspace", workspace().optString("name", label), "path", m.args.getString("path"),
             "mime", mime, "operation", m.operation, "timestamp", System.currentTimeMillis(), "sha256", WorkspacePath.hash(m.before));
         Files.write(new File(backups, id + ".json").toPath(), meta.toString().getBytes(StandardCharsets.UTF_8));
         return id;
@@ -414,9 +709,10 @@ public final class DocumentStore {
         File[] files = backups.listFiles((d, n) -> n.endsWith(".json"));
         if (files == null) return out;
         Arrays.sort(files, Comparator.comparingLong(File::lastModified).reversed());
+        String scope = generalSelected() ? localScope() : tree == null ? "" : tree.toString();
         for (File f : files) {
             JSONObject meta = parse(new String(Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8));
-            if (tree != null && meta.optString("tree").equals(tree.toString())) {
+            if (!scope.isEmpty() && meta.optString("tree").equals(scope)) {
                 meta.remove("tree"); out.put(meta);
             }
             if (out.length() >= 100) break;
@@ -424,19 +720,22 @@ public final class DocumentStore {
         return out;
     }
     private JSONObject recoveryMetadata(String id) throws Exception {
-        requireTree();
+        requireWorkspaceAvailable();
         if (!id.matches("[a-f0-9-]{36}")) throw new IOException(t("잘못된 복구 항목입니다."));
         JSONObject meta = parse(dev.mobilecodex.app.core.Utf8Files.read(new File(backups, id + ".json").toPath()));
-        if (!tree.toString().equals(meta.optString("tree"))) throw new IOException(t("다른 프로젝트의 복구 항목입니다."));
+        String scope = generalSelected() ? localScope() : tree == null ? "" : tree.toString();
+        if (scope.isEmpty() || !scope.equals(meta.optString("tree"))) throw new IOException(t("다른 프로젝트의 복구 항목입니다."));
         return meta;
     }
     public synchronized JSONObject previewRecovery(String id) throws Exception {
         JSONObject meta = recoveryMetadata(id); byte[] before = Files.readAllBytes(new File(backups, id + ".bin").toPath());
         WorkspacePath.requireVersion(meta.getString("sha256"), before);
         String path = meta.getString("path"), current = "", reason = "", currentHash = "";
-        boolean present = exists(path), canRestore = meta.optBoolean("completed") && before.length <= TEXT_LIMIT;
+        boolean localScope = meta.optString("tree").startsWith("local:");
+        boolean present = localScope ? localExists(path) : exists(path), canRestore = meta.optBoolean("completed") && before.length <= TEXT_LIMIT;
         if (present) {
-            byte[] after = bytes(resolve(path), TEXT_LIMIT); current = decode(after); currentHash = WorkspacePath.hash(after);
+            byte[] after = localScope ? localBytes(local(path), TEXT_LIMIT) : bytes(resolve(path), TEXT_LIMIT);
+            current = decode(after); currentHash = WorkspacePath.hash(after);
             if (!WorkspacePath.hash(after).equals(meta.optString("afterSha256"))) { canRestore = false; reason = t("파일이 이후에 변경되었습니다. 사본을 다른 위치에 저장해서 비교해 주세요."); }
         } else if (!meta.optBoolean("afterMissing")) { canRestore = false; reason = t("현재 파일이 없습니다. 사본을 다른 위치에 저장해 주세요."); }
         if (!meta.optBoolean("completed")) reason = t("이전 버전 또는 완료 상태를 확인할 수 없는 사본입니다. 다른 위치에 저장할 수 있습니다.");

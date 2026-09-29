@@ -31,6 +31,7 @@ public class EngineOfflineSessionTest {
         context = RuntimeEnvironment.getApplication();
         new File(context.getFilesDir(), "sessions.json").delete();
         new File(context.getFilesDir(), "sessions.json.tmp").delete();
+        deleteSessionMigrationBackups();
         context.getSharedPreferences("projects", 0).edit().clear().commit();
         context.getSharedPreferences("workspace", 0).edit().clear().commit();
         context.getSharedPreferences("settings", 0).edit().clear().commit();
@@ -38,6 +39,7 @@ public class EngineOfflineSessionTest {
     }
     @After public void after() {
         new File(context.getFilesDir(), "sessions.json").delete();
+        deleteSessionMigrationBackups();
         context.getSharedPreferences("projects", 0).edit().clear().commit();
         context.getSharedPreferences("workspace", 0).edit().clear().commit();
         context.getSharedPreferences("settings", 0).edit().clear().commit();
@@ -48,6 +50,10 @@ public class EngineOfflineSessionTest {
         File[] children = file.listFiles();
         if (children != null) for (File child : children) deleteTree(child);
         file.delete();
+    }
+    private void deleteSessionMigrationBackups() {
+        File[] files = context.getFilesDir().listFiles((directory, name) -> name.startsWith("sessions-before-"));
+        if (files != null) for (File file : files) deleteTree(file);
     }
     @Test public void modelPickerRefreshReadsCurrentServerAndPreservesChoicesOnFailure() throws Exception {
         Engine engine = new Engine(context);
@@ -352,19 +358,25 @@ public class EngineOfflineSessionTest {
         assertEquals("project-a", state.getJSONArray("projects").getJSONObject(0).getString("key"));
         engine.io.shutdownNow();
     }
-    @Test public void removedProjectHistoryResumesDetachedAndCannotSendUntilReconnected() throws Exception {
+    @Test public void removedProjectHistoryMigratesToAvailableGeneralWorkspaceWithoutLosingMetadata() throws Exception {
         context.getSharedPreferences("projects", 0).edit().putString("registry", obj("selectedKey", "", "projects", new JSONArray(),
             "removed", array(obj("key", "project-a", "name", "A"))).toString()).commit();
-        dev.mobilecodex.app.core.Utf8Files.write(new File(context.getFilesDir(), "sessions.json").toPath(), array(
-            obj("id", "old-thread", "title", "Old", "workspace", "A", "workspaceKey", "project-a", "messages", new JSONArray())).toString());
+        String original = array(obj("id", "old-thread", "title", "Old", "workspace", "A", "workspaceKey", "project-a",
+            "model", "gpt-6-astra", "createdAt", 1234, "chatConversationId", "remote-chat", "chatProjectPath", "/g/g-p-project/c/c-chat",
+            "messages", array(obj("id", "m1", "role", "assistant", "text", "preserved")))).toString();
+        dev.mobilecodex.app.core.Utf8Files.write(new File(context.getFilesDir(), "sessions.json").toPath(), original);
         Engine engine = new Engine(context);
         JSONObject resumed = handle(engine, "chat.resume", obj("id", "old-thread"));
         JSONObject workspace = resumed.getJSONObject("workspace");
-        assertEquals("project-a", workspace.getString("key"));
-        assertTrue(workspace.getBoolean("detached"));
-        assertFalse(workspace.getBoolean("available"));
-        try { handle(engine, "chat.send", obj("text", "must not use another folder")); fail("detached history must not send"); }
-        catch (ExecutionException expected) { assertTrue(expected.getCause().getMessage().contains("연결 해제")); }
+        assertEquals("", workspace.getString("key")); assertEquals("Codex", workspace.getString("name"));
+        assertFalse(workspace.getBoolean("selected")); assertTrue(workspace.getBoolean("available"));
+        assertTrue(workspace.getBoolean("hasLocalFolder")); assertTrue(workspace.getBoolean("defaultWorkspace"));
+        assertEquals("preserved", resumed.getJSONArray("messages").getJSONObject(0).getString("text"));
+        JSONObject stored = new JSONArray(dev.mobilecodex.app.core.Utf8Files.read(new File(context.getFilesDir(), "sessions.json").toPath())).getJSONObject(0);
+        assertEquals("", stored.getString("workspaceKey")); assertEquals("", stored.getString("workspace"));
+        assertEquals("gpt-6-astra", stored.getString("model")); assertEquals(1234, stored.getInt("createdAt"));
+        assertEquals("remote-chat", stored.getString("chatConversationId")); assertEquals("/g/g-p-project/c/c-chat", stored.getString("chatProjectPath"));
+        assertEquals(original, dev.mobilecodex.app.core.Utf8Files.read(new File(context.getFilesDir(), "sessions-before-general-workspace-v1.json").toPath()));
         engine.io.shutdownNow();
     }
     @Test public void inputUsesVerifiedUserInputShapesForSkillMentionAndAttachment() throws Exception {
@@ -401,7 +413,8 @@ public class EngineOfflineSessionTest {
         assertTrue(types(input).contains("localImage")); assertTrue(types(input).contains("skill")); assertTrue(types(input).contains("mention"));
         assertTrue(input.toString().contains(text.getString("filename")));
         JSONObject accepted = handle(engine, "state", new JSONObject());
-        assertEquals("accepted-thread", accepted.getString("threadId"));
+        String localThread = accepted.getString("threadId");
+        assertTrue(localThread.startsWith("local-")); assertNotEquals("accepted-thread", localThread);
         assertEquals(2, accepted.getJSONArray("messages").getJSONObject(0).getJSONArray("attachments").length());
         assertEquals("review", accepted.getJSONArray("messages").getJSONObject(0).getJSONArray("skills").getJSONObject(0).getString("name"));
         assertEquals("Calendar", accepted.getJSONArray("messages").getJSONObject(0).getJSONArray("mentions").getJSONObject(0).getString("name"));
@@ -415,9 +428,10 @@ public class EngineOfflineSessionTest {
             if (method.equals("turn/start")) return obj("turn", obj("id", "turn-2"));
             throw new AssertionError(method);
         });
-        handle(reopened, "chat.resume", obj("id", "accepted-thread"));
+        handle(reopened, "chat.resume", obj("id", localThread));
         handle(reopened, "chat.send", obj("text", "continued"));
         JSONObject resume = resumedCalls.stream().filter(c -> c.optString("method").equals("thread/resume")).findFirst().get().getJSONObject("params");
+        assertEquals("accepted-thread", resume.getString("threadId"));
         assertEquals(context.getFilesDir().toPath().resolve("workspace").toString(), resume.getString("cwd"));
         reopened.io.shutdownNow();
 
@@ -433,6 +447,45 @@ public class EngineOfflineSessionTest {
         assertEquals("", afterFailure.getString("threadId"));
         assertEquals(1, afterFailure.getJSONArray("sessions").length());
         failed.io.shutdownNow();
+    }
+    @Test public void syntheticProNeverReachesCodexRpcAndPersistsOneMappedWebConversation() throws Exception {
+        Engine engine = new Engine(context);
+        java.util.ArrayList<String> calls = new java.util.ArrayList<>();
+        engine.setTestTransport((method, params) -> { calls.add(method + " " + params); throw new AssertionError("Pro must not call Codex"); });
+        JSONObject prepared = handle(engine, "chat.pro.prepare", obj("text", "review this", "model", ProContextBuilder.MODEL_ID,
+            "expectedThreadId", "", "workspaceKey", "", "attachments", array(), "skills", array(), "mentions", array()));
+        assertTrue(calls.isEmpty()); assertTrue(prepared.getString("threadId").startsWith("local-"));
+        assertEquals("", prepared.getString("chatConversationId"));
+        JSONObject sending = handle(engine, "state", obj());
+        assertTrue(sending.getBoolean("proBusy"));
+        JSONObject user = sending.getJSONArray("messages").getJSONObject(0);
+        assertEquals("chatgpt-web", user.getString("backend")); assertEquals("sending", user.getString("status"));
+
+        handle(engine, "chat.pro.complete", obj("threadId", prepared.getString("threadId"), "operationId", prepared.getString("operationId"),
+            "reply", "reviewed", "remoteMessageId", "reply-one", "chatConversationId", "conversation-one",
+            "chatConversationPath", "/g/g-p-project/c/conversation-one",
+            "chatProjectPath", "/g/g-p-project/project"));
+        JSONObject completed = handle(engine, "state", obj());
+        assertFalse(completed.getBoolean("proBusy")); assertEquals(2, completed.getJSONArray("messages").length());
+        assertEquals("ChatGPT Pro", completed.getJSONArray("messages").getJSONObject(1).getString("source"));
+
+        Engine reopened = new Engine(context);
+        JSONObject resumed = handle(reopened, "chat.resume", obj("id", prepared.getString("threadId")));
+        assertEquals("conversation-one", ((JSONObject)field(reopened, "active")).getString("chatConversationId"));
+        assertFalse(((JSONObject)field(reopened, "active")).has("codexThreadId"));
+        JSONObject next = handle(reopened, "chat.pro.prepare", obj("text", "continue", "model", ProContextBuilder.MODEL_ID,
+            "expectedThreadId", resumed.getString("threadId"), "workspaceKey", "", "attachments", array(), "skills", array(), "mentions", array()));
+        assertEquals("conversation-one", next.getString("chatConversationId"));
+        assertEquals("/g/g-p-project/c/conversation-one", next.getString("chatConversationPath"));
+        assertEquals("/g/g-p-project/project", next.getString("chatProjectPath"));
+        engine.io.shutdownNow(); reopened.io.shutdownNow();
+    }
+    @Test public void syntheticProModelIsRejectedByOrdinaryCodexSend() throws Exception {
+        Engine engine = new Engine(context); loggedIn(engine);
+        engine.setTestTransport((method, params) -> { throw new AssertionError("synthetic model reached " + method); });
+        try { handle(engine, "chat.send", obj("text", "wrong route", "model", ProContextBuilder.MODEL_ID)); fail("must reject"); }
+        catch (ExecutionException expected) { assertTrue(expected.getCause().getMessage().contains("전용 전송 경로")); }
+        engine.io.shutdownNow();
     }
     @Test public void exactRequestedModelIsVisibleInThreadInstructionsAndUpdatesOnChange() throws Exception {
         Engine engine = new Engine(context); loggedIn(engine);
@@ -463,7 +516,7 @@ public class EngineOfflineSessionTest {
         for (int i = 0; i < input.length(); i++) out.add(input.getJSONObject(i).getString("type"));
         return out;
     }
-    @Test public void savedGeneralSelectionDoesNotReimportLegacyFolderAndUnknownLegacySessionGetsRebindablePlaceholder() throws Exception {
+    @Test public void savedGeneralSelectionDoesNotReimportLegacyFolderAndUnknownLegacySessionBecomesGeneral() throws Exception {
         context.getSharedPreferences("projects", 0).edit().putString("registry", obj("selectedKey", "", "projects", new JSONArray()).toString()).commit();
         context.getSharedPreferences("workspace", 0).edit().putString("uri", "content://provider/tree/old").commit();
         DocumentStore store = new DocumentStore(context);
@@ -472,10 +525,11 @@ public class EngineOfflineSessionTest {
             obj("id", "lost", "title", "Lost", "workspace", "Old project", "workspaceKey", "missing-project", "messages", new JSONArray())).toString());
         Engine engine = new Engine(context);
         JSONObject state = handle(engine, "state", new JSONObject());
-        assertEquals("missing-project", state.getJSONArray("projects").getJSONObject(0).getString("key"));
+        assertEquals(0, state.getJSONArray("projects").length());
         JSONObject resumed = handle(engine, "chat.resume", obj("id", "lost"));
-        assertTrue(resumed.getJSONObject("workspace").getBoolean("selected"));
-        assertFalse(resumed.getJSONObject("workspace").getBoolean("available"));
+        assertFalse(resumed.getJSONObject("workspace").getBoolean("selected"));
+        assertTrue(resumed.getJSONObject("workspace").getBoolean("available"));
+        assertEquals("", resumed.getJSONArray("sessions").getJSONObject(0).getString("workspaceKey"));
         engine.io.shutdownNow();
     }
     @Test public void oldImageHistoryStaysOfflineUntilResumeThenRestoresOnce() throws Exception {
@@ -606,6 +660,132 @@ public class EngineOfflineSessionTest {
         Engine restarted = new Engine(context);
         assertEquals(0, handle(restarted, "state", new JSONObject()).getInt("pendingDeletionCount"));
         restarted.io.shutdownNow();
+    }
+    @Test public void snapshotIsBoundedAndHistoryPagesChronologicallyWithoutChangingStoredMessages() throws Exception {
+        JSONArray messages = new JSONArray();
+        for (int i = 0; i < 85; i++) messages.put(obj("id", "m" + i, "role", "user", "text", "message " + i));
+        dev.mobilecodex.app.core.Utf8Files.write(new File(context.getFilesDir(), "sessions.json").toPath(),
+            array(obj("id", "s1", "title", "Long", "workspace", "", "workspaceKey", "", "messages", messages)).toString());
+        Engine engine = new Engine(context);
+        JSONObject snapshot = handle(engine, "chat.resume", obj("id", "s1"));
+        assertEquals(40, snapshot.getJSONArray("messages").length());
+        assertEquals("m45", snapshot.getJSONArray("messages").getJSONObject(0).getString("id"));
+        assertEquals("m84", snapshot.getJSONArray("messages").getJSONObject(39).getString("id"));
+        JSONObject firstCursor = snapshot.getJSONObject("messageHistory");
+        assertTrue(firstCursor.getBoolean("hasMore")); assertEquals("m45", firstCursor.getString("beforeId")); assertEquals(85, firstCursor.getInt("total"));
+        ((JSONArray) field(engine, "sessions")).getJSONObject(0).getJSONArray("messages").getJSONObject(84).put("text", "streamed later");
+        assertEquals("message 84", snapshot.getJSONArray("messages").getJSONObject(39).getString("text"));
+
+        JSONObject second = handle(engine, "chat.history", obj("threadId", "s1", "beforeId", "m45", "limit", 10_000));
+        assertEquals(40, second.getJSONArray("messages").length());
+        assertEquals("m5", second.getJSONArray("messages").getJSONObject(0).getString("id"));
+        assertEquals("m44", second.getJSONArray("messages").getJSONObject(39).getString("id"));
+        assertEquals("m5", second.getJSONObject("messageHistory").getString("beforeId"));
+        JSONObject finalPage = handle(engine, "chat.history", obj("threadId", "s1", "beforeId", "m5", "limit", 40));
+        assertEquals(5, finalPage.getJSONArray("messages").length());
+        assertEquals("m0", finalPage.getJSONArray("messages").getJSONObject(0).getString("id"));
+        assertFalse(finalPage.getJSONObject("messageHistory").getBoolean("hasMore"));
+        assertEquals("", finalPage.getJSONObject("messageHistory").getString("beforeId"));
+        assertEquals(85, new JSONArray(dev.mobilecodex.app.core.Utf8Files.read(new File(context.getFilesDir(), "sessions.json").toPath()))
+            .getJSONObject(0).getJSONArray("messages").length());
+        engine.io.shutdownNow();
+    }
+    @Test public void historyRejectsStaleCrossThreadAndDeletedRequests() throws Exception {
+        JSONArray longMessages = new JSONArray();
+        for (int i = 0; i < 41; i++) longMessages.put(obj("id", "m" + i, "role", "user", "text", "x"));
+        longMessages.getJSONObject(1).put("id", "duplicate");
+        longMessages.getJSONObject(2).put("id", "duplicate");
+        dev.mobilecodex.app.core.Utf8Files.write(new File(context.getFilesDir(), "sessions.json").toPath(), array(
+            obj("id", "s1", "title", "One", "workspace", "", "workspaceKey", "", "messages", longMessages),
+            obj("id", "s2", "title", "Two", "workspace", "", "workspaceKey", "", "messages", new JSONArray())).toString());
+        Engine engine = new Engine(context); handle(engine, "chat.resume", obj("id", "s1"));
+        try { handle(engine, "chat.history", obj("threadId", "s1", "beforeId", "gone")); fail("stale cursor must fail"); }
+        catch (ExecutionException expected) { assertTrue(expected.getCause().getMessage().contains("오래")); }
+        try { handle(engine, "chat.history", obj("threadId", "s1", "beforeId", 123)); fail("malformed cursor must fail as a normal request error"); }
+        catch (ExecutionException expected) { assertTrue(expected.getCause() instanceof java.io.IOException); }
+        try { handle(engine, "chat.history", obj("threadId", "s1", "beforeId", "duplicate")); fail("ambiguous cursor must fail"); }
+        catch (ExecutionException expected) { assertTrue(expected.getCause().getMessage().contains("오래")); }
+        try { handle(engine, "chat.history", obj("threadId", "unknown", "beforeId", "m1")); fail("unknown thread must fail"); }
+        catch (ExecutionException expected) { assertTrue(expected.getCause().getMessage().contains("대화")); }
+        handle(engine, "chat.resume", obj("id", "s2"));
+        try { handle(engine, "chat.history", obj("threadId", "s1", "beforeId", "m1")); fail("cross-thread cursor must fail"); }
+        catch (ExecutionException expected) { assertTrue(expected.getCause().getMessage().contains("대화")); }
+        engine.io.shutdownNow();
+
+        Engine deleted = new Engine(context); handle(deleted, "chat.resume", obj("id", "s1")); handle(deleted, "chat.delete", obj("id", "s1"));
+        try { handle(deleted, "chat.history", obj("threadId", "s1", "beforeId", "m1")); fail("deleted thread cursor must fail"); }
+        catch (ExecutionException expected) { assertTrue(expected.getCause().getMessage().contains("대화")); }
+        deleted.io.shutdownNow();
+    }
+    @Test public void newUserMessagesReceiveTimestampsWithoutChangingLegacyMessages() throws Exception {
+        Engine engine = new Engine(context);
+        Method userMessage = Engine.class.getDeclaredMethod("userMessage", String.class, JSONArray.class, JSONArray.class, JSONArray.class);
+        userMessage.setAccessible(true);
+        JSONObject fresh = (JSONObject) userMessage.invoke(engine, "new", null, null, null);
+        assertTrue(fresh.has("createdAt")); assertTrue(fresh.getLong("createdAt") > 0);
+        engine.io.shutdownNow();
+
+        dev.mobilecodex.app.core.Utf8Files.write(new File(context.getFilesDir(), "sessions.json").toPath(), array(
+            obj("id", "legacy", "title", "Legacy", "workspace", "", "workspaceKey", "", "messages", array(obj("id", "old", "role", "user", "text", "old")))).toString());
+        Engine legacy = new Engine(context); JSONObject state = handle(legacy, "chat.resume", obj("id", "legacy"));
+        assertFalse(state.getJSONArray("messages").getJSONObject(0).has("createdAt"));
+        legacy.io.shutdownNow();
+    }
+    @Test public void fastModeUsesCatalogTierAndPersistsOnlyWhenSupplied() throws Exception {
+        Engine engine = new Engine(context); loggedIn(engine);
+        setField(engine, "models", array(obj("id", "test-model", "model", "test-model", "serviceTiers", array(
+            obj("id", "priority", "name", "Fast", "description", "faster")))));
+        java.util.ArrayList<JSONObject> calls = new java.util.ArrayList<>();
+        engine.setTestTransport((method, params) -> {
+            calls.add(obj("method", method, "params", new JSONObject(params.toString())));
+            if (method.equals("thread/start")) return obj("thread", obj("id", "remote-fast"));
+            if (method.equals("turn/start")) return obj("turn", obj("id", "turn-fast"));
+            throw new AssertionError(method);
+        });
+        handle(engine, "chat.send", obj("text", "fast", "model", "test-model", "fastMode", true));
+        JSONObject turn = calls.stream().filter(value -> value.optString("method").equals("turn/start")).findFirst().orElseThrow().getJSONObject("params");
+        assertEquals("priority", turn.getString("serviceTierForTurn"));
+        JSONObject state = handle(engine, "state", new JSONObject()); assertTrue(state.getBoolean("fastMode"));
+        assertTrue(state.getJSONArray("messages").getJSONObject(0).has("createdAt"));
+        assertTrue(new JSONArray(dev.mobilecodex.app.core.Utf8Files.read(new File(context.getFilesDir(), "sessions.json").toPath()))
+            .getJSONObject(0).getBoolean("fastMode"));
+        engine.io.shutdownNow();
+    }
+    @Test public void fastModeOffAndOmittedRespectTurnTierContractAndUnsupportedFailsBeforeRpc() throws Exception {
+        Engine off = new Engine(context); loggedIn(off);
+        setField(off, "models", array(obj("id", "test-model", "model", "test-model", "serviceTiers", array(obj("id", "fast", "name", "Fast", "description", "faster")))));
+        java.util.ArrayList<JSONObject> offCalls = new java.util.ArrayList<>();
+        off.setTestTransport((method, params) -> {
+            offCalls.add(obj("method", method, "params", new JSONObject(params.toString())));
+            if (method.equals("thread/start")) return obj("thread", obj("id", "remote-off"));
+            if (method.equals("turn/start")) return obj("turn", obj("id", "turn-off"));
+            throw new AssertionError(method);
+        });
+        handle(off, "chat.send", obj("text", "standard", "model", "test-model", "fastMode", false));
+        JSONObject offTurn = offCalls.stream().filter(value -> value.optString("method").equals("turn/start")).findFirst().orElseThrow().getJSONObject("params");
+        assertEquals("default", offTurn.getString("serviceTierForTurn")); assertFalse(handle(off, "state", new JSONObject()).getBoolean("fastMode"));
+        off.io.shutdownNow();
+
+        before();
+        Engine legacy = new Engine(context); loggedIn(legacy); setField(legacy, "models", array(obj("id", "test-model", "model", "test-model")));
+        java.util.ArrayList<JSONObject> legacyCalls = new java.util.ArrayList<>();
+        legacy.setTestTransport((method, params) -> {
+            legacyCalls.add(obj("method", method, "params", new JSONObject(params.toString())));
+            if (method.equals("thread/start")) return obj("thread", obj("id", "remote-legacy"));
+            if (method.equals("turn/start")) return obj("turn", obj("id", "turn-legacy"));
+            throw new AssertionError(method);
+        });
+        handle(legacy, "chat.send", obj("text", "legacy", "model", "test-model"));
+        JSONObject legacyTurn = legacyCalls.stream().filter(value -> value.optString("method").equals("turn/start")).findFirst().orElseThrow().getJSONObject("params");
+        assertFalse(legacyTurn.has("serviceTierForTurn")); assertFalse(handle(legacy, "state", new JSONObject()).getBoolean("fastMode"));
+        legacy.io.shutdownNow();
+
+        before();
+        Engine unsupported = new Engine(context); loggedIn(unsupported); setField(unsupported, "models", array(obj("id", "test-model", "model", "test-model")));
+        unsupported.setTestTransport((method, params) -> { throw new AssertionError("Fast rejection must happen before an RPC: " + method); });
+        try { handle(unsupported, "chat.send", obj("text", "no fast", "model", "test-model", "fastMode", true)); fail("unsupported Fast must fail"); }
+        catch (ExecutionException expected) { assertTrue(expected.getCause().getMessage().contains("Fast")); }
+        unsupported.io.shutdownNow();
     }
     private JSONObject session(JSONArray sessions, String id) {
         for (int i = 0; i < sessions.length(); i++) {

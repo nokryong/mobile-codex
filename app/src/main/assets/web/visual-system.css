@@ -91,7 +91,7 @@ html[data-theme=dark] {
 .composer.composer-expanded #prompt { white-space:pre-wrap; }
 .composer:not(.composer-expanded) .composer-bottom { display:flex; position:absolute; inset:0; margin:0; padding:0; border:0; pointer-events:none; }
 .composer:not(.composer-expanded) .composer-actions { display:contents; }
-.composer:not(.composer-expanded) :is(#composer-folder,.approval-mode-picker,#composer-options,#send,#stop) { display:none!important; }
+.composer:not(.composer-expanded) :is(#composer-folder,.approval-mode-picker,#composer-options,#fast-mode,#send,#stop) { display:none!important; }
 .composer:not(.composer-expanded) :is(#add-attachment,#voice-input) { position:absolute; top:50%; width:44px; height:44px; pointer-events:auto; }
 .composer:not(.composer-expanded) #add-attachment { left:6px; transform:translateY(-50%); background:transparent; color:var(--text); }
 .composer:not(.composer-expanded) #voice-input { right:6px; transform:translateY(-50%); color:var(--text); }
@@ -147,3 +147,39 @@ html[data-theme=dark] {
   .composer-wrap { padding-left:8px; padding-right:8px; }
   .suggestions button { font-size:12px; }
 }
+
+/* One existing conversation scroller; prepend history without moving its anchor. */
+.chat-scroll { overflow-anchor:none; }
+.history-status { position:sticky; top:0; z-index:1; height:0; max-width:780px; margin:0 auto; color:var(--muted); font-size:12px; text-align:center; }
+.message.user.has-date { position:relative; max-width:min(86%,calc(100% - 78px)); }
+.message-time { position:absolute; right:calc(100% + 8px); bottom:3px; color:var(--muted); font-size:10px; line-height:1.4; font-weight:400; font-variant-numeric:tabular-nums; white-space:nowrap; }
+
+/* The lightning toggle is always first on the expanded composer's lowest row. */
+.composer.composer-expanded .composer-bottom { display:grid; grid-template-columns:44px minmax(0,1fr); grid-template-areas:'attach folder' 'actions actions'; align-items:center; row-gap:4px; }
+.composer.composer-expanded #add-attachment { grid-area:attach; }
+.composer.composer-expanded #composer-folder { grid-area:folder; width:100%; min-width:0; justify-content:flex-start; }
+.composer.composer-expanded .composer-actions { grid-area:actions; width:100%; max-width:none; min-width:0; margin:0; justify-content:flex-start; gap:4px; }
+.composer-actions .fast-mode-button { width:44px; height:44px; min-width:44px; min-height:44px; flex:0 0 44px; border-radius:50%; color:var(--muted); }
+.fast-mode-button svg { width:19px; height:19px; }
+.fast-mode-button[aria-pressed=true] { color:#996700; background:#fff3cd; }
+.fast-mode-button[aria-pressed=true] svg { fill:currentColor; stroke-width:1.2; }
+html[data-theme=dark] .fast-mode-button[aria-pressed=true] { color:#ffd46b; background:#453b25; }
+.composer.composer-expanded .composer-actions .options-button { flex:1 1 100px; min-width:44px; max-width:none; justify-content:flex-start; }
+.composer-actions .options-button #model-summary { min-width:0; max-width:none; flex:1; }
+.composer-actions .approval-mode-picker { flex:0 1 112px; min-width:72px; }
+@media(max-width:420px) {
+  .composer.composer-expanded .composer-actions { gap:2px; }
+  .composer-actions .approval-mode-picker { flex-basis:92px; }
+  .composer-actions:has(#stop:not([hidden])) .approval-mode-picker { display:none; }
+}
+
+/* Keep identity and account actions in the sidebar frame; only navigation scrolls. */
+.sidebar { display:flex; flex-direction:column; min-height:0; overflow:hidden; }
+.sidebar-top,.sidebar-bottom { flex:0 0 auto; }
+.sidebar-scroll { flex:1 1 auto; min-height:0; overflow-x:hidden; overflow-y:auto; }
+.sidebar-bottom { margin-top:0; }
+
+/* The header is in normal flow, so a scroller at zero cannot hide its first message. */
+.topbar { position:relative; inset:auto; flex:none; }
+.chat-scroll { scroll-padding-top:12px; }
+.file-panel { padding-top:0; }

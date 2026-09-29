@@ -17,12 +17,14 @@ public class ProjectRegistryTest {
         assertTrue(entries.getJSONObject(0).getBoolean("available"));
     }
 
-    @Test public void missingLegacyKeyIsKeptDistinctFromGeneralChat() {
+    @Test public void missingLegacyKeyMigratesToGeneralChat() {
         ProjectRegistry registry = new ProjectRegistry();
         registry.put("content://provider/tree/a", "A", "project-a");
         assertEquals("project-a", registry.restoreLegacyKey("thread-a", "", "A"));
-        assertEquals("legacy:thread-lost", registry.restoreLegacyKey("thread-lost", "", "Forgotten"));
-        assertEquals("old-key", registry.restoreLegacyKey("thread", "old-key", "A"));
+        assertEquals("", registry.restoreLegacyKey("thread-lost", "", "Forgotten"));
+        assertEquals("", registry.restoreLegacyKey("thread", "old-key", "A"));
+        registry.ensurePlaceholder("imported-unbound", "Imported");
+        assertEquals("imported-unbound", registry.restoreLegacyKey("thread", "imported-unbound", "Imported"));
     }
     @Test public void removedProjectStaysTombstonedAcrossRestartAndIsNotRestoredByHistory() {
         ProjectRegistry registry = new ProjectRegistry();
@@ -31,7 +33,7 @@ public class ProjectRegistryTest {
         ProjectRegistry restored = ProjectRegistry.fromJson(registry.toJson());
         assertTrue(restored.removed("project-a"));
         assertNull(restored.get("project-a"));
-        assertEquals("project-a", restored.restoreLegacyKey("thread-a", "project-a", "A"));
+        assertEquals("", restored.restoreLegacyKey("thread-a", "project-a", "A"));
         assertNull(restored.get("project-a"));
         restored.put("content://provider/tree/reconnected", "A", "project-a");
         assertFalse(restored.removed("project-a"));
