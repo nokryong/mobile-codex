@@ -181,18 +181,47 @@ test('Chat opening failure leaves Codex usable and reports the failure',async()=
  assert.equal(w.document.body.classList.contains('chat-mode'),false);
  assert.match(w.document.getElementById('toast').textContent,/open failed/);
 });
-test('packaged Chat surface has no native send, reply requery, or fetch observer',()=>{
+test('GPT-6-Pro uses an isolated transport without a remote Android bridge or credential observer',()=>{
  const main=fs.readFileSync('app/src/main/java/dev/mobilecodex/app/MainActivity.java','utf8');
  const app=fs.readFileSync(root+'app.js','utf8');
  const web=fs.readFileSync('app/src/main/java/dev/mobilecodex/app/ChatWebActivity.java','utf8');
+ const transport=fs.readFileSync('app/src/main/java/dev/mobilecodex/app/ProWebTransport.java','utf8');
+ const adapter=fs.readFileSync('app/src/main/assets/pro-web-transport.js','utf8');
  assert.equal(fs.existsSync('app/src/main/java/dev/mobilecodex/app/ChatWebTransport.java'),false);
- assert.doesNotMatch(main,/chat\.web\.|ChatWebTransport/);
+ assert.match(main,/chat\.pro\.send|ProWebTransport/);
+ assert.match(app,/chat\.pro\.send|chatgpt-web:gpt-6-pro/);
  assert.doesNotMatch(app,/chat\.web\.|chat-web-messages|chat-web-draft/);
  assert.doesNotMatch(web,/addJavascriptInterface|backend-api\/f\/conversation/);
+ assert.doesNotMatch(transport,/addJavascriptInterface|getCookie|accessToken|Authorization|backend-api/);
+ assert.match(transport,/onPermissionRequest\(PermissionRequest request\)[\s\S]*?request\.deny\(\)/);
+ assert.doesNotMatch(adapter,/document\.cookie|localStorage|sessionStorage|accessToken|Authorization|backend-api|window\.fetch\s*=/);
  for(const name of ['chat-web-custom.js','chat-icon-renderer.js']) {
    const script=fs.readFileSync('app/src/main/assets/'+name,'utf8');
    assert.doesNotMatch(script,/window\.fetch\s*=|XMLHttpRequest|backend-api\/f\/conversation/);
  }
+});
+test('GPT-6-Pro is synthetic, read-only, and sends through its dedicated action',async()=>{
+ const {w,calls,snapshot}=setup();await tick();const d=w.document;
+ w.mobileCodexEvent('state',{...snapshot,permissions:'danger-full-access',approvalMode:'allow-all'});
+ const pro=d.querySelector('#model-list input[value="chatgpt-web:gpt-6-pro"]');assert.ok(pro);pro.click();await tick();
+ assert.equal(d.getElementById('model-summary').textContent,'GPT-6-Pro · 읽기 전용');
+ assert.equal(d.getElementById('effort').disabled,true);assert.equal(d.getElementById('effort').selectedOptions[0].textContent,'Pro에서 자동 결정');
+ assert.equal(d.getElementById('permissions').value,'read-only');assert.equal(d.getElementById('permissions').disabled,true);
+ assert.equal(d.getElementById('approval-mode').disabled,true);assert.equal(d.getElementById('approval-mode').selectedOptions[0].textContent,'승인 사용 안 함');
+ assert.equal(calls.some(call=>call.action==='permissions.set'||call.action==='approvals.set'),false);
+ d.getElementById('prompt').value='이 변경을 검토해줘';d.getElementById('composer').dispatchEvent(new w.Event('submit',{cancelable:true}));await tick();
+ const sent=calls.find(call=>call.action==='chat.pro.send');assert.ok(sent);assert.equal(sent.args.model,'chatgpt-web:gpt-6-pro');
+ assert.equal(calls.some(call=>call.action==='chat.send'||call.action==='chat.steer'),false);
+ w.mobileCodexEvent('state',{...snapshot,proBusy:true});d.getElementById('stop').click();await tick();
+ assert.equal(calls.at(-1).action,'chat.pro.cancel');
+});
+test('ChatGPT Pro message metadata is visible and uncertain sends warn against retry',async()=>{
+ const {w,snapshot}=setup();await tick();
+ w.mobileCodexEvent('state',{...snapshot,messages:[
+  {id:'u',role:'user',text:'검토',backend:'chatgpt-web',source:'ChatGPT Pro',displayModel:'GPT-6-Pro',status:'uncertain'},
+  {id:'a',role:'assistant',text:'답변',backend:'chatgpt-web',source:'ChatGPT Pro',status:'completed'}
+ ]});
+ const text=w.document.getElementById('messages').textContent;assert.match(text,/GPT-6-Pro/);assert.match(text,/ChatGPT Pro/);assert.match(text,/다시 보내기 전에/);
 });
 test('sidebar sections collapse independently and restore their state',async()=>{
  const {w,snapshot}=setup();await tick();const d=w.document;

@@ -401,7 +401,8 @@ public class EngineOfflineSessionTest {
         assertTrue(types(input).contains("localImage")); assertTrue(types(input).contains("skill")); assertTrue(types(input).contains("mention"));
         assertTrue(input.toString().contains(text.getString("filename")));
         JSONObject accepted = handle(engine, "state", new JSONObject());
-        assertEquals("accepted-thread", accepted.getString("threadId"));
+        String localThread = accepted.getString("threadId");
+        assertTrue(localThread.startsWith("local-")); assertNotEquals("accepted-thread", localThread);
         assertEquals(2, accepted.getJSONArray("messages").getJSONObject(0).getJSONArray("attachments").length());
         assertEquals("review", accepted.getJSONArray("messages").getJSONObject(0).getJSONArray("skills").getJSONObject(0).getString("name"));
         assertEquals("Calendar", accepted.getJSONArray("messages").getJSONObject(0).getJSONArray("mentions").getJSONObject(0).getString("name"));
@@ -415,9 +416,10 @@ public class EngineOfflineSessionTest {
             if (method.equals("turn/start")) return obj("turn", obj("id", "turn-2"));
             throw new AssertionError(method);
         });
-        handle(reopened, "chat.resume", obj("id", "accepted-thread"));
+        handle(reopened, "chat.resume", obj("id", localThread));
         handle(reopened, "chat.send", obj("text", "continued"));
         JSONObject resume = resumedCalls.stream().filter(c -> c.optString("method").equals("thread/resume")).findFirst().get().getJSONObject("params");
+        assertEquals("accepted-thread", resume.getString("threadId"));
         assertEquals(context.getFilesDir().toPath().resolve("workspace").toString(), resume.getString("cwd"));
         reopened.io.shutdownNow();
 
@@ -433,6 +435,45 @@ public class EngineOfflineSessionTest {
         assertEquals("", afterFailure.getString("threadId"));
         assertEquals(1, afterFailure.getJSONArray("sessions").length());
         failed.io.shutdownNow();
+    }
+    @Test public void syntheticProNeverReachesCodexRpcAndPersistsOneMappedWebConversation() throws Exception {
+        Engine engine = new Engine(context);
+        java.util.ArrayList<String> calls = new java.util.ArrayList<>();
+        engine.setTestTransport((method, params) -> { calls.add(method + " " + params); throw new AssertionError("Pro must not call Codex"); });
+        JSONObject prepared = handle(engine, "chat.pro.prepare", obj("text", "review this", "model", ProContextBuilder.MODEL_ID,
+            "expectedThreadId", "", "workspaceKey", "", "attachments", array(), "skills", array(), "mentions", array()));
+        assertTrue(calls.isEmpty()); assertTrue(prepared.getString("threadId").startsWith("local-"));
+        assertEquals("", prepared.getString("chatConversationId"));
+        JSONObject sending = handle(engine, "state", obj());
+        assertTrue(sending.getBoolean("proBusy"));
+        JSONObject user = sending.getJSONArray("messages").getJSONObject(0);
+        assertEquals("chatgpt-web", user.getString("backend")); assertEquals("sending", user.getString("status"));
+
+        handle(engine, "chat.pro.complete", obj("threadId", prepared.getString("threadId"), "operationId", prepared.getString("operationId"),
+            "reply", "reviewed", "remoteMessageId", "reply-one", "chatConversationId", "conversation-one",
+            "chatConversationPath", "/g/g-p-project/c/conversation-one",
+            "chatProjectPath", "/g/g-p-project/project"));
+        JSONObject completed = handle(engine, "state", obj());
+        assertFalse(completed.getBoolean("proBusy")); assertEquals(2, completed.getJSONArray("messages").length());
+        assertEquals("ChatGPT Pro", completed.getJSONArray("messages").getJSONObject(1).getString("source"));
+
+        Engine reopened = new Engine(context);
+        JSONObject resumed = handle(reopened, "chat.resume", obj("id", prepared.getString("threadId")));
+        assertEquals("conversation-one", ((JSONObject)field(reopened, "active")).getString("chatConversationId"));
+        assertFalse(((JSONObject)field(reopened, "active")).has("codexThreadId"));
+        JSONObject next = handle(reopened, "chat.pro.prepare", obj("text", "continue", "model", ProContextBuilder.MODEL_ID,
+            "expectedThreadId", resumed.getString("threadId"), "workspaceKey", "", "attachments", array(), "skills", array(), "mentions", array()));
+        assertEquals("conversation-one", next.getString("chatConversationId"));
+        assertEquals("/g/g-p-project/c/conversation-one", next.getString("chatConversationPath"));
+        assertEquals("/g/g-p-project/project", next.getString("chatProjectPath"));
+        engine.io.shutdownNow(); reopened.io.shutdownNow();
+    }
+    @Test public void syntheticProModelIsRejectedByOrdinaryCodexSend() throws Exception {
+        Engine engine = new Engine(context); loggedIn(engine);
+        engine.setTestTransport((method, params) -> { throw new AssertionError("synthetic model reached " + method); });
+        try { handle(engine, "chat.send", obj("text", "wrong route", "model", ProContextBuilder.MODEL_ID)); fail("must reject"); }
+        catch (ExecutionException expected) { assertTrue(expected.getCause().getMessage().contains("전용 전송 경로")); }
+        engine.io.shutdownNow();
     }
     @Test public void exactRequestedModelIsVisibleInThreadInstructionsAndUpdatesOnChange() throws Exception {
         Engine engine = new Engine(context); loggedIn(engine);

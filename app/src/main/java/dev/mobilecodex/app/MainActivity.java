@@ -18,10 +18,14 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
+import androidx.core.content.FileProvider;
 import org.json.JSONObject;
+import org.json.JSONArray;
+import java.io.File;
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
+import java.util.Set;
 import static dev.mobilecodex.app.core.Json.*;
 
 public final class MainActivity extends Activity implements Engine.Ui {
@@ -64,6 +68,7 @@ public final class MainActivity extends Activity implements Engine.Ui {
     static final String HOST = "appassets.androidplatform.net";
     private static final int PICK_FOLDER = 31, EXPORT_RECOVERY = 32, IMPORT_SKILL = 33, EXPORT_IMAGE = 34, PICK_ATTACHMENTS = 35, EXPORT_ATTACHMENT = 36, INSTALL_UPDATE = 37, PICK_CHARACTERS = 38;
     private WebView web;
+    private ProWebTransport proTransport;
     private SafeWebViewLayout root;
     private boolean keyboardVisible;
     private String theme = "system";
@@ -161,6 +166,7 @@ public final class MainActivity extends Activity implements Engine.Ui {
             }
         });
         root.addView(web, new FrameLayout.LayoutParams(-1, -1));
+        proTransport = new ProWebTransport(this, root);
         setContentView(root);
         applyTheme("system");
         if (Build.VERSION.SDK_INT >= 33) getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
@@ -196,6 +202,7 @@ public final class MainActivity extends Activity implements Engine.Ui {
         if (dictation != null) dictation.cancel();
         engine.detach(this);
         if (approvalDialog != null) approvalDialog.dismiss();
+        if (proTransport != null) proTransport.destroy();
         web.removeJavascriptInterface("Native"); web.destroy(); super.onDestroy();
     }
     @Override public void onBackPressed() { handleBack(); }
@@ -397,6 +404,60 @@ public final class MainActivity extends Activity implements Engine.Ui {
             }));
         } catch (Exception error) { respond(requestId, null, error); }
     }
+    private void sendPro(String requestId, JSONObject args) {
+        engine.handle("chat.pro.prepare", args, (prepared, prepareError) -> {
+            if (prepareError != null) { respond(requestId, null, prepareError); return; }
+            runOnUiThread(() -> {
+                try {
+                    Uri[] uploads = proUploadUris(prepared.optJSONArray("uploads"));
+                    proTransport.send(prepared, uploads, (result, transportError) ->
+                        finishPro(requestId, prepared, result, transportError));
+                } catch (Exception error) {
+                    finishPro(requestId, prepared, null, error);
+                }
+            });
+        });
+    }
+    private Uri[] proUploadUris(JSONArray values) throws Exception {
+        if (values == null || values.length() == 0) return new Uri[0];
+        File root = new File(getFilesDir(), "attachments").getCanonicalFile();
+        Uri[] result = new Uri[values.length()];
+        for (int i = 0; i < values.length(); i++) {
+            JSONObject value = values.getJSONObject(i);
+            File file = new File(value.getString("path")).getCanonicalFile();
+            if (!file.isFile() || !file.getPath().startsWith(root.getPath() + File.separator))
+                throw new java.io.IOException(t("GPT-6-Pro 첨부 파일 경로가 올바르지 않습니다."));
+            result[i] = FileProvider.getUriForFile(this, getPackageName() + ".proattachments", file);
+        }
+        return result;
+    }
+    private void finishPro(String requestId, JSONObject prepared, JSONObject result, Throwable transportError) {
+        String operationId = prepared.optString("operationId"), localThread = prepared.optString("threadId");
+        if (result != null && "completed".equals(result.optString("status")) && transportError == null) {
+            JSONObject complete = obj("threadId", localThread, "operationId", operationId,
+                "reply", result.optString("reply"), "remoteMessageId", result.optString("remoteMessageId"),
+                "chatConversationId", result.optString("chatConversationId"), "chatConversationPath", result.optString("chatConversationPath"),
+                "chatProjectPath", result.optString("chatProjectPath"));
+            engine.handle("chat.pro.complete", complete, (saved, saveError) -> {
+                if (saveError == null) proTransport.acknowledge(operationId);
+                respond(requestId, saved, saveError);
+            });
+            return;
+        }
+        String webStatus = result == null ? "failed" : result.optString("status", "failed");
+        String localStatus = "uncertain".equals(webStatus) || (result != null && result.optBoolean("clicked")) ? "uncertain"
+            : Set.of("login_required", "unavailable", "web_changed", "not_sent").contains(webStatus) ? "not_sent" : "failed";
+        String reason = transportError == null ? (result == null ? t("GPT-6-Pro 웹 전송에 실패했습니다.") : result.optString("reason", t("GPT-6-Pro 웹 전송에 실패했습니다.")))
+            : (transportError.getMessage() == null ? t("GPT-6-Pro 웹 전송에 실패했습니다.") : transportError.getMessage());
+        JSONObject failed = obj("threadId", localThread, "operationId", operationId, "status", localStatus, "reason", reason,
+            "chatConversationId", result == null ? "" : result.optString("chatConversationId"),
+            "chatConversationPath", result == null ? "" : result.optString("chatConversationPath"));
+        if (result != null) try { failed.put("chatProjectPath", result.optString("chatProjectPath")); } catch (Exception ignored) {}
+        engine.handle("chat.pro.fail", failed, (saved, saveError) -> {
+            if (saveError != null) respond(requestId, null, saveError);
+            else { proTransport.acknowledge(operationId); respond(requestId, null, new IllegalStateException(reason)); }
+        });
+    }
     private final class Bridge {
         @JavascriptInterface public String locale() { return AppLanguage.snapshot(MainActivity.this).toString(); }
         @JavascriptInterface public void postMessage(String raw) {
@@ -408,6 +469,11 @@ public final class MainActivity extends Activity implements Engine.Ui {
                 requestId = id;
                 JSONObject args = message.optJSONObject("args"); if (args == null) args = new JSONObject();
                 JSONObject parameters = args;
+                if (action.equals("chat.pro.send")) { sendPro(id, args); return; }
+                if (action.equals("chat.pro.cancel")) {
+                    runOnUiThread(() -> proTransport.cancel((result, error) -> respond(id, result, error))); return;
+                }
+                if (action.equals("chat.pro.diagnostic")) { runOnUiThread(() -> respond(id, proTransport.diagnostic(), null)); return; }
                 if (action.equals("attachments.recover")) {
                     String saved = getSharedPreferences("attachment-result", 0).getString("pending", "");
                     respond(id, saved.isEmpty() ? obj("attachments", new org.json.JSONArray()) : new JSONObject(saved), null); return;

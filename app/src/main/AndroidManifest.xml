@@ -27,6 +27,10 @@
             android:exported="false" android:grantUriPermissions="true">
             <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/update_paths" />
         </provider>
+        <provider android:name="androidx.core.content.FileProvider" android:authorities="${applicationId}.proattachments"
+            android:exported="false" android:grantUriPermissions="true">
+            <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/pro_attachment_paths" />
+        </provider>
         <activity android:name=".MainActivity" android:exported="true"
             android:launchMode="singleTop"
             android:enableOnBackInvokedCallback="true" tools:targetApi="33"

@@ -2,6 +2,7 @@
 (() => {
   'use strict';
   const L = window.MobileCodexLocale, t = L.t;
+  const PRO_MODEL = 'chatgpt-web:gpt-6-pro', PRO_LABEL = 'GPT-6-Pro';
   const $ = id => document.getElementById(id), C = window.UiCore;
   const pending = new Map(), requestQueue = new Map();
   const dialogs = [], frame = fn => (window.requestAnimationFrame || (cb => setTimeout(cb, 0)))(fn);
@@ -235,7 +236,8 @@
     efforts(); if ([...$('effort').options].some(o => o.value === draftOptions.effort)) $('effort').value = draftOptions.effort;
     sizeComposer();
   }
-  function updateSend() { $('voice-input').disabled = !draftScope || voiceStarting || voiceActive || !!sending; $('voice-input').setAttribute('aria-busy', String(voiceStarting || voiceActive)); $('send').disabled = ((!$('prompt').value.trim() && !(draftContext.attachments || []).length) || !!sending || voiceStarting || voiceActive); $('send').setAttribute('aria-label', state.busy ? t('진행 중인 작업에 추가 지시') : t('메시지 보내기')); $('send').title = state.busy ? t('추가 지시') : t('보내기'); }
+  const proSelected = () => $('model')?.value === PRO_MODEL;
+  function updateSend() { const pro = proSelected(), occupied = !!state.proBusy || (pro && !!state.busy); $('voice-input').disabled = !draftScope || voiceStarting || voiceActive || !!sending; $('voice-input').setAttribute('aria-busy', String(voiceStarting || voiceActive)); $('send').disabled = ((!$('prompt').value.trim() && !(draftContext.attachments || []).length) || !!sending || voiceStarting || voiceActive || occupied); const steering = state.busy && !pro; $('send').setAttribute('aria-label', pro ? t('GPT-6-Pro에 보내기') : steering ? t('진행 중인 작업에 추가 지시') : t('메시지 보내기')); $('send').title = pro ? t('GPT-6-Pro에 보내기') : steering ? t('추가 지시') : t('보내기'); }
   function scrollLatest() { following = true; $('chat-scroll').scrollTop = $('chat-scroll').scrollHeight; $('jump-latest').hidden = true; }
   function sizeComposer() {
     const field = $('prompt'), cap = Math.max(60, Math.min(160, window.innerHeight * .24));
@@ -257,6 +259,15 @@
     } else $('sidebar').inert = !document.body.classList.contains('sidebar-open');
   }
   function optionsSummary() {
+    if (proSelected()) {
+      $('model-summary').textContent = PRO_LABEL + ' · ' + t('읽기 전용');
+      $('composer-options').setAttribute('aria-label', t('작업 설정: ') + PRO_LABEL + t(', 읽기 전용'));
+      $('composer-options').title = PRO_LABEL + ' · ' + t('읽기 전용');
+      $('approval-mode').title = t('GPT-6-Pro에서는 승인 요청을 사용하지 않습니다.');
+      $('permission-help').textContent = t('분석·검토·질문 답변만 지원합니다. 파일 수정, 명령 실행, 휴대폰 제어는 사용할 수 없습니다.');
+      $('model-help').textContent = t('공식 ChatGPT 웹에서 실제 GPT-6 Pro 선택 상태를 확인한 뒤 읽기 전용으로 보냅니다.');
+      return;
+    }
     const model = $('model').selectedOptions[0]?.textContent || t('기본 모델');
     const effort = $('effort').selectedOptions[0]?.textContent || t('기본');
     const approval = $('approval-mode').selectedOptions[0]?.textContent || t('자동 검토');
@@ -269,11 +280,27 @@
     $('model-help').textContent = current?.description || (current ? t('연결된 계정에서 사용할 수 있는 모델입니다.') : t('기본 모델을 사용합니다.'));
   }
   function syncPermissionControls(mode, disabled = !!state.busy) {
+    if (proSelected()) {
+      $('permissions').value = 'read-only'; $('permissions').disabled = true;
+      document.querySelectorAll('input[name="permission"]').forEach(r => { r.checked = r.value === 'read-only'; r.disabled = true; });
+      return;
+    }
     const value = ['read-only','workspace-write','danger-full-access'].includes(mode) ? mode : 'workspace-write';
     $('permissions').value = value; $('permissions').disabled = disabled;
     document.querySelectorAll('input[name="permission"]').forEach(r => { r.checked = r.value === value; r.disabled = disabled; });
   }
+  function syncApprovalControl(disabled = !!state.busy) {
+    const select = $('approval-mode'), proOption = [...select.options].find(option => option.value === 'pro-disabled');
+    if (proSelected()) {
+      if (!proOption) select.add(new Option(t('승인 사용 안 함'), 'pro-disabled'));
+      select.value = 'pro-disabled'; select.disabled = true;
+    } else {
+      if (proOption) proOption.remove();
+      select.value = state.approvalMode || 'auto-review'; select.disabled = disabled;
+    }
+  }
   async function setApprovalMode(mode) {
+    if (proSelected()) return;
     const previous = state.approvalMode || 'auto-review';
     $('approval-mode').disabled = true;
     try { await call('approvals.set', {mode}); state.approvalMode = mode; }
@@ -281,6 +308,7 @@
     finally { $('approval-mode').value = state.approvalMode || previous; $('approval-mode').disabled = !!state.busy; optionsSummary(); }
   }
   async function setPermissionMode(mode) {
+    if (proSelected()) return;
     const previous = state.permissions || 'workspace-write';
     syncPermissionControls(mode, true); optionsSummary();
     try { await call('permissions.set', {mode}); state.permissions = mode; }
@@ -741,7 +769,7 @@
       keep.add(m.id); let el = elements.get(m.id);
       if (!el) { el = node('article', null, 'message ' + (m.role === 'user' ? 'user' : 'assistant')); el.dataset.id = m.id; $('messages').append(el); }
       const iconName = m.imageStatus === 'generating' ? 'working' : state.busy && m.id === messages[messages.length - 1]?.id ? 'thinking' : C.messageIcon(m);
-      const signature = JSON.stringify([m.text, m.status, m.images, m.attachments, m.imageStatus, m.imageError, L.language(), chatIconsEnabled, iconName, characterVisualKey()]);
+      const signature = JSON.stringify([m.text, m.status, m.source, m.backend, m.displayModel, m.error, m.images, m.attachments, m.imageStatus, m.imageError, L.language(), chatIconsEnabled, iconName, characterVisualKey()]);
       if (el.dataset.signature !== signature) {
         el.dataset.signature = signature;
         if (m.role === 'user') {
@@ -749,10 +777,13 @@
           const body = node('div', text, 'user-message-text');
           el.replaceChildren(body);
           if (m.attachments?.length) el.append(sentAttachments(m.attachments));
+          if (m.source === 'ChatGPT Pro' || m.backend === 'chatgpt-web') el.prepend(node('span', m.displayModel || PRO_LABEL, 'message-source-badge'));
+          if (['not_sent','uncertain','failed'].includes(m.status)) el.append(node('p', m.status === 'uncertain' ? t('전송 상태를 확인해야 합니다. 같은 메시지를 다시 보내기 전에 ChatGPT 웹 대화를 확인하세요.') : (m.error || t('보내지 못했습니다.')), 'message-transport-status'));
         }
         else {
           const previousIcon = el.querySelector('.chat-character');
           prose(el, m.text || '');
+          if (m.source === 'ChatGPT Pro' || m.backend === 'chatgpt-web') el.prepend(node('span', 'ChatGPT Pro', 'message-source-badge'));
            if (chatIconsEnabled) el.prepend(previousIcon?.getAttribute('src') === characterIconUrl(iconName) ? previousIcon : characterIcon(iconName));
           if (m.images?.length) el.append(imageGallery(m.images, m.id));
           if (m.imageStatus === 'generating') el.append(node('p', t('이미지 생성 중…'), 'image-placeholder'));
@@ -773,6 +804,11 @@
     else $('jump-latest').hidden = !messages.length;
   }
   function efforts() {
+    if (proSelected()) {
+      $('effort').replaceChildren(new Option(t('Pro에서 자동 결정'), 'pro-auto'));
+      $('effort').value = 'pro-auto'; $('effort').disabled = true; optionsSummary(); return;
+    }
+    $('effort').disabled = false;
     const selected = state.models.find(m => (m.model || m.id) === $('model').value) || state.models.find(m => m.isDefault);
     const previous = $('effort').value; $('effort').replaceChildren(new Option(t('기본'), ''));
     for (const e of selected?.supportedReasoningEfforts || []) $('effort').add(new Option(e.reasoningEffort, e.reasoningEffort));
@@ -781,7 +817,7 @@
   }
   function renderModelList() {
     const target = $('model-list'); target.replaceChildren();
-    const choices = [{id:'', label:t('기본 모델'), description:t('기본 모델을 사용합니다.')}, ...state.models.map(m => ({id:m.model || m.id, label:m.displayName || m.model || m.id, description:m.description || m.model || m.id}))];
+    const choices = [{id:'', label:t('기본 모델'), description:t('기본 모델을 사용합니다.')}, {id:PRO_MODEL, label:PRO_LABEL, description:t('공식 ChatGPT 웹 · 분석과 검토 전용')}, ...state.models.map(m => ({id:m.model || m.id, label:m.displayName || m.model || m.id, description:m.description || m.model || m.id}))];
     for (const choice of choices) {
       const label = node('label', null, 'model-choice'); const input = node('input'); input.type = 'radio'; input.name = 'model-choice'; input.value = choice.id; input.checked = $('model').value === choice.id;
       input.addEventListener('change', () => { $('model').value = choice.id; $('model').dispatchEvent(new Event('change')); renderModelList(); });
@@ -1046,13 +1082,13 @@
     const pendingDeletes = Number(state.pendingDeletionCount) || 0;
     $('pending-deletions').hidden = pendingDeletes === 0;
     $('pending-deletions').textContent = pendingDeletes ? t('원본 삭제 대기 {count}건. 아래 ‘Codex 시작 / 다시 연결’을 누르면 다시 시도합니다.', {count:pendingDeletes}) : '';
-    $('send').hidden = false; $('stop').hidden = !state.busy; $('activity').hidden = !state.busy;
-    if (changedThread || !state.busy)
-      $('activity-text').textContent = 'Codex 답변 기다리는 중';
-    if (!state.busy) activityIcon = 'thinking';
+    const anyBusy = !!state.busy || !!state.proBusy;
+    $('send').hidden = false; $('stop').hidden = !anyBusy; $('activity').hidden = !anyBusy;
+    if (changedThread || !anyBusy)
+      $('activity-text').textContent = state.proBusy ? t('ChatGPT Pro 답변 기다리는 중') : t('Codex 답변 기다리는 중');
+    if (state.proBusy) $('activity-text').textContent = t('ChatGPT Pro 답변 기다리는 중');
+    if (!anyBusy) activityIcon = 'thinking';
     drawStatusIcons();
-    syncPermissionControls(state.permissions, !!state.busy);
-    $('approval-mode').value = state.approvalMode || 'auto-review'; $('approval-mode').disabled = !!state.busy;
     $('terminal-cwd').textContent = state.cwd || '';
     $('storage-status').textContent = state.directWorkspace ? t('선택한 폴더에서 셸 명령을 실행합니다.') : t('폴더의 셸 접근은 기기 파일 권한이 필요합니다. 문서 제공자 폴더는 파일 도구로 접근합니다.');
     $('storage-access').textContent = state.allFilesAccess ? t('기기 파일 접근 설정') : t('기기 파일 접근 허용');
@@ -1068,7 +1104,9 @@
     for (const session of (state.sessions || []).filter(s => !(s.workspaceKey || s.workspace))) $('sessions').append(sessionRow(session));
     if (!state.sessions?.length) $('sessions').append(node('p', t('대화를 시작하면 여기에 표시됩니다.'), 'sidebar-empty'));
     const key = JSON.stringify(state.models);
-    if (key !== modelKey) { modelKey = key; const value = draftOptions.model || $('model').value; $('model').replaceChildren(new Option(t('기본 모델'), '')); for (const m of state.models) $('model').add(new Option(m.displayName || m.model || m.id, m.model || m.id)); if ([...$('model').options].some(o => o.value === value)) $('model').value = value; efforts(); if ([...$('effort').options].some(o => o.value === draftOptions.effort)) $('effort').value = draftOptions.effort; }
+    if (key !== modelKey) { modelKey = key; const value = draftOptions.model || $('model').value; $('model').replaceChildren(new Option(t('기본 모델'), ''), new Option(PRO_LABEL, PRO_MODEL)); for (const m of state.models) $('model').add(new Option(m.displayName || m.model || m.id, m.model || m.id)); if ([...$('model').options].some(o => o.value === value)) $('model').value = value; efforts(); if ([...$('effort').options].some(o => o.value === draftOptions.effort)) $('effort').value = draftOptions.effort; }
+    syncPermissionControls(state.permissions, anyBusy || proSelected());
+    syncApprovalControl(anyBusy);
     renderModelList();
     if (changedThread) { following = true; $('event-log').replaceChildren(); $('messages').replaceChildren(); }
     updateSend(); optionsSummary(); drawUpdates(updateState);
@@ -1660,11 +1698,11 @@
   on('composer', async () => {
     const value = $('prompt').value, text = value.trim();
     if ((!text && !draftContext.attachments.length) || sending || voiceStarting || voiceActive) return;
-    const steer = !!state.busy, expectedTurnId = state.turnId || '', expectedThreadId = state.threadId || '', workspaceKey = state.workspace?.key || '';
+    const pro = proSelected(), steer = !!state.busy && !pro, expectedTurnId = state.turnId || '', expectedThreadId = state.threadId || '', workspaceKey = state.workspace?.key || '';
     const submitted = {value, context:JSON.parse(JSON.stringify(draftContext)), scopes:new Set([draftScope])}; sending = submitted;
     saveDraft(); updateSend(); scrollLatest();
     try {
-      await call(steer ? 'chat.steer' : 'chat.send', {text, expectedTurnId, expectedThreadId, workspaceKey, model:$('model').value, effort:$('effort').value, attachments:submitted.context.attachments.map(x => x.id), skills:submitted.context.skills, mentions:submitted.context.mentions});
+      await call(pro ? 'chat.pro.send' : steer ? 'chat.steer' : 'chat.send', {text, expectedTurnId, expectedThreadId, workspaceKey, model:$('model').value, effort:pro ? '' : $('effort').value, attachments:submitted.context.attachments.map(x => x.id), skills:submitted.context.skills, mentions:submitted.context.mentions});
       // Keep text typed during the request, or drafts from a different conversation.
       if (submitted.scopes.has(draftScope) && $('prompt').value === value) {
         $('prompt').value = '';
@@ -1728,7 +1766,7 @@
     imageTouch = null;
   }, {passive:true});
   $('image-stage').addEventListener('touchcancel', () => imageTouch = null, {passive:true});
-  on('stop', () => call('chat.stop')); on('model', () => { efforts(); saveOptions(); }, 'change'); on('effort', () => { optionsSummary(); saveOptions(); }, 'change'); on('add-attachment', chooseAttachment);
+  on('stop', () => call(state.proBusy ? 'chat.pro.cancel' : 'chat.stop')); on('model', () => { efforts(); syncPermissionControls(state.permissions, !!state.busy || !!state.proBusy || proSelected()); syncApprovalControl(!!state.busy || !!state.proBusy); saveOptions(); updateSend(); renderModelList(); }, 'change'); on('effort', () => { optionsSummary(); saveOptions(); }, 'change'); on('add-attachment', chooseAttachment);
   on('permissions', () => setPermissionMode($('permissions').value), 'change');
   on('approval-mode', () => setApprovalMode($('approval-mode').value), 'change');
   document.querySelectorAll('input[name="permission"]').forEach(r => r.addEventListener('change', () => setPermissionMode(r.value).catch(error => toast(error.message))));
