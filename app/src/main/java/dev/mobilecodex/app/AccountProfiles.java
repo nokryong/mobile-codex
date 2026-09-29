@@ -36,6 +36,13 @@ final class AccountProfiles {
         } catch (Exception ignored) { return ""; }
     }
 
+    /** Only the presence of a saved login is needed for background startup. */
+    boolean hasSavedLogin() { return liveAuth.isFile(); }
+    boolean activeNeedsLogin() {
+        String key = activeKey();
+        return !key.isBlank() && readMetadata(new File(profilesRoot, key)).optBoolean("needsLogin", false);
+    }
+
     JSONArray list() {
         JSONArray result = new JSONArray();
         String active = activeKey();

@@ -904,5 +904,7 @@
   "먼저 Linux 런타임을 설치해 주세요.": "Install the Linux runtime first.",
   "선택한 작업 폴더를 찾을 수 없습니다.": "The selected working folder could not be found.",
   "이 기기에서는 Linux 런타임을 지원하지 않습니다.": "This device does not support the Linux runtime.",
-  "이전 Linux 설치 파일이 완전하지 않습니다. 삭제한 뒤 다시 설치해 주세요.": "The previous Linux installation is incomplete. Remove it, then install again."
+  "이전 Linux 설치 파일이 완전하지 않습니다. 삭제한 뒤 다시 설치해 주세요.": "The previous Linux installation is incomplete. Remove it, then install again.",
+  "계정 설정": "Account settings",
+  "계정 정보를 불러오지 못했습니다. 다시 시도해 주세요.": "Could not load account details. Please try again."
 }

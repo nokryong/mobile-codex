@@ -1,5 +1,7 @@
 /* UI messages only; user/model/file content is never translated. */
 window.MobileCodexEnglish = {
+  "계정 설정": "Account settings",
+  "계정 정보를 불러오지 못했습니다. 다시 시도해 주세요.": "Could not load account details. Please try again.",
   "Linux 환경": "Linux environment",
   "필요할 때만 내려받아 Codex와 터미널 명령에 사용합니다. 프로젝트 파일은 그대로 유지됩니다.": "Download it only when needed for Codex and terminal commands. Project files stay unchanged.",
   "이 앱 버전에서는 Linux 환경을 사용할 수 없습니다.": "This app version does not support the Linux environment.",

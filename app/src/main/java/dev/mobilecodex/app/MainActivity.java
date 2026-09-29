@@ -139,6 +139,7 @@ public final class MainActivity extends Activity implements Engine.Ui {
                     loaded = true;
                     while (!pendingUiEvents.isEmpty()) web.evaluateJavascript(pendingUiEvents.removeFirst(), null);
                     engine.attach(MainActivity.this);
+                    if (foreground) engine.restoreAccount();
                     handleNotificationIntent(getIntent());
                     event("viewport", obj("keyboardVisible", keyboardVisible));
                 }
@@ -174,7 +175,7 @@ public final class MainActivity extends Activity implements Engine.Ui {
         return new WebResourceResponse("text/plain", "UTF-8", 403, "Forbidden", Map.of(), new ByteArrayInputStream(new byte[0]));
     }
     @Override protected void onStart() { super.onStart(); if (loaded) engine.attach(this); }
-    @Override protected void onResume() { super.onResume(); AppLanguage.configure(this); foreground = true; getSharedPreferences("notifications", 0).edit().putBoolean("foreground", true).commit(); requestNotificationPermissionIfNeeded(); event("notifications.changed", obj()); event("updates.changed", updates.snapshot()); if (loaded) engine.attach(this); event("voice.changed", obj()); }
+    @Override protected void onResume() { super.onResume(); AppLanguage.configure(this); foreground = true; getSharedPreferences("notifications", 0).edit().putBoolean("foreground", true).commit(); requestNotificationPermissionIfNeeded(); event("notifications.changed", obj()); event("updates.changed", updates.snapshot()); if (loaded) { engine.attach(this); engine.restoreAccount(); } event("voice.changed", obj()); }
     @Override protected void onPause() { foreground = false; getSharedPreferences("notifications", 0).edit().putBoolean("foreground", false).commit(); if (dictation != null && !dictation.waitingPermission()) dictation.cancel(); super.onPause(); }
     @Override protected void onNewIntent(Intent intent) { super.onNewIntent(intent); setIntent(intent); handleNotificationIntent(intent); }
     private void handleNotificationIntent(Intent intent) {

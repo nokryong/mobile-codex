@@ -5,6 +5,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.os.Build;
 import android.os.Environment;
+import android.os.SystemClock;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import java.io.*;
@@ -56,6 +57,10 @@ public final class Engine {
     private volatile boolean terminalUsesLinux;
     private String status = t("시작할 준비가 됐습니다"), threadId = "", turnId = "", serverThreadId = "";
     private JSONObject account = new JSONObject();
+    // Unknown is not signed out. Keep startup/refresh mechanics out of the login UI.
+    private String authState = "unknown", authError = "";
+    private long lastAccountCheckElapsed = -1;
+    private boolean autoRestorePaused, loginInProgress;
     private JSONObject rateLimits = new JSONObject();
     /** Do not publish a staged target until account/rate-limit validation passes. */
     private boolean suppressStatePublish;
@@ -89,6 +94,7 @@ public final class Engine {
         catch (IOException e) { throw new IllegalStateException(t("Codex 홈을 준비하지 못했습니다."), e); }
         try { accountProfiles = new AccountProfiles(codexHome.root(), context.getFilesDir()); }
         catch (IOException e) { throw new IllegalStateException(t("계정 프로필을 준비하지 못했습니다."), e); }
+        if (!accountProfiles.hasSavedLogin()) authState = "signed_out";
         processHome = codexHome.root();
         instructions = new PersonalInstructions(codexHome);
         devTools = new DevTools(context);
@@ -108,6 +114,38 @@ public final class Engine {
         });
     }
     public void detach(Ui ui) { if (this.ui == ui) this.ui = null; }
+    /** Called by the visible Codex Activity, never by the remote Chat WebView. */
+    public void restoreAccount() {
+        io.execute(() -> {
+            // Lifecycle callbacks can arrive together. All checks and mutations
+            // share the same queue as logout, account switching, and runtime stop.
+            if (autoRestorePaused || loginInProgress || hasRunningTurns()) return;
+            long cooldown = "error".equals(authState) ? 10_000 : 60_000;
+            if (lastAccountCheckElapsed >= 0 && SystemClock.elapsedRealtime() - lastAccountCheckElapsed < cooldown) return;
+            try { refreshAccount(); }
+            catch (Exception ignored) { /* State carries the failure; no startup toast/dialog. */ }
+        });
+    }
+    private void refreshAccount() throws Exception {
+        if (loginInProgress) return;
+        lastAccountCheckElapsed = SystemClock.elapsedRealtime();
+        if (!ready && !accountProfiles.hasSavedLogin()) {
+            account = new JSONObject(); rateLimits = new JSONObject();
+            authState = "signed_out"; authError = ""; publish(); return;
+        }
+        // Retain a previously confirmed account while refreshing in the background.
+        authState = "checking"; authError = "";
+        try {
+            if (!ready || (testTransport == null && !processIsAlive())) start();
+            else { readAccount(); readRateLimits(); publish(); }
+        } catch (Exception error) {
+            if (!"signed_out".equals(authState)) {
+                authState = "error";
+                authError = t("계정 정보를 불러오지 못했습니다. 다시 시도해 주세요.");
+            }
+            publish(); throw error;
+        } finally { lastAccountCheckElapsed = SystemClock.elapsedRealtime(); }
+    }
     public void observe(Ui observer) { observers.add(observer); io.execute(() -> { if (observers.contains(observer)) { observer.event("state", snapshot()); if (pendingApproval != null && !pendingApproval.decision.isDone()) observer.approval(pendingApproval); requests.forEach((key, request) -> observer.event("server.request", obj("key", key, "method", request.method, "params", request.params))); } }); }
     public void unobserve(Ui observer) { observers.remove(observer); }
     void setTestTransport(TestTransport value) { testTransport = value; }
@@ -131,6 +169,7 @@ public final class Engine {
                 "busy", runningTurns.containsKey(s.optString("id")), "approvalPending", s.optBoolean("approvalPending")));
         }
         return obj("ready", ready, "busy", busy, "status", t(status), "account", account,
+            "authState", authState, "authError", t(authError),
             "accounts", accountProfiles.list(), "rateLimits", rateLimits, "models", models, "workspace", documents.workspace(), "projects", documents.projects(), "sessions", summaries,
             "threadId", threadId, "turnId", turnId, "turnDiff", active == null ? "" : active.optString("turnDiff"), "messages", active == null ? new JSONArray() : active.optJSONArray("messages"),
             "pendingDeletionCount", pendingDeletionCount(), "devtools", devTools.status(), "linux", linux.status(),
@@ -200,7 +239,8 @@ public final class Engine {
                 switch (action) {
                     case "state" -> reply.complete(snapshot(), null);
                     case "phone.stop" -> { publish(); reply.complete(snapshot(), null); }
-                    case "runtime.start" -> { start(); reply.complete(snapshot(), null); }
+                    case "runtime.start" -> { autoRestorePaused = false; start(); reply.complete(snapshot(), null); }
+                    case "auth.refresh" -> { refreshAccount(); reply.complete(snapshot(), null); }
                     case "models.refresh" -> {
                         if (!ready) start();
                         JSONArray latest = call("model/list", obj("limit", 100, "includeHidden", false), 10).optJSONArray("data");
@@ -223,20 +263,21 @@ public final class Engine {
                         ensureRuntimeSettingsIdle(); linux.remove(); serverThreadId = "";
                         publish(); reply.complete(linux.status(), null);
                     }
-                    case "runtime.stop" -> { linux.cancel(); stopNow(); reply.complete(snapshot(), null); }
+                    case "runtime.stop" -> { autoRestorePaused = true; linux.cancel(); stopNow(); reply.complete(snapshot(), null); }
                     case "auth.login" -> reply.complete(beginLogin(false), null);
                     case "auth.add" -> reply.complete(beginLogin(true), null);
                     case "auth.cancel" -> {
                         JSONObject result;
                         try { result = call("account/login/cancel", args); }
-                        finally { restoreAccountAfterCancelledLogin(); }
+                        finally { loginInProgress = false; restoreAccountAfterCancelledLogin(); }
                         reply.complete(result, null);
                     }
                     case "auth.switch" -> { switchAccount(args.getString("key")); reply.complete(snapshot(), null); }
                     case "auth.remove" -> { accountProfiles.delete(args.getString("key")); publish(); reply.complete(snapshot(), null); }
                     case "auth.logout" -> {
                         ensureEngineIdle(); start(); call("account/logout", new JSONObject()); accountProfiles.removeActiveProfile();
-                        account = new JSONObject(); rateLimits = new JSONObject(); publish(); reply.complete(obj("ok", true), null);
+                        account = new JSONObject(); rateLimits = new JSONObject(); authState = "signed_out"; authError = "";
+                        autoRestorePaused = true; publish(); reply.complete(obj("ok", true), null);
                     }
                     case "permissions.set" -> {
                         ensureEngineIdle();
@@ -384,6 +425,7 @@ public final class Engine {
         busy = false; turnId = "";
     }
     private void start() throws Exception {
+        autoRestorePaused = false;
         if (testTransport != null) {
             ready = true;
             if (testAccountValidation) { readAccount(); readRateLimits(); }
@@ -499,6 +541,11 @@ public final class Engine {
                 if (accountProfiles.isAddLoginCompleting()) accountProfiles.finishAddLogin(account);
             } else accountProfiles.saveCurrentSnapshot(account);
         }
+        authState = account.length() > 0 ? "signed_in" : "signed_out";
+        authError = ""; lastAccountCheckElapsed = SystemClock.elapsedRealtime();
+        // Account display must not wait for quota/model network requests.
+        // An isolated login is not active until its credential promotion commits.
+        if (addAccountRestoreKey.isBlank() || !accountProfiles.hasPendingAddLogin()) publish();
     }
     private void readRateLimits() throws Exception {
         if (account.length() == 0) { rateLimits = new JSONObject(); return; }
@@ -515,12 +562,18 @@ public final class Engine {
                 {
                     String invalidKey = stagedSwitchKey.isBlank() ? accountProfiles.activeKey() : stagedSwitchKey;
                     try { accountProfiles.markNeedsLogin(invalidKey); } catch (Exception ignored) { }
-                    throw new IOException(t("저장된 계정의 로그인 토큰이 폐기되었습니다. 이 계정은 다시 로그인해야 합니다."), error);
+                    account = new JSONObject(); authState = "signed_out";
+                    authError = t("저장된 계정의 로그인 토큰이 폐기되었습니다. 이 계정은 다시 로그인해야 합니다.");
+                    throw new IOException(authError, error);
                 }
         }
     }
     private JSONObject beginLogin(boolean add) throws Exception {
         ensureEngineIdle();
+        autoRestorePaused = false;
+        // Re-login must not validate a revoked token before reaching device login.
+        // Use the existing isolated transaction so cancellation preserves the profile.
+        if (!add && accountProfiles.hasSavedLogin() && accountProfiles.activeNeedsLogin()) add = true;
         if (add) {
             // Recovery must not validate the existing account first: a
             // token_revoked account cannot reach device login otherwise.
@@ -539,7 +592,9 @@ public final class Engine {
             start();
             addAccountRestoreKey = "";
         }
-        return call("account/login/start", obj("type", "chatgptDeviceCode"));
+        loginInProgress = true;
+        try { return call("account/login/start", obj("type", "chatgptDeviceCode")); }
+        catch (Exception error) { loginInProgress = false; throw error; }
     }
 
     private boolean processIsAlive() {
@@ -912,8 +967,11 @@ public final class Engine {
     private void onNotification(String method, JSONObject p) {
         try {
             if (method.equals("account/login/completed")) {
+                loginInProgress = false;
                 if (p.optBoolean("success")) {
                     boolean adding = !addAccountRestoreKey.isBlank() && accountProfiles.hasPendingAddLogin();
+                    boolean previousSuppression = suppressStatePublish;
+                    if (adding) suppressStatePublish = true;
                     try {
                         if (adding) accountProfiles.markAddLoginCompleting();
                         readAccount();
@@ -933,6 +991,7 @@ public final class Engine {
                     } catch (Exception loginError) {
                         if (adding) {
                             try {
+                                stopNow();
                                 accountProfiles.restorePreparedAddLogin(true);
                             } catch (Exception restoreError) {
                                 event("error", obj("message", t("이전 계정을 복원하지 못했습니다: ") + unwrap(restoreError).getMessage()));
@@ -946,6 +1005,9 @@ public final class Engine {
                         JSONObject failed = new JSONObject(p.toString()); failed.put("success", false);
                         failed.put("error", unwrap(loginError).getMessage());
                         event("login.completed", failed); publish(); return;
+                    } finally {
+                        suppressStatePublish = previousSuppression;
+                        if (adding) publish();
                     }
                 } else {
                     event("error", obj("message", p.optString("error", t("로그인이 취소되었습니다."))));
@@ -1177,9 +1239,10 @@ public final class Engine {
         linux.cancel();
         // Closing approval first allows a pending action to resolve without changes.
         Approval approval = pendingApproval; if (approval != null) approval.decision.complete(false);
-        io.execute(this::stopNow);
+        io.execute(() -> { autoRestorePaused = true; stopNow(); });
     }
     private void stopNow() {
+        loginInProgress = false;
         PhoneUseService.stopControl();
         if (pendingApproval != null) pendingApproval.decision.complete(false);
         Process old = process; process = null;

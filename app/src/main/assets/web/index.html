@@ -46,7 +46,7 @@
     <span id="project-label" hidden>폴더 선택</span><div id="projects" class="projects" aria-label="프로젝트 목록"></div>
     <div class="section-title history-title"><span>일반 대화</span><button id="toggle-history" class="icon-button section-toggle" type="button" aria-label="일반 대화 접기" aria-controls="sessions" aria-expanded="true"><svg><use href="#i-down"/></svg></button></div>
     <div id="sessions" class="sessions"><p class="sidebar-empty">대화를 시작하면 여기에 표시됩니다.</p></div>
-    <div class="sidebar-bottom"><button id="show-tools" class="nav-button" aria-haspopup="dialog" aria-controls="tool-menu-dialog"><svg><use href="#i-settings"/></svg>도구</button><button id="settings" class="nav-button"><svg><use href="#i-settings"/></svg>설정</button><button id="account-button" class="account-button" aria-haspopup="dialog" aria-controls="settings-dialog"><span id="quota-ring" class="quota-ring" style="--remaining:0" role="img" aria-label="사용 한도 정보 없음"><span id="quota-ring-value">–</span></span><span class="quota-copy"><strong id="quota-percent">계정 연결</strong><small id="quota-caption">ChatGPT로 로그인</small></span><svg class="account-chevron"><use href="#i-chevron-right"/></svg></button></div>
+    <div class="sidebar-bottom"><button id="show-tools" class="nav-button" aria-haspopup="dialog" aria-controls="tool-menu-dialog"><svg><use href="#i-settings"/></svg>도구</button><button id="settings" class="nav-button"><svg><use href="#i-settings"/></svg>설정</button><button id="account-button" class="account-button" aria-haspopup="dialog" aria-controls="settings-dialog"><span id="quota-ring" class="quota-ring" style="--remaining:0" role="img" aria-label="사용 한도 정보 없음"><span id="quota-ring-value">–</span></span><span class="quota-copy"><strong id="quota-percent">Codex</strong><small id="quota-caption">계정 설정</small></span><svg class="account-chevron"><use href="#i-chevron-right"/></svg></button></div>
     </div>
   </aside>
   <main class="main">
@@ -58,7 +58,7 @@
             <div id="welcome-character" class="welcome-character"></div><div class="welcome-mark"><img src="codex-logo.png" alt="Mobile Codex"></div>
             <h1 id="welcome-title">어떤 작업을 할까요?</h1>
             <p id="welcome-description">아이디어부터 코드, 기기의 파일까지. Codex와 함께 작업하세요.</p>
-            <div class="onboarding" id="onboarding">
+            <div class="onboarding" id="onboarding" hidden>
               <button id="connect" class="setup-row"><span class="step" id="login-step">1</span><span><strong>ChatGPT 계정 연결</strong><small>사용 중인 계정으로 시작하세요</small></span><span class="row-arrow">→</span></button>
               <button id="choose-folder" class="setup-row"><span class="step" id="folder-step">2</span><span><strong>작업 폴더 선택</strong><small>프로젝트 폴더를 연결하세요</small></span><span class="row-arrow">→</span></button>
             </div>

@@ -8,7 +8,7 @@
   let following = true, draftScope = '', sending = null, configOriginal = '', sidebarFocus = null, openedImage = null;
   const imageReads = new Map();
   let viewerImages = [], viewerIndex = 0, viewerGroup = null;
-  let seq = 0, state = {messages: [], sessions: [], projects: [], models: [], accounts: [], account: {}, rateLimits: {}, workspace: {}}, folder = '', openedFile = null, login = null, inputResolve = null, toastTimer, fileSeq = 0, modelKey = '', modelRefreshGeneration = 0, displayedRequest = null, projectMenuFocus = null, projectMenuActionClosing = false;
+  let seq = 0, state = {messages: [], sessions: [], projects: [], models: [], accounts: [], account: {}, authState:'unknown', rateLimits: {}, workspace: {}}, folder = '', openedFile = null, login = null, inputResolve = null, toastTimer, fileSeq = 0, modelKey = '', modelRefreshGeneration = 0, displayedRequest = null, projectMenuFocus = null, projectMenuActionClosing = false;
   let draftContext = {attachments: [], mentions: [], skills: []}, draftOptions = {model:'', effort:''}, autocomplete = {items: [], index: -1, token: '', type: '', version: 0};
   const handledReceipts = new Set(), handledVoiceReceipts = new Set();
   let dictationState = {phase:'idle'}, dictationTimer = null;
@@ -1024,6 +1024,7 @@
     await call('phone.stop');
     state.phone = {...state.phone, enabled:false, status:t('휴대폰 제어 꺼짐')}; renderPhone();
   }
+  function accountNeedsLogin() { return state.authState ? state.authState === 'signed_out' : !!state.ready && !C.isLoggedIn(state.account); }
   function render(next) {
     const previousAccountScope = accountScope(state.account), nextAccountScope = accountScope(next.account);
     if (previousAccountScope !== nextAccountScope) { usageGeneration++; resetCredits = null; resetCreditBusy = false; resetCreditIdempotencyKey = ''; resetCreditSelectedId = ''; resetCreditScope = nextAccountScope; }
@@ -1034,7 +1035,8 @@
     const name = selected ? state.workspace.name : t('일반 대화');
     $('project-label').textContent = name; $('context-folder').textContent = name; $('header-project').textContent = name;
     $('header-title').textContent = (state.sessions || []).find(s => s.id === state.threadId)?.title || t('새 대화');
-    $('welcome').hidden = state.messages.length > 0; $('onboarding').hidden = logged; $('suggestions').hidden = !logged;
+    $('welcome').hidden = state.messages.length > 0; $('onboarding').hidden = !accountNeedsLogin(); $('suggestions').hidden = accountNeedsLogin();
+    $('logout').hidden = !logged && !accountNeedsLogin(); $('logout').textContent = logged ? t('로그아웃') : t('로그인');
     const generalPrompts = [t('작업을 계획하고 필요한 정보를 정리해줘.'),t('아이디어를 구조화하고 다음 단계를 제안해줘.'),t('무엇을 도와줄 수 있는지 알려줘.')];
     document.querySelectorAll('[data-prompt]').forEach((button, i) => { button.dataset.prompt = selected ? [t('이 폴더에 어떤 파일이 있는지 살펴보고 정리해줘.'),t('이 프로젝트를 살펴보고 실행 방법과 개선할 부분을 알려줘.'),t('이 프로젝트의 변경 사항을 검토하고 버그가 있는지 찾아줘.')][i] : generalPrompts[i]; if (button.lastChild?.nodeType === Node.TEXT_NODE) button.lastChild.textContent = selected ? [t('폴더 살펴보기'),t('프로젝트 이해하기'),t('변경 사항 검토')][i] : [t('작업 계획하기'),t('아이디어 정리하기'),t('도움말 보기')][i]; });
     $('login-step').textContent = logged ? '✓' : '1'; $('login-step').classList.toggle('done', logged);
@@ -1083,6 +1085,7 @@
   }
   async function startLogin(add = false) {
     if (C.isLoggedIn(state.account) && !add) return openAccountSettings();
+    if (!add && !accountNeedsLogin()) return openAccountSettings();
     show('login-dialog'); $('device-code').textContent = t('연결 준비 중'); $('open-login').disabled = true;
     login = await call(add ? 'auth.add' : 'auth.login');
     if (!C.safeLoginUrl(login.verificationUrl)) throw new Error(t('잘못된 로그인 응답입니다.'));
@@ -1239,7 +1242,11 @@
     const logged = C.isLoggedIn(state.account), rows = usageRows(state.rateLimits), row = rows[0];
     const ring = $('quota-ring'), value = $('quota-ring-value'), percent = $('quota-percent'), caption = $('quota-caption');
     if (!logged) {
-      ring.style.setProperty('--remaining','0'); ring.setAttribute('aria-label',t('사용 한도 정보 없음')); value.textContent=''; percent.textContent=t('계정 연결'); caption.textContent=t('ChatGPT로 로그인'); return;
+      // Saved display metadata is not authentication. Only signed_out invites login.
+      const saved = (state.accounts || []).find(profile => profile.active);
+      ring.style.setProperty('--remaining','0'); ring.setAttribute('aria-label',t('사용 한도 정보 없음')); value.textContent='';
+      percent.textContent = accountNeedsLogin() ? t('계정 연결') : (saved?.email || 'Codex');
+      caption.textContent = accountNeedsLogin() ? t('ChatGPT로 로그인') : (saved?.planType || t('계정 설정')); return;
     }
     if (!row) {
       ring.style.setProperty('--remaining','0'); ring.setAttribute('aria-label',t('사용 한도 정보 없음')); value.textContent=''; percent.textContent='–%'; caption.textContent=state.account.email || state.account.planType || t('한도 조회 전'); return;
@@ -1324,8 +1331,9 @@
   }
   function renderAccounts() {
     const target = $('accounts-list'); if (!target) return; target.replaceChildren();
-    const status = node('p', accountActionStatus.text, 'muted account-action-status' + (accountActionStatus.error ? ' error' : ''));
-    status.id = 'accounts-status'; status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite'); status.hidden = !accountActionStatus.text; target.append(status);
+    const statusText = accountActionStatus.text || state.authError || '';
+    const status = node('p', statusText, 'muted account-action-status' + (accountActionStatus.error || state.authError ? ' error' : ''));
+    status.id = 'accounts-status'; status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite'); status.hidden = !statusText; target.append(status);
     const profiles = Array.isArray(state.accounts) ? state.accounts : [];
     for (const profile of profiles) {
       const row = node('div', null, 'account-profile' + (profile.active ? ' active' : ''));
@@ -1370,15 +1378,21 @@
     $('files-toggle').setAttribute('aria-controls', 'file-panel');
     $('files-toggle').setAttribute('aria-expanded', String(open));
   }
-  function openAccountSettings() { selectSettingsTab('account'); show('settings-dialog'); sidebar(false); if (C.isLoggedIn(state.account)) loadUsage(); }
+  function openAccountSettings() { selectSettingsTab('account'); show('settings-dialog'); sidebar(false); loadUsage(); }
   async function loadUsage() {
     if (usageLoading || resetCreditBusy) return;
     const status = $('usage-status'), target = $('usage-limits');
-    if (!C.isLoggedIn(state.account)) { status.textContent = t('로그인 후 사용 한도를 조회할 수 있습니다.'); target.replaceChildren(); resetCredits = null; renderResetCredits(); return; }
-    const scope = accountScope(), generation = ++usageGeneration; resetResetCreditRequest(scope);
-    usageLoading = true; $('usage-refresh').disabled = true; status.textContent = t('사용 한도를 조회하는 중…');
+    if (accountNeedsLogin()) { status.textContent = t('로그인 후 사용 한도를 조회할 수 있습니다.'); target.replaceChildren(); resetCredits = null; renderResetCredits(); return; }
+    usageLoading = true; $('usage-refresh').disabled = true; status.textContent = '';
     try {
-      const result = await rpc('account/rateLimits/read', {}), rows = usageRows(result);
+      let restoredLimits;
+      if (!C.isLoggedIn(state.account)) {
+        const restored = await call('auth.refresh'); render(restored);
+        if (!C.isLoggedIn(state.account)) { status.textContent = t('로그인 후 사용 한도를 조회할 수 있습니다.'); return; }
+        restoredLimits = restored.rateLimits;
+      }
+      const scope = accountScope(), generation = ++usageGeneration; resetResetCreditRequest(scope);
+      const result = restoredLimits || await rpc('account/rateLimits/read', {}), rows = usageRows(result);
       if (generation !== usageGeneration || accountScope() !== scope) { target.replaceChildren(); status.textContent = t('계정이 바뀌었습니다. 다시 조회해 주세요.'); return; }
       resetCredits = result?.rateLimitResetCredits ?? null; state.rateLimits = result || {}; renderUsage(rows); renderQuota(); renderResetCredits(resetCredits);
       status.textContent = rows.length ? t('현재 계정의 Codex 사용 한도입니다.') : t('사용 한도 정보가 제공되지 않았습니다.');

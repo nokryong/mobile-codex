@@ -29,6 +29,46 @@ function setup(overrides = {}, options = {}) {
   w.eval(fs.readFileSync(root+'ui-core.js','utf8')); w.eval(fs.readFileSync(root+'app.js','utf8'));
   return {w,calls,responses,snapshot};
 }
+test('cold startup keeps the normal screen while the account is restored silently',async()=>{
+ let resolveState;
+ const {w}=setup({state:()=>new Promise(resolve=>{resolveState=resolve;})});
+ const d=w.document;
+ assert.equal(d.getElementById('onboarding').hidden,true);
+ assert.doesNotMatch(d.getElementById('quota-caption').textContent,/로그인/);
+ await tick();
+ resolveState({ready:false,account:{},authState:'unknown',accounts:[{active:true,email:'saved@example.test',planType:'Pro'}],messages:[],sessions:[],workspace:{},models:[]});
+ await tick();
+ assert.equal(d.getElementById('onboarding').hidden,true);
+ assert.equal(d.getElementById('suggestions').hidden,false);
+ assert.equal(d.getElementById('quota-percent').textContent,'saved@example.test');
+ assert.equal(d.getElementById('prompt').disabled,false);
+ assert.equal(d.querySelector('dialog[open]'),null);
+});
+test('account checks and temporary failures do not flash a login invitation',async()=>{
+ const {w,snapshot}=setup();await tick();const d=w.document;
+ for(const authState of ['unknown','checking','error']){
+   w.mobileCodexEvent('state',{...snapshot,ready:false,account:{},authState,authError:authState==='error'?'계정 정보를 불러오지 못했습니다. 다시 시도해 주세요.':''});
+   assert.equal(d.getElementById('onboarding').hidden,true);
+   assert.doesNotMatch(d.getElementById('quota-caption').textContent,/로그인/);
+   assert.equal(d.getElementById('toast').textContent,'');
+ }
+ w.mobileCodexEvent('state',{...snapshot,account:{},authState:'signed_out'});
+ assert.equal(d.getElementById('onboarding').hidden,false);
+ assert.match(d.getElementById('quota-caption').textContent,/로그인/);
+ w.mobileCodexEvent('state',{...snapshot,authState:'signed_in'});
+ assert.equal(d.getElementById('onboarding').hidden,true);
+});
+test('opening account settings retries an unconfirmed account without starting login',async()=>{
+ let restored;
+ const {w,calls,snapshot}=setup({'auth.refresh':()=>restored});await tick();
+ restored={...snapshot,authState:'signed_in',rateLimits:{rateLimits:{primary:{usedPercent:12,windowDurationMins:300}}}};
+ w.mobileCodexEvent('state',{...snapshot,account:{},authState:'error'});
+ w.document.getElementById('account-button').click();await tick();await tick();
+ assert.equal(calls.filter(c=>c.action==='auth.refresh').length,1);
+ assert.equal(calls.some(c=>c.action==='auth.login'||c.action==='auth.add'),false);
+ assert.equal(w.document.getElementById('login-dialog').open,false);
+ assert.equal(w.document.getElementById('quota-percent').textContent,'88%');
+});
 test('login URLs reject non-OpenAI hosts and embedded credentials',()=>{
  assert.equal(C.safeLoginUrl('https://auth.openai.com/codex/device'),true);
  for(const url of ['javascript:alert(1)','http://auth.openai.com','https://auth.openai.com.evil.test','https://user:pass@auth.openai.com'])assert.equal(C.safeLoginUrl(url),false);
