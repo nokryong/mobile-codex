@@ -45,6 +45,22 @@ public class GitHubProjectSyncTest {
         assertEquals(2, calls.size());
     }
 
+    @Test public void branchReferenceIsEncodedAsOneQueryValue() throws Exception {
+        String branch = "feature/fonts+large";
+        List<String> reads = new ArrayList<>();
+        GitHubProjectSync.Transport transport = (method, endpoint, body, token) -> {
+            if (endpoint.contains("/contents/")) {
+                reads.add(endpoint);
+                throw new GitHubProjectSync.HttpError(404);
+            }
+            return repo(7, true, true, branch, 0);
+        };
+        GitHubProjectSync.Config config = new GitHubProjectSync.Client(transport).connect("owner/sync", "token");
+        assertEquals(branch, config.branch);
+        assertEquals(1, reads.size());
+        assertTrue(reads.get(0).endsWith("?ref=feature%2Ffonts%2Blarge"));
+    }
+
     @Test public void pullRejectsRepositoryIdentityChange() throws Exception {
         GitHubProjectSync.Transport transport = (method, endpoint, body, token) -> repo(8, true, true, "main", 1);
         GitHubProjectSync.Client client = new GitHubProjectSync.Client(transport);

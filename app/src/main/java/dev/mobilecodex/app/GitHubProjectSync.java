@@ -210,7 +210,7 @@ final class GitHubProjectSync {
             JSONObject file;
             try {
                 file = transport.request("GET", "repos/" + config.repository + "/contents/" + FILE
-                    + "?ref=" + URLEncoder.encode(config.branch, StandardCharsets.UTF_8), null, token);
+                    + "?ref=" + URLEncoder.encode(config.branch, StandardCharsets.UTF_8.name()), null, token);
             } catch (HttpError error) {
                 if (error.status == 404) return new Remote(null, new PortableProjects());
                 throw error;
