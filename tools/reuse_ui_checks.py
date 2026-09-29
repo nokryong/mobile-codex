@@ -9,7 +9,8 @@ import subprocess
 import urllib.request
 
 ROUTING_FILES = {'.github/workflows/android.yml', 'tools/reuse_ui_checks.py',
-                 'tests/test_reuse_ui_checks.py', 'docs/ci-release.md'}
+                 'tests/test_reuse_ui_checks.py', 'docs/ci-release.md',
+                 '.github/workflows/cleanup-actions.yml', 'tools/cleanup_actions.py', 'tests/test_cleanup_actions.py'}
 
 def git(*args):
     return subprocess.check_output(['git', *args])

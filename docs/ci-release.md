@@ -42,3 +42,11 @@ the native bridge, so their input fingerprint excludes Java sources. JS/source
 and Python checks still run for native source changes, and Android validation
 checks the actual packaged asset route. Any web asset or browser harness change
 invalidates browser reuse.
+
+Actions history cleanup runs after Android runs complete and daily. It removes
+superseded main-branch failed/cancelled/timed-out runs and old cleanup runs, while
+preserving active runs, successful builds, the latest unresolved failure and the
+latest original successful browser evidence needed for reuse. Cleanup changes
+are maintenance-only; publish them with `[skip ci]` to avoid restarting Android
+release work. The one-time maintenance branch runs cleanup without an APK build
+and removes itself afterward.

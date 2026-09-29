@@ -1,0 +1,39 @@
+name: Actions history cleanup
+on:
+  workflow_run:
+    workflows: ['Android APK']
+    types: [completed]
+  schedule:
+    - cron: '17 18 * * *'
+  workflow_dispatch:
+  push:
+    branches: ['maintenance/actions-cleanup']
+permissions:
+  actions: write
+  contents: write
+concurrency:
+  group: actions-history-cleanup
+  cancel-in-progress: false
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: main
+      - name: Check retention rules
+        run: python3 -m unittest discover -s tests -p 'test_cleanup_actions.py'
+      - name: Remove obsolete runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 tools/cleanup_actions.py
+      - name: Remove one-time maintenance branch
+        if: github.event_name == 'push' && github.ref == 'refs/heads/maintenance/actions-cleanup'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          current=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/maintenance/actions-cleanup" --jq '.object.sha')
+          if [ "$current" = "$GITHUB_SHA" ]; then
+            gh api --method DELETE "repos/$GITHUB_REPOSITORY/git/refs/heads/maintenance/actions-cleanup"
+          fi
