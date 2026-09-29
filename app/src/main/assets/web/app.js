@@ -1085,8 +1085,8 @@
     const anyBusy = !!state.busy || !!state.proBusy;
     $('send').hidden = false; $('stop').hidden = !anyBusy; $('activity').hidden = !anyBusy;
     if (changedThread || !anyBusy)
-      $('activity-text').textContent = state.proBusy ? t('ChatGPT Pro 답변 기다리는 중') : t('Codex 답변 기다리는 중');
-    if (state.proBusy) $('activity-text').textContent = t('ChatGPT Pro 답변 기다리는 중');
+      $('activity-text').textContent = state.proBusy ? t('Pro 답변 중') : t('Codex 답변 기다리는 중');
+    if (state.proBusy) $('activity-text').textContent = t('Pro 답변 중');
     if (!anyBusy) activityIcon = 'thinking';
     drawStatusIcons();
     $('terminal-cwd').textContent = state.cwd || '';

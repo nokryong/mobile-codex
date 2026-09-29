@@ -920,7 +920,7 @@ public final class Engine {
             "startedAt", System.currentTimeMillis()));
         persistSessions(replacement);
         replaceSessions(replacement);
-        threadId = localId; active = session(localId); syncCurrentTurn(); status = t("ChatGPT Pro 답변 기다리는 중"); publish();
+        threadId = localId; active = session(localId); syncCurrentTurn(); status = t("Pro 답변 중"); publish();
         JSONObject result = new JSONObject(contextBundle.toString());
         result.put("operationId", operationId).put("threadId", localId)
             .put("requestedModel", ProContextBuilder.MODEL_ID).put("displayModel", ProContextBuilder.DISPLAY_MODEL)

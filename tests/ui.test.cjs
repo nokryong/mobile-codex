@@ -212,7 +212,7 @@ test('GPT-6-Pro is synthetic, read-only, and sends through its dedicated action'
  d.getElementById('prompt').value='이 변경을 검토해줘';d.getElementById('composer').dispatchEvent(new w.Event('submit',{cancelable:true}));await tick();
  const sent=calls.find(call=>call.action==='chat.pro.send');assert.ok(sent);assert.equal(sent.args.model,'chatgpt-web:gpt-6-pro');
  assert.equal(calls.some(call=>call.action==='chat.send'||call.action==='chat.steer'),false);
- w.mobileCodexEvent('state',{...snapshot,proBusy:true});d.getElementById('stop').click();await tick();
+ w.mobileCodexEvent('state',{...snapshot,proBusy:true});assert.equal(d.getElementById('activity-text').textContent,'Pro 답변 중');d.getElementById('stop').click();await tick();
  assert.equal(calls.at(-1).action,'chat.pro.cancel');
 });
 test('ChatGPT Pro message metadata is visible and uncertain sends warn against retry',async()=>{

@@ -1,5 +1,6 @@
 /* UI messages only; user/model/file content is never translated. */
 window.MobileCodexEnglish = {
+  "Pro 답변 중": "Pro is responding",
   "계정 설정": "Account settings",
   "계정 정보를 불러오지 못했습니다. 다시 시도해 주세요.": "Could not load account details. Please try again.",
   "Linux 환경": "Linux environment",
