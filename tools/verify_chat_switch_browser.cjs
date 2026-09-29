@@ -83,7 +83,7 @@ async function verifyLandscapeStructure(browser,width) {
   // Preserve the original CI regression: the wide panel is completely
   // replaced by the tiny rail, then the injected switch must reappear there.
   await page.evaluate(()=>{document.getElementById('stage-slideover-sidebar').outerHTML='<div id="stage-sidebar-tiny-bar"><div id="rail-top"><button aria-label="사이드바 열기">Logo</button></div><nav>New</nav></div>';window.__mcChatCustom.refresh();});
-  assert.equal(await page.locator('#stage-sidebar-tiny-bar button').getAttribute('aria-label'),'사이드바 열기','CDP replacement keeps its Korean label');
+  assert.equal(await page.locator('#rail-top > button').getAttribute('aria-label'),'사이드바 열기','CDP replacement keeps its Korean label');
   const compact=await page.locator('#mc-chat-mode-switch').boundingBox(),rail=await page.locator('#stage-sidebar-tiny-bar').boundingBox();
   assert.equal(compact.width,44);assert.ok(compact.x>=rail.x&&compact.x+compact.width<=rail.x+rail.width);
   assert.equal(await page.locator('#mc-chat-mode-switch button').isVisible(),false);
