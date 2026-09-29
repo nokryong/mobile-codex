@@ -192,7 +192,7 @@
   }
   function applyTextSize(value) {
     const percent = Number(value);
-    if (![100,115,130,150].includes(percent)) return false;
+    if (![75,85,100,115,130,150].includes(percent)) return false;
     textSizePercent = percent;
     document.documentElement.dataset.textSize = String(percent);
     // Native text zoom scales glyphs. This factor only reserves layout space;
@@ -206,13 +206,13 @@
     const row = node('div', null, 'settings-row text-size-row'), label = node('label');
     label.htmlFor = 'text-size'; label.append(node('strong', t('글자 크기')), node('small', t('폰과 태블릿의 Codex·Chat 화면에 함께 적용됩니다.')));
     const select = node('select'); select.id = 'text-size'; select.setAttribute('aria-label', t('글자 크기'));
-    for (const value of [100,115,130,150]) select.append(new Option(value === 100 ? t('기본 · 100%') : value + '%', String(value)));
+    for (const value of [75,85,100,115,130,150]) select.append(new Option(value === 100 ? t('기본 · 100%') : value + '%', String(value)));
     row.append(label, select); themeRow.after(row);
     try { applyTextSize(JSON.parse(window.Native?.textSize?.() || '{}').percent); } catch {}
     applyTextSize(textSizePercent);
     select.addEventListener('change', async () => {
       const requested = Number(select.value), previous = textSizePercent;
-      if (![100,115,130,150].includes(requested)) { select.value = String(previous); return; }
+      if (![75,85,100,115,130,150].includes(requested)) { select.value = String(previous); return; }
       select.disabled = true;
       try {
         const result = await call('ui.textSize', {percent:requested});

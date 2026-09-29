@@ -34,7 +34,17 @@ fs.mkdirSync(output,{recursive:true});
    await page.locator('#prompt').fill('Keep this draft');await page.locator('#prompt').blur();
    const base=await page.locator('[data-id="a"]').evaluate(el=>parseFloat(getComputedStyle(el).fontSize));
    if(width<=760)await page.locator('.topbar .sidebar-toggle').click();
-   await page.locator('#settings').click();await page.locator('#text-size').selectOption('150');
+   await page.locator('#settings').click();
+   assert.equal(await page.locator('#text-size').inputValue(),'100','Default remains 100%');
+   assert.deepEqual(await page.locator('#text-size option').evaluateAll(options=>options.map(option=>option.value)),['75','85','100','115','130','150']);
+   for(const percent of [75,85,100]) {
+    await page.locator('#text-size').selectOption(String(percent));
+    await page.waitForFunction(value=>document.documentElement.dataset.textSize===String(value),percent);
+    const actual=await page.locator('[data-id="a"]').evaluate(el=>parseFloat(getComputedStyle(el).fontSize));
+    assert.ok(Math.abs(actual-base*percent/100)<.02,`${percent}% is relative to the unchanged default at ${width}`);
+    assert.equal(await page.locator('#prompt').inputValue(),'Keep this draft');
+   }
+   await page.locator('#text-size').selectOption('150');
    await page.waitForFunction(()=>document.documentElement.dataset.textSize==='150');
    assert.equal(await page.locator('[data-id="a"]').evaluate(el=>parseFloat(getComputedStyle(el).fontSize)),base*1.5);
    await page.locator('#text-size').scrollIntoViewIfNeeded();
@@ -52,8 +62,22 @@ fs.mkdirSync(output,{recursive:true});
    const header=await page.locator('.topbar').boundingBox(),first=await page.locator('[data-id="u"]').boundingBox();
    assert.ok(first.y>=header.y+header.height,`Enlarged first message below header at ${width}`);
    await page.screenshot({path:path.join(output,`conversation-${width}-150.png`)});
+   await page.locator('#prompt').focus();
+   await page.waitForFunction(()=>document.getElementById('composer').classList.contains('composer-expanded'));
+   await page.locator('#fast-mode').evaluate(el=>el.setAttribute('aria-pressed','true'));
+   for(const theme of ['light','dark']) {
+    await page.evaluate(value=>document.documentElement.dataset.theme=value,theme);
+    const surfaces=await page.evaluate(()=>{
+     const pseudo=selector=>{const style=getComputedStyle(document.querySelector(selector),'::before');return {width:parseFloat(style.width),height:parseFloat(style.height)};};
+     return {fast:pseudo('#fast-mode'),send:pseudo('#send'),approval:pseudo('.approval-mode-picker'),model:pseudo('.composer-bottom .options-button'),fastOuter:getComputedStyle(document.getElementById('fast-mode')).backgroundColor};
+    });
+    assert.equal(surfaces.fastOuter,'rgba(0, 0, 0, 0)',`${theme} Fast must not paint its full 44px target`);
+    for(const key of ['fast','send','approval','model'])assert.equal(surfaces[key].height,32,`${theme} ${key} visible height at ${width}`);
+    for(const key of ['fast','send'])assert.equal(surfaces[key].width,32,`${theme} ${key} visible width at ${width}`);
+    await page.screenshot({path:path.join(output,`composer-${width}-150-${theme}.png`)});
+   }
    assert.deepEqual(errors,[]);await page.close();
   }
-  console.log('PASS text-size layout proxy: 320/393/800/1024/1280px at 150%; native textZoom covered separately.');
+  console.log('PASS text-size layout proxy: unchanged 100% default; 75/85/100/150% at 320/393/800/1024/1280px; 32px composer surfaces. Native textZoom covered separately.');
  } finally {await browser.close();}
 })().catch(error=>{console.error(error);process.exitCode=1;});

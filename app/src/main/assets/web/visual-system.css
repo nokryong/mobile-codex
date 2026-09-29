@@ -173,6 +173,29 @@ html[data-theme=dark] .fast-mode-button[aria-pressed=true] { color:#ffd46b; back
   .composer-actions:has(#stop:not([hidden])) .approval-mode-picker { display:none; }
 }
 
+/* Composer controls: 44px hit areas, with 32px visible surfaces on one baseline. */
+:root { --composer-visible-control-size:32px; }
+.approval-mode-picker { position:relative; display:flex; align-items:center; min-height:44px; isolation:isolate; }
+.approval-mode-picker::before { content:""; position:absolute; inset:6px 0; border-radius:999px; background:var(--pill); pointer-events:none; z-index:0; }
+.approval-mode-picker select { position:relative; z-index:1; height:44px; background:transparent; }
+.composer-bottom .options-button { position:relative; background:transparent; isolation:isolate; }
+.composer-bottom .options-button::before { content:""; position:absolute; inset:6px 0; border-radius:999px; background:var(--pill); pointer-events:none; z-index:0; }
+.composer-bottom .options-button > * { position:relative; z-index:1; }
+.composer-bottom .options-button:hover { background:transparent; }
+.composer-bottom .options-button:hover::before { background:var(--hover); }
+.send-button,.send-button:disabled { position:relative; background:transparent; box-shadow:none; }
+.send-button::before { content:""; position:absolute; inset:calc((44px - var(--composer-visible-control-size)) / 2); border-radius:50%; background:var(--solid); box-shadow:0 1px 3px rgba(0,0,0,.1); pointer-events:none; z-index:0; }
+.send-button:disabled::before { background:var(--disabled-bg); box-shadow:none; }
+.send-button svg { position:relative; z-index:1; width:17px; height:17px; }
+.composer-actions .fast-mode-button { position:relative; background:transparent; isolation:isolate; }
+.composer-actions .fast-mode-button::before { content:""; position:absolute; top:50%; left:50%; width:var(--composer-visible-control-size); height:var(--composer-visible-control-size); border-radius:50%; background:transparent; transform:translate(-50%,-50%); pointer-events:none; z-index:0; }
+.composer-actions .fast-mode-button svg,.composer-actions .voice-button svg { position:relative; z-index:1; width:17px; height:17px; }
+.composer-actions .fast-mode-button:not(:disabled):hover::before { background:var(--hover); }
+.composer-actions .fast-mode-button[aria-pressed=true] { background:transparent; }
+html[data-theme=dark] .composer-actions .fast-mode-button[aria-pressed=true] { background:transparent; }
+.composer-actions .fast-mode-button[aria-pressed=true]::before { background:#fff3cd; }
+html[data-theme=dark] .composer-actions .fast-mode-button[aria-pressed=true]::before { background:#453b25; }
+
 /* Keep identity and account actions in the sidebar frame; only navigation scrolls. */
 .sidebar { display:flex; flex-direction:column; min-height:0; overflow:hidden; }
 .sidebar-top,.sidebar-bottom { flex:0 0 auto; }

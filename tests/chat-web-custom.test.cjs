@@ -196,3 +196,36 @@ test('does not use the icon rail, an unrelated navigation, or an ambiguous sideb
   '<main><nav aria-label="Message"><div data-app-action-sidebar-scroll></div></nav></main>');
  assert.equal(w.document.getElementById('mc-chat-mode-switch'),null);
 });
+
+test('landscape panel toolbar works with a duplicated SVG wordmark and an unlabelled navigation',()=>{
+ const html='<div id="stage-slideover-sidebar"><div id="toolbar"><span class="sidebar-title"><svg><title>ChatGPT</title></svg><span aria-hidden="true">ChatGPT</span></span><div><button aria-label="채팅 검색"></button><button id="close" aria-label="사이드바 닫기"></button></div></div><nav><a href="/" aria-label="새 채팅"><span>새 채팅</span><kbd>Ctrl Shift O</kbd></a></nav></div>';
+ const dom=new JSDOM(html,{url:'https://chatgpt.com/',runScripts:'outside-only',pretendToBeVisual:true});open.push(dom);installGeometry(dom.window);
+ const d=dom.window.document,box=(el,left,top,width,height)=>{const rect={left,top,width,height,right:left+width,bottom:top+height};el.getBoundingClientRect=()=>rect;el.getClientRects=()=>[rect];};
+ box(d.getElementById('stage-slideover-sidebar'),0,0,260,380);
+ box(d.getElementById('toolbar'),0,0,260,50);
+ box(d.querySelector('.sidebar-title'),16,14,76,22);
+ box(d.querySelector('#toolbar > div'),174,8,80,40);
+ box(d.getElementById('close'),214,8,40,40);
+ dom.window.eval(script);
+ const group=d.getElementById('mc-chat-mode-switch');assert.ok(group);
+ assert.equal(group.previousElementSibling.id,'toolbar');assert.equal(group.parentElement.id,'stage-slideover-sidebar');
+ assert.equal(group.nextElementSibling.tagName,'NAV');assert.equal(d.querySelector('kbd').textContent,'Ctrl Shift O');
+ let clicks=0;d.getElementById('close').onclick=()=>clicks++;assert.equal(dom.window.__mcChatCustom.closeSidebar(),true);assert.equal(clicks,1);
+});
+
+test('a narrow sidebar-title class never replaces its explicit wide sidebar boundary',()=>{
+ const html='<div id="stage-slideover-sidebar"><div class="sidebar-title" id="wordmark">ChatGPT</div><nav class="sidebar-actions"><a id="new-chat" href="/">새 채팅</a></nav></div>';
+ const w=setup(html),d=w.document,title=d.getElementById('wordmark');
+ title.getBoundingClientRect=()=>({left:16,top:14,width:76,height:22,right:92,bottom:36});title.getClientRects=()=>[title.getBoundingClientRect()];
+ w.__mcChatCustom.refresh();assert.equal(d.getElementById('mc-chat-mode-switch').nextElementSibling.id,'new-chat');
+});
+
+test('the observed tiny sidebar has a 44px Codex return action instead of a clipped 112px pair',()=>{
+ const w=setup('<div id="stage-sidebar-tiny-bar"><div id="rail-top"><button aria-label="사이드바 열기"><svg></svg></button></div><nav><button>New chat</button></nav></div>'),d=w.document,rail=d.getElementById('stage-sidebar-tiny-bar');
+ rail.getBoundingClientRect=()=>({left:0,top:0,width:56,height:380,right:56,bottom:380});rail.getClientRects=()=>[rail.getBoundingClientRect()];
+ w.__mcChatCustom.refresh();const group=d.getElementById('mc-chat-mode-switch');assert.ok(group);
+ assert.equal(group.parentElement,rail);assert.equal(group.previousElementSibling.id,'rail-top');
+ assert.equal(w.getComputedStyle(group).minWidth,'44px');assert.equal(w.getComputedStyle(group.querySelector('button')).display,'none');
+ assert.equal(group.querySelector('a').href,'mobilecodex://mode/codex');assert.equal(w.getComputedStyle(group.querySelector('a')).minHeight,'44px');
+ rail.hidden=true;w.__mcChatCustom.refresh();assert.equal(d.getElementById('mc-chat-mode-switch'),null);
+});

@@ -27,7 +27,7 @@ public class AppTextSizeTest {
     @Test public void defaultAndEverySupportedLevelRoundTrip() throws Exception {
         assertEquals(100, AppTextSize.percent(context));
         assertEquals(100, AppTextSize.snapshot(context).getInt("percent"));
-        for (int percent : new int[]{100, 115, 130, 150}) {
+        for (int percent : new int[]{75, 85, 100, 115, 130, 150}) {
             AppTextSize.set(context, percent);
             assertEquals(percent, AppTextSize.percent(new ContextWrapper(context)));
             assertEquals(percent, AppTextSize.snapshot(context).getInt("percent"));
@@ -46,11 +46,13 @@ public class AppTextSizeTest {
     }
 
     @Test public void appliesSavedPercentToWebSettings() throws Exception {
-        AppTextSize.set(context, 150);
         WebView webView = new WebView(context);
         try {
-            AppTextSize.apply(context, webView);
-            assertEquals(150, webView.getSettings().getTextZoom());
+            for (int percent : new int[]{75, 85, 100, 150}) {
+                AppTextSize.set(context, percent);
+                AppTextSize.apply(context, webView);
+                assertEquals(percent, webView.getSettings().getTextZoom());
+            }
         } finally { webView.destroy(); }
     }
 

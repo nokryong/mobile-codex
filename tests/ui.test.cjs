@@ -42,13 +42,26 @@ test('text size restores natively, saves explicitly and preserves the conversati
  assert.equal(calls.some(c=>c.action==='ui.textSize'),false,'startup does not overwrite saved preference');
  w.mobileCodexEvent('state',{...snapshot,messages:[{id:'keep',role:'user',text:'keep me'}]});
  d.getElementById('prompt').value='unsent draft';
- for(const size of [150,115,100]) {
+ assert.deepEqual([...select.options].map(option=>option.value),['75','85','100','115','130','150']);
+ for(const size of [150,115,85,75,100]) {
   select.value=String(size);select.dispatchEvent(new w.Event('change'));await tick();
   assert.equal(saved,size);assert.equal(d.documentElement.dataset.textSize,String(size));assert.equal(select.disabled,false);
  }
  assert.equal(d.getElementById('prompt').value,'unsent draft');assert.equal(d.querySelector('[data-id="keep"]').textContent,'keep me');
  assert.equal(calls.some(c=>c.action==='chat.send'||c.action==='config.save'||c.action==='projects.select'),false);
  const reopened=setup({}, {textSize:saved});await tick();assert.equal(reopened.w.document.getElementById('text-size').value,String(saved));
+});
+test('text shrink is opt-in, restores a saved reduced value and leaves the default at 100',async()=>{
+ const fresh=setup();await tick();
+ assert.equal(fresh.w.document.getElementById('text-size').value,'100');
+ assert.equal(fresh.w.document.documentElement.style.getPropertyValue('--text-size-factor'),'1');
+ assert.equal(fresh.calls.some(c=>c.action==='ui.textSize'),false);
+ for(const size of [75,85]) {
+  const reduced=setup({}, {textSize:size});await tick();
+  assert.equal(reduced.w.document.getElementById('text-size').value,String(size));
+  assert.equal(reduced.w.document.documentElement.style.getPropertyValue('--text-size-factor'),String(size/100));
+  assert.equal(reduced.calls.some(c=>c.action==='ui.textSize'),false);
+ }
 });
 test('text size rolls back failed saves and rejects an invalid native value',async()=>{
  const {w}=setup({'ui.textSize':()=>{throw Error('storage failed');}},{textSize:130});await tick();

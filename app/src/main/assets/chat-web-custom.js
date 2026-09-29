@@ -3,14 +3,18 @@
   'use strict';
   if (location.protocol !== 'https:' || location.hostname !== 'chatgpt.com' || window.top !== window) return;
   if (window.__mcChatCustom) { window.__mcChatCustom.refresh(); return; }
-  const SWITCH = 'mc-chat-mode-switch', SWITCH_WIDTH = 112, SWITCH_SPACE = 160;
+  const SWITCH = 'mc-chat-mode-switch', SWITCH_SPACE = 160;
+  const CLOSE_SIDEBAR = 'button[aria-label*="Close sidebar" i],button[aria-label="Hide sidebar" i],button[aria-label*="사이드바 닫기"],button[aria-label*="사이드바 접기"],button[aria-label*="사이드바 숨기기"]';
   const css = `#${SWITCH}{display:inline-flex;align-items:center;gap:2px;padding:1px;border:0;border-radius:999px;background:#eeeef0;font:600 13px/1.2 system-ui,sans-serif;flex:none;margin-inline-start:8px;margin-inline-end:auto;width:max-content;min-width:112px;max-width:calc(100% - 8px);box-sizing:border-box;position:relative;z-index:1}
 #${SWITCH}.mc-below-title{display:flex;margin:2px 0 6px 8px}
 #${SWITCH}.mc-at-sidebar-start{display:flex;margin:0 16px 4px}
 #${SWITCH}.mc-header-fallback{margin:0 8px;align-self:center}
+#${SWITCH}.mc-compact-rail{display:flex;width:44px;min-width:44px;max-width:44px;padding:0;margin:4px auto;justify-content:center}
 #${SWITCH} button,#${SWITCH} a{display:flex;align-items:center;justify-content:center;min-height:44px;min-width:44px;flex:1 1 auto;padding:0 8px;border:0;border-radius:999px;font:inherit;text-decoration:none;color:#64646c;background:transparent;white-space:nowrap;cursor:pointer}
 #${SWITCH} button{background:#fafafa;color:#202024;box-shadow:0 1px 4px #0001}
 #${SWITCH} a:focus-visible{outline:2px solid #397cf6;outline-offset:2px}
+#${SWITCH}.mc-compact-rail button{display:none}
+#${SWITCH}.mc-compact-rail a{width:44px;min-width:44px;padding:0;font-size:11px}
 html.dark #${SWITCH}{background:#25252b}html.dark #${SWITCH} button{background:#1b1b1f;color:#ededf0}html.dark #${SWITCH} a{color:#b0b0b9}`;
   let scheduled = false, frame = 0;
   function geometry(element) {
@@ -44,9 +48,15 @@ html.dark #${SWITCH}{background:#25252b}html.dark #${SWITCH} button{background:#
     const rect = geometry(element);
     return !rect || (rect.width >= SWITCH_SPACE && rect.right > 0 && rect.left < innerWidth);
   }
-  function isRail(element) { return !!element?.closest?.('[data-app-navigation-rail]'); }
+  function isRail(element) { return !!element?.closest?.('[data-app-navigation-rail],#stage-sidebar-tiny-bar'); }
   function sidebarHost(element) {
-    return element?.closest?.('#stage-slideover-sidebar, #stage-sidebar, [data-testid="sidebar"], [data-testid="sidebar-container"], aside, nav[aria-label], [role="navigation"], [class*="sidebar" i]') || null;
+    // A nested .sidebar-title/.sidebar-button is not the panel. Prefer an
+    // explicit panel boundary, then walk past narrow decorative wrappers.
+    const panel = element?.closest?.('#stage-slideover-sidebar, #stage-sidebar, [data-testid="sidebar"], [data-testid="sidebar-container"]');
+    if (panel) return panel;
+    for (let node = element; node && node !== document.body; node = node.parentElement)
+      if (node.matches?.('aside, nav[aria-label], [role="navigation"], [class*="sidebar" i]') && usableSidebar(node)) return node;
+    return null;
   }
   function usableSidebar(root) { return visible(root) && wideEnough(root) && !isRail(root); }
   function visibilityRank(element) { return visible(element) ? 1 : 0; }
@@ -124,6 +134,36 @@ html.dark #${SWITCH}{background:#25252b}html.dark #${SWITCH} button{background:#
     }
     return null;
   }
+  function findPanelToolbar() {
+    // Landscape uses a static wordmark and may have an unlabelled navigation.
+    // Its explicit sidebar + close control are stable even when the wordmark
+    // is an SVG, repeated screen-reader text, or a zero-box wrapper.
+    for (const panel of document.querySelectorAll('#stage-slideover-sidebar, #stage-sidebar, [data-testid="sidebar"], [data-testid="sidebar-container"]')) {
+      if (!usableSidebar(panel)) continue;
+      const close = [...panel.querySelectorAll(CLOSE_SIDEBAR)].find(visible);
+      if (!close) continue;
+      const panelRect = geometry(panel); let row = null;
+      for (let node = close.parentElement; node && node !== panel; node = node.parentElement) {
+        const rect = geometry(node);
+        if (!rect) continue;
+        if (rect.top > panelRect.top + 100 || rect.height > 112) break;
+        if (visible(node) && rect.width >= SWITCH_SPACE) row = node;
+      }
+      if (row) return {anchor:row, below:true, title:row, host:panel};
+    }
+    return null;
+  }
+  function findCompactRail() {
+    const rail = document.getElementById('stage-sidebar-tiny-bar');
+    if (!visible(rail)) return null;
+    const rect = geometry(rail);
+    if (rect.width < 44 || rect.width >= SWITCH_SPACE) return null;
+    const toggle = [...rail.querySelectorAll('button[aria-label*="sidebar" i],button[aria-label*="사이드바"]')].find(visible);
+    if (!toggle) return null;
+    let anchor = toggle;
+    while (anchor.parentElement && anchor.parentElement !== rail) anchor = anchor.parentElement;
+    return {anchor, compact:true, toggle, host:rail};
+  }
   function target() {
     const newer = findTitleAndNewChat();
     if (newer) return {anchor:newer.newChat, before:true, title:newer.title, host:sidebarHost(newer.newChat) || newer.newChat.parentElement};
@@ -131,7 +171,7 @@ html.dark #${SWITCH}{background:#25252b}html.dark #${SWITCH} button{background:#
     if (navigation) return navigation;
     const logo = findLogo();
     if (logo) return {anchor:logo, before:false, host:logo.parentElement};
-    return findWideHeaderFallback();
+    return findPanelToolbar() || findWideHeaderFallback() || findCompactRail();
   }
   function refresh() {
     scheduled = false;
@@ -142,8 +182,8 @@ html.dark #${SWITCH}{background:#25252b}html.dark #${SWITCH} button{background:#
     // Undo the mistaken previous injection if this script is reloaded in place.
     document.querySelectorAll('[data-mc-hidden-official-mode-switch]').forEach(element => element.removeAttribute('data-mc-hidden-official-mode-switch'));
     const place = target();
-    if (!place) return;
     const existing = document.getElementById(SWITCH);
+    if (!place) { existing?.remove(); return; }
     if (existing && (place.prepend ? place.container.firstElementChild === existing
       : place.before ? existing.nextElementSibling === place.anchor : existing.previousElementSibling === place.anchor)) return;
     if (existing) existing.remove();
@@ -154,7 +194,7 @@ html.dark #${SWITCH}{background:#25252b}html.dark #${SWITCH} button{background:#
     if (place.prepend) { group.classList.add('mc-at-sidebar-start'); place.container.prepend(group); }
     else if (place.before) { group.classList.add('mc-below-title'); place.anchor.before(group); }
     else if (place.below) { group.classList.add('mc-below-title'); place.anchor.after(group); }
-    else { if (place.fallback) group.classList.add('mc-header-fallback'); place.anchor.after(group); }
+    else { if (place.fallback) group.classList.add('mc-header-fallback'); if (place.compact) group.classList.add('mc-compact-rail'); place.anchor.after(group); }
   }
   function closeSidebar() {
     const place = target(); if (!place) return false;

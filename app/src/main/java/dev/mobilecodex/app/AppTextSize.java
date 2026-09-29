@@ -15,7 +15,7 @@ final class AppTextSize {
     private static final String PREFERENCES = "appearance";
     private static final String KEY = "textSizePercent";
     private static final int DEFAULT = 100;
-    private static final Set<Integer> SUPPORTED = Set.of(100, 115, 130, 150);
+    private static final Set<Integer> SUPPORTED = Set.of(75, 85, 100, 115, 130, 150);
 
     private AppTextSize() {}
 
