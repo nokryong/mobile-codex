@@ -1,7 +1,7 @@
 /* Isolated adapter for the official ChatGPT page. It never reads cookies, tokens, or storage. */
 (function (root) {
   'use strict';
-  if (root.MCProWeb?.version === 2) return;
+  if (root.MCProWeb?.version === 3) return;
   const d = root.document;
   const normalize = value => String(value || '').normalize('NFKC').replace(/\s+/g, ' ').trim();
   const exactPro = value => /^(?:GPT[ -]?6[ -]?Pro|6[ -]?Pro)$/i.test(normalize(value).replace(/^(?:model|모델)\s*:?\s*/i, ''));
@@ -41,6 +41,16 @@
     }
     return [...byPath.values()];
   };
+  let closingSidebar = null, navigatingProject = null;
+  function dismissSidebar() {
+    const controls = [...d.querySelectorAll('button,[role="button"]')].filter(element => visible(element)
+      && /^(?:Close sidebar|사이드바 닫기)$/i.test(label(element)));
+    if (controls.length > 1) return {status:'web_changed', reason:'sidebar_close_ambiguous'};
+    if (!controls.length) { closingSidebar = null; return null; }
+    // Do not click again while React is removing the modal and aria-hidden.
+    if (closingSidebar !== controls[0]) { closingSidebar = controls[0]; controls[0].click(); }
+    return {status:'closing_sidebar', reason:'sidebar_closing'};
+  }
   function inspectProject(name) {
     if (loginVisible()) return {status:'login_required'};
     // Inspect valid links even when the Projects section is collapsed. The same
@@ -50,8 +60,30 @@
     if (matches.length === 1) return {status:'available', projectPath:matches[0].path,
       current:location.pathname.replace(/\/$/, '') === matches[0].path};
     const current = projectPath(location.href);
-    const currentNames = [...d.querySelectorAll('h1,h2,[role="heading"]')].filter(element => visible(element) && exactProject(element, name));
-    if (current && currentNames.length === 1) return {status:'available', projectPath:current, current:true};
+    if (current) {
+      const headings = [...d.querySelectorAll('h1,h2,[role="heading"]')]
+        .filter(element => !element.closest('[role="dialog"],dialog,nav,[role="navigation"]'));
+      const currentNames = headings.filter(element => exactProject(element, name));
+      if (currentNames.length > 1) return {status:'web_changed', reason:'project_ambiguous'};
+      if (currentNames.length === 1) {
+        const closing = dismissSidebar(); if (closing) return closing;
+        if (!visible(currentNames[0])) return {status:'waiting', reason:'project_page_pending'};
+        navigatingProject = null; return {status:'available', projectPath:current, current:true};
+      }
+      // onPageFinished can precede React hydration. Opening the sidebar here
+      // hides the project heading and traps every following inspection.
+      if (!headings.length) return {status:'waiting', reason:'project_page_pending'};
+    }
+    const rows = [...d.querySelectorAll('[data-sidebar-item][role="button"],button[data-sidebar-item]')]
+      .filter(element => visible(element) && exactProject(element, name));
+    if (rows.length > 1) return {status:'web_changed', reason:'project_ambiguous'};
+    if (rows.length === 1) {
+      if (navigatingProject?.element === rows[0] && navigatingProject.path === location.pathname)
+        return {status:'waiting', reason:'project_navigation_pending'};
+      navigatingProject = {element:rows[0], path:location.pathname};
+      rows[0].click(); return {status:'opening_project', reason:'project_navigation_pending'};
+    }
+    if (navigatingProject) return {status:'waiting', reason:'project_navigation_pending'};
     const sidebar = [...d.querySelectorAll('button,[role="button"]')].filter(element => visible(element)
       && /^(?:Open sidebar|사이드바 열기|메뉴 열기)$/i.test(label(element)));
     if (sidebar.length === 1) { sidebar[0].click(); return {status:'opening_sidebar'}; }
@@ -64,7 +96,7 @@
     }
     const controls = [...d.querySelectorAll('button,[role="button"]')].filter(element => visible(element)
       && /^(?:New project|새 프로젝트)$/i.test(label(element)));
-    return controls.length === 1 ? {status:'missing', canCreate:true}
+    return controls.length === 1 ? {status:'missing', reason:'project_missing', canCreate:true}
       : {status:'unavailable', reason:controls.length ? 'new_project_ambiguous' : 'new_project_unavailable'};
   }
   function openProject(name) {
@@ -126,9 +158,19 @@
     if (loginVisible()) return {status:'login_required', host:location.host, pathKind:'login'};
     const editor = prompt(), triggers = modelTriggers();
     if (!editor) return {status:'web_changed', reason:'prompt_missing', triggerCount:triggers.length};
+    if (!triggers.length) return {status:'web_changed', reason:'model_trigger_missing', triggerCount:0};
     if (triggers.length !== 1) return {status:'web_changed', reason:'model_trigger_ambiguous', triggerCount:triggers.length};
     return {status:'available', currentModel:exactPro(label(triggers[0])) ? 'GPT-6 Pro' : '', triggerCount:1,
       menuOpen:triggers[0].getAttribute('aria-expanded') === 'true'};
+  }
+  function prepareComposer() {
+    if (loginVisible()) return {status:'login_required'};
+    const closing = dismissSidebar(); if (closing) return closing;
+    const state = inspect();
+    if (prompt() && !visible(prompt())) return {status:'waiting', reason:'composer_blocked'};
+    if (state.reason === 'prompt_missing' || state.reason === 'model_trigger_missing')
+      return {...state, status:'waiting'};
+    return state;
   }
   function openModelPicker() {
     const state = inspect(); if (state.status !== 'available') return state;
@@ -207,7 +249,7 @@
     if (button && visible(button)) { button.click(); return {status:'stop_requested'}; }
     return {status:'not_running'};
   }
-  root.MCProWeb = {version:2, inspectProject, openProject, startProjectCreation, finishProjectCreation, inspectProjectCreation,
-    inspect, openModelPicker, choosePro, confirmPro, requestFiles, insert, clickSend, observe, stop, exactPro, projectPath, conversationLocation};
+  root.MCProWeb = {version:3, inspectProject, openProject, startProjectCreation, finishProjectCreation, inspectProjectCreation,
+    inspect, prepareComposer, openModelPicker, choosePro, confirmPro, requestFiles, insert, clickSend, observe, stop, exactPro, projectPath, conversationLocation};
   if (typeof module !== 'undefined' && module.exports) module.exports = root.MCProWeb;
 })(typeof window === 'undefined' ? globalThis : window);

@@ -25,7 +25,7 @@ import java.nio.charset.StandardCharsets;
 /** Fail-closed transport for the official ChatGPT web UI. Remote content receives no Android JS bridge. */
 final class ProWebTransport {
     interface Done { void complete(JSONObject result, Exception error); }
-    static final int FEATURE_VERSION = 2;
+    static final int FEATURE_VERSION = 3;
     static final String PROJECT_NAME = "mobile-codex-chat";
 
     private final Activity activity;
@@ -116,7 +116,10 @@ final class ProWebTransport {
         evaluate("inspectProject(" + JSONObject.quote(PROJECT_NAME) + ")", project -> {
             if (!live(current)) return;
             String state = project.optString("status");
-            if ("opening_sidebar".equals(state) || "opening_projects".equals(state)) { page.postDelayed(() -> ensureProject(current, attempt + 1), 300); return; }
+            if ("opening_sidebar".equals(state) || "opening_projects".equals(state) || "opening_project".equals(state)
+                    || "closing_sidebar".equals(state) || "waiting".equals(state)) {
+                retry(() -> ensureProject(current, attempt + 1), attempt, 40, "unavailable", reason(project)); return;
+            }
             if ("available".equals(state)) {
                 String found = safeProjectPath(project.optString("projectPath"));
                 if (found.isBlank()) { finish(status("web_changed", "ChatGPT 프로젝트 주소를 확인하지 못했습니다.")); return; }
@@ -138,7 +141,7 @@ final class ProWebTransport {
                 return;
             }
             if (projectCreationStage == 2 && attempt < 40) { page.postDelayed(() -> ensureProject(current, attempt + 1), 500); return; }
-            finish(status(state.isBlank() ? "web_changed" : state, reason(project)));
+            finish(status("missing".equals(state) ? "unavailable" : state.isBlank() ? "web_changed" : state, reason(project)));
         });
     }
 
@@ -176,13 +179,20 @@ final class ProWebTransport {
         if (!live(current) || clicked) return;
         if (expired()) { finish(status("web_changed", "ChatGPT 모델 선택기를 확인하지 못했습니다.")); return; }
         if (!pageLoaded) { retry(() -> selectModel(current, attempt + 1), attempt, 40, "login_required", "ChatGPT 로그인이 필요합니다."); return; }
-        evaluate("inspect()", state -> {
+        evaluate("prepareComposer()", state -> {
             if (!live(current)) return;
             String status = state.optString("status");
+            if ("closing_sidebar".equals(status) || "waiting".equals(status)) {
+                retry(() -> selectModel(current, attempt + 1), attempt, 40, "unavailable", reason(state)); return;
+            }
             if ("login_required".equals(status)) { finish(status("login_required", "ChatGPT 웹 로그인이 필요합니다.")); return; }
             if (!"available".equals(status)) { finish(status(status.isBlank() ? "web_changed" : status, reason(state))); return; }
             if ("GPT-6 Pro".equals(state.optString("currentModel"))) { confirmModel(current, 0); return; }
-            evaluate("openModelPicker()", opened -> page.postDelayed(() -> chooseModel(current), 250));
+            evaluate("openModelPicker()", opened -> {
+                if (!live(current)) return;
+                if (!"opened".equals(opened.optString("status"))) { finish(status("unavailable", reason(opened))); return; }
+                page.postDelayed(() -> chooseModel(current), 250);
+            });
         });
     }
 
@@ -310,10 +320,19 @@ final class ProWebTransport {
     private static String reason(JSONObject value) {
         String reason = value.optString("reason");
         return switch (reason) {
+            case "sidebar_closing" -> "ChatGPT 사이드바가 닫히기를 기다리다 중단되었습니다.";
+            case "sidebar_close_ambiguous" -> "ChatGPT 사이드바 닫기 버튼을 구분하지 못했습니다.";
+            case "project_page_pending", "project_navigation_pending" -> "ChatGPT 프로젝트 화면이 준비되지 않았습니다.";
+            case "project_missing" -> "mobile-codex-chat 프로젝트를 확인하지 못했습니다.";
+            case "project_ambiguous" -> "mobile-codex-chat 프로젝트가 여러 개라 구분하지 못했습니다.";
+            case "composer_blocked" -> "ChatGPT 입력창이 다른 창에 가려져 있습니다.";
+            case "prompt_missing" -> "ChatGPT 메시지 입력창을 찾지 못했습니다.";
+            case "model_trigger_missing" -> "ChatGPT 모델 선택 버튼을 찾지 못했습니다.";
+            case "model_trigger_ambiguous" -> "ChatGPT 모델 선택 버튼을 구분하지 못했습니다.";
             case "project_dialog_ambiguous" -> "프로젝트 생성창이 여러 개 열려 있습니다. ChatGPT 화면을 확인해 주세요.";
             case "project_name_input_ambiguous" -> "프로젝트 이름 입력란을 구분하지 못했습니다. ChatGPT 화면을 확인해 주세요.";
             case "project_create_button_ambiguous" -> "프로젝트 만들기 버튼을 구분하지 못했습니다. ChatGPT 화면을 확인해 주세요.";
-            default -> reason.isBlank() ? "ChatGPT 웹 화면이 변경되었습니다." : reason;
+            default -> reason.isBlank() ? "ChatGPT 웹 화면의 준비 상태를 확인하지 못했습니다. (" + value.optString("status", "unknown") + ")" : reason;
         };
     }
     private JSONObject status(String value, String reason) {

@@ -98,3 +98,58 @@ test('observes the current conversation id and never needs a credential or API f
   result=adapter.observe(0,'');assert.equal(result.conversationId,'conversation-one');assert.equal(result.conversationPath,'/g/g-p-project/c/conversation-one');
   assert.doesNotMatch(source,/accessToken|Authorization|document\.cookie|backend-api|window\.fetch\s*=/);
 });
+
+test('closes the mobile sidebar before checking an existing project and 6Pro', () => {
+  const {w,adapter}=setup('<main aria-hidden="true"><h1>mobile-codex-chat</h1><form><div id="prompt-textarea"></div><button aria-haspopup="menu">6Pro</button></form></main>'+
+    '<div role="dialog" aria-label="사이드바"><button id="close" aria-label="사이드바 닫기"></button><div role="button" data-sidebar-item>mobile-codex-chat</div><button>새 프로젝트</button></div>', 'https://chatgpt.com/g/g-p-existing/project');
+  let closed=0;w.document.getElementById('close').addEventListener('click',()=>closed++);
+  assert.equal(adapter.inspectProject('mobile-codex-chat').status,'closing_sidebar');
+  assert.equal(adapter.inspectProject('mobile-codex-chat').status,'closing_sidebar');
+  assert.equal(closed,1);
+  w.document.querySelector('[role="dialog"]').hidden=true;w.document.querySelector('main').removeAttribute('aria-hidden');
+  assert.equal(adapter.inspectProject('mobile-codex-chat').projectPath,'/g/g-p-existing/project');
+  assert.equal(adapter.prepareComposer().currentModel,'GPT-6 Pro');
+});
+
+test('opens a non-link sidebar project once instead of creating a duplicate', () => {
+  const {w,adapter}=setup('<div role="dialog"><div id="project" role="button" data-sidebar-item><span>mobile-codex-chat</span><button aria-label="mobile-codex-chat 프로젝트 옵션 열기"></button></div><button>새 프로젝트</button></div>');
+  let selected=0;w.document.getElementById('project').addEventListener('click',()=>selected++);
+  assert.equal(adapter.inspectProject('mobile-codex-chat').status,'opening_project');
+  assert.equal(adapter.inspectProject('mobile-codex-chat').status,'waiting');
+  assert.equal(selected,1);
+  w.history.replaceState({},'', '/g/g-p-existing/project');
+  w.document.querySelector('[role="dialog"]').hidden=true;w.document.body.insertAdjacentHTML('beforeend','<h1>mobile-codex-chat</h1>');
+  assert.equal(adapter.inspectProject('mobile-codex-chat').status,'available');
+});
+
+test('waits for project hydration without reopening the sidebar', () => {
+  const {w,adapter}=setup('<button id="open" aria-label="사이드바 열기"></button><button>새 프로젝트</button>', 'https://chatgpt.com/g/g-p-existing/project');
+  let clicks=0;w.document.getElementById('open').addEventListener('click',()=>clicks++);
+  assert.equal(adapter.inspectProject('mobile-codex-chat').status,'waiting');assert.equal(clicks,0);
+  w.document.body.insertAdjacentHTML('beforeend','<h1>mobile-codex-chat</h1>');
+  assert.equal(adapter.inspectProject('mobile-codex-chat').status,'available');
+});
+
+test('prepares the composer after a link-based project match and delayed sidebar dismissal', () => {
+  const {w,adapter}=setup('<main aria-hidden="true"><form><div id="prompt-textarea"></div><button aria-haspopup="menu">6Pro</button></form></main><div role="dialog"><a href="/g/g-p-existing/project">mobile-codex-chat</a><button aria-label="Close sidebar"></button></div>');
+  assert.equal(adapter.inspectProject('mobile-codex-chat').status,'available');
+  assert.equal(adapter.prepareComposer().status,'closing_sidebar');
+  w.document.querySelector('[role="dialog"]').hidden=true;
+  assert.equal(adapter.prepareComposer().status,'waiting');
+  w.document.querySelector('main').removeAttribute('aria-hidden');
+  assert.equal(adapter.prepareComposer().currentModel,'GPT-6 Pro');
+});
+
+test('does not click ambiguous project rows or dismiss unrelated dialogs', () => {
+  let {w,adapter}=setup('<div role="button" data-sidebar-item>mobile-codex-chat</div>'.repeat(2)+'<button>새 프로젝트</button>');
+  assert.equal(adapter.inspectProject('mobile-codex-chat').reason,'project_ambiguous');
+  ({w,adapter}=setup('<main aria-hidden="true"><form><div id="prompt-textarea"></div><button aria-haspopup="menu">6Pro</button></form></main><dialog open><button id="close">Close</button></dialog>'));
+  let closed=0;w.document.getElementById('close').addEventListener('click',()=>closed++);
+  assert.equal(adapter.prepareComposer().status,'waiting');assert.equal(closed,0);
+});
+
+test('can leave a different project without toggling the sidebar closed again', () => {
+  const {w,adapter}=setup('<main aria-hidden="true"><h1>Other project</h1></main><div role="dialog"><button id="close" aria-label="Close sidebar"></button><div id="target" role="button" data-sidebar-item>mobile-codex-chat</div></div>', 'https://chatgpt.com/g/g-p-other/project');
+  let closed=0,selected=0;w.document.getElementById('close').addEventListener('click',()=>closed++);w.document.getElementById('target').addEventListener('click',()=>selected++);
+  assert.equal(adapter.inspectProject('mobile-codex-chat').status,'opening_project');assert.equal(selected,1);assert.equal(closed,0);
+});
