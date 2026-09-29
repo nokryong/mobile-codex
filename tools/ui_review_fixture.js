@@ -39,6 +39,9 @@
     if (method === 'plugin/list') return {marketplaces:[{name:'Review marketplace',plugins:[{id:'review-plugin',name:'Review plugin',enabled:true,version:'1.0.0'}]}]};
     if (method === 'skills/list') return {data:[{name:'review-skill',description:'A fixture skill',path:'/review/SKILL.md',enabled:true}]};
     if (method === 'mcpServerStatus/list') return {data:[{name:'review-mcp',enabled:true,transport:'stdio'}]};
+    return {data:[]};
+  };
+  const sync = (method, params) => {
     if (method === 'sync.status') { if (syncFixtureError) throw Error('Fixture sync status failed'); return syncStatus; }
     if (method === 'sync.repositories') return {repositories,page:params?.page || 1,hasMore:false};
     if (method === 'sync.selection') { syncStatus = {...syncStatus,selectedKeys:params?.keys || []}; return syncStatus; }
@@ -55,7 +58,11 @@
       try {
         let result = {};
         if (message.action === 'state') result = state;
-        else if (message.action === 'rpc') result = rpc(message.args.method, message.args.params);
+        else if (message.action.startsWith('sync.')) result = sync(message.action, message.args);
+        else if (message.action === 'rpc') {
+          if (message.args.method.startsWith('sync.')) throw Error('Sync is a native action');
+          result = rpc(message.args.method, message.args.params);
+        }
         else if (message.action === 'voice.recover') result = {active:surface === 'dictation',receipts:[]};
       else if (message.action === 'notifications.state') result = {enabled:true,vibration:true,permission:true};
         else if (message.action === 'linux.status') result = state.linux;

@@ -149,6 +149,42 @@ public class ProjectIdentityIntegrationTest {
         assertTrue(picker.getMessage().contains("진행 중인 작업"));
         assertEquals(before, context.getSharedPreferences("projects", 0).getString("registry", ""));
     }
+    @Test public void unrelatedRemovalPreservesActiveCodexAndProWork() throws Exception {
+        for (boolean pro : new boolean[]{false, true}) {
+            seed();
+            Utf8Files.write(new File(context.getFilesDir(), "sessions.json").toPath(), array(
+                obj("id", "a-chat", "workspaceKey", "a", "messages", array()),
+                obj("id", "b-chat", "workspaceKey", "b", "messages", array())).toString());
+            engine = new Engine(context);
+            call("chat.resume", obj("id", "a-chat"));
+            java.lang.reflect.Field sessionField = Engine.class.getDeclaredField("sessions"); sessionField.setAccessible(true);
+            JSONArray values = (JSONArray) sessionField.get(engine);
+            if (pro) values.getJSONObject(0).put("proOperation", obj("id", "op", "messageId", "pending"));
+            else {
+                java.lang.reflect.Field turnField = Engine.class.getDeclaredField("runningTurns"); turnField.setAccessible(true);
+                @SuppressWarnings("unchecked") java.util.Map<String, String> turns = (java.util.Map<String, String>) turnField.get(engine);
+                turns.put("a-chat", "turn-a");
+                call("chat.resume", obj("id", "a-chat"));
+            }
+            java.lang.reflect.Field remote = Engine.class.getDeclaredField("serverThreadId"); remote.setAccessible(true); remote.set(engine, "remote-a");
+            assertEquals(1, call("projects.remove", obj("key", "b")).getInt("movedChats"));
+            JSONObject snapshot = call("state", obj());
+            assertEquals("a-chat", snapshot.getString("threadId"));
+            assertEquals("a", snapshot.getJSONObject("workspace").getString("key"));
+            assertTrue(snapshot.getBoolean(pro ? "proBusy" : "busy"));
+            assertEquals("remote-a", remote.get(engine));
+            call("chat.rename", obj("id", "b-chat", "title", "renamed B"));
+            call("chat.delete", obj("id", "b-chat"));
+            assertEquals(1, call("state", obj()).getJSONArray("sessions").length());
+            assertThrows(ExecutionException.class, () -> call("chat.delete", obj("id", "a-chat")));
+            assertThrows(ExecutionException.class, () -> call("projects.remove", obj("key", "a")));
+            // Protection must follow A even after the user switches away from it.
+            call("projects.select", obj("key", ""));
+            assertThrows(ExecutionException.class, () -> call("chat.delete", obj("id", "a-chat")));
+            assertThrows(ExecutionException.class, () -> call("projects.remove", obj("key", "a")));
+            engine.io.shutdownNow();
+        }
+    }
     @Test public void removingOneMergedBindingMovesOnlyItsChatsAndPreservesEveryOtherField() throws Exception {
         seed();
         String raw = array(

@@ -38,7 +38,22 @@
   function node(tag, text, cls) { const n = document.createElement(tag); if (text != null) n.textContent = text; if (cls) n.className = cls; return n; }
   function button(text, fn, cls = 'secondary-button') { const b = node('button', text, cls); b.type = 'button'; b.addEventListener('click', () => { b.disabled = true; Promise.resolve().then(fn).catch(e => toast(e.message)).finally(() => { b.disabled = false; if (b.dataset.restoreFocus === 'true') b.focus(); }); }); return b; }
   function icon(name) { const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); const use = document.createElementNS(svg.namespaceURI, 'use'); use.setAttribute('href', '#i-' + name); svg.append(use); return svg; }
-  function toast(message) { $('toast').textContent = message || t('오류가 발생했습니다.'); $('toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => $('toast').hidden = true, 5500); }
+  // Network failures may contain a full HTML response or a multi-line diagnostic.
+  // Keep those payloads out of user-facing status text.
+  function errorText(error, fallback = t('요청을 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.')) {
+    const message = String(error?.message ?? error ?? '').trim();
+    return message && message.length <= 240 && !/[\r\n<>]/.test(message)
+      && !/(?:bearer\s|gh[pousr]_|github_pat_|access_token|refresh_token|client_secret)/i.test(message) ? message : fallback;
+  }
+  function toast(message) {
+    // A body-level toast is behind modal dialogs, regardless of its z-index.
+    const dialog = dialogs.map(id => $(id)).filter(item => item?.open).at(-1);
+    const target = $('toast');
+    if (dialog) dialog.prepend(target); else document.body.append(target);
+    target.textContent = errorText(message); target.hidden = false;
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => { target.hidden = true; }, 5500);
+  }
+
   function ensureNotificationSettings() {
     const toggle = $('chat-icons-toggle')?.closest('.settings-row');
     if (!toggle) return;
@@ -1109,15 +1124,14 @@
   }
   async function removeProject(project) {
     const question = project.bindings?.length > 1 ? t('기본 로컬 연결을 해제할까요? 다른 연결과 파일은 그대로 유지됩니다.') : t('프로젝트를 제거할까요? 대화는 일반 대화로 이동해요.\n파일은 그대로 유지됩니다.');
-    if (projectWorkBusy() || !confirm(question)) return;
-    if (projectWorkBusy()) return;
+    if (projectRemovalBusy(project) || !confirm(question)) return;
+    if (projectRemovalBusy(project)) return;
     await call('projects.remove', {key:project.key});
     toast(t(project.bindings?.length > 1 ? '로컬 연결을 해제했습니다.' : '프로젝트를 제거했습니다. 대화는 일반 대화에 있습니다.'));
   }
   async function renameProject(project) {
-    if (projectWorkBusy()) return;
     const name = await input(t('프로젝트 이름 변경'), t('새 프로젝트 표시 이름을 입력하세요.'), project.name || '');
-    if (projectWorkBusy() || !name || !name.trim() || (name.trim() === project.name && !project.nameConflicts?.length)) return;
+    if (!name || !name.trim() || (name.trim() === project.name && !project.nameConflicts?.length)) return;
     const result = await call('projects.rename', {key:project.key, name:name.trim()});
     const projects = (state.projects || []).map(value => value.key === project.key ? {...value, name:result.name || name.trim(), nameConflicts:[]} : value);
     const workspace = projectKeys(project).includes(state.workspace?.key) ? {...state.workspace, name:result.name || name.trim()} : state.workspace;
@@ -1125,6 +1139,13 @@
     toast(t('프로젝트 이름을 변경했습니다.'));
   }
   function projectKeys(project) { return project.workspaceKeys || [project.key]; }
+  function sessionWorkBusy(session) {
+    return !!session.busy || (session.id === state.threadId && (!!state.busy || !!state.proBusy));
+  }
+  function projectRemovalBusy(project) {
+    return (state.sessions || []).some(session => session.workspaceKey === project.key && sessionWorkBusy(session))
+      || (state.workspace?.key === project.key && (!!state.busy || !!state.proBusy));
+  }
   let projectLinkReturnKey = '', projectLinkPending = false;
   function projectChoices(title, description, choices, returnKey = '') {
     projectLinkReturnKey = returnKey;
@@ -1219,17 +1240,17 @@
   function projectAction(project, trigger) {
     projectMenuFocus = trigger;
     $('project-actions-title').textContent = project.name || t('프로젝트');
-    const action = (label, fn, cls) => { const item = button(label, async () => { if (projectWorkBusy()) return; projectMenuActionClosing = true; close('project-actions-dialog'); await fn(); }, cls); item.disabled = projectWorkBusy(); return item; };
+    const action = (label, fn, cls, blocked = projectWorkBusy) => { const item = button(label, async () => { if (blocked()) return; projectMenuActionClosing = true; close('project-actions-dialog'); await fn(); }, cls); item.projectBlocked = blocked; item.disabled = blocked(); return item; };
     const actions = [
-      action(t('이름 변경'), () => renameProject(project))
+      action(t('이름 변경'), () => renameProject(project), undefined, () => false)
     ];
-    if (project.projectId) actions.push(action(t('프로젝트 내보내기'), () => exportProject(project)));
+    if (project.projectId) actions.push(action(t('프로젝트 내보내기'), () => exportProject(project), undefined, () => false));
     if (project.nameConflicts?.length) actions.push(action(t('이름 충돌 해결'), () => resolveProjectName(project)));
-    if (project.available !== false) actions.unshift(action(t('새 대화'), () => newChat(project.key)));
+    if (project.available !== false) actions.unshift(action(t('새 대화'), () => newChat(project.key), undefined, () => false));
     if (project.available === false) actions.push(action(t(project.hasLocalFolder === false ? '로컬 폴더 연결' : '폴더 다시 연결'), () => pickFolder(project.key)));
     if (project.projectId && (state.projects || []).some(p => p.projectId && p.projectId !== project.projectId)) actions.push(action(t('프로젝트 병합'), () => mergeProject(project)));
     if (project.bindings?.length > 1) actions.push(action(t('기본 로컬 폴더'), () => chooseProjectBinding(project)));
-    actions.push(action(t(project.bindings?.length > 1 ? '기본 로컬 연결 해제' : '프로젝트 목록에서 제거'), () => removeProject(project), 'secondary-button danger'));
+    actions.push(action(t(project.bindings?.length > 1 ? '기본 로컬 연결 해제' : '프로젝트 목록에서 제거'), () => removeProject(project), 'secondary-button danger', () => projectRemovalBusy(project)));
     $('project-actions').replaceChildren(...actions);
     show('project-actions-dialog');
   }
@@ -1278,8 +1299,8 @@
       const row = node('div', null, 'project-row');
       const toggle = button('', () => { const expandedNow = section.classList.toggle('collapsed') === false; localStorage.setItem(expandedKey, String(expandedNow)); toggle.setAttribute('aria-expanded', String(expandedNow)); }, 'tree-toggle'); toggle.setAttribute('aria-label', project.name + t(' 대화 펼치기')); toggle.setAttribute('aria-expanded', String(expanded)); toggle.append(icon('down'));
       const select = button('', () => selectProject(project.key), 'project-button'); select.append(icon('folder'), node('span', project.name || t('이름 없는 프로젝트'))); select.setAttribute('aria-current', String(!!project.selected));
-       const menu = button('', () => projectAction(project, menu), 'icon-button project-more'); menu.disabled = workBusy; menu.setAttribute('aria-label', project.name + t(' 메뉴')); menu.dataset.projectMenuKey = project.key; menu.append(icon('more'));
-       const projectNew = button('', () => newChat(project.key), 'icon-button project-new'); projectNew.disabled = project.available === false || workBusy; projectNew.setAttribute('aria-label', project.name + t(' 새 대화')); projectNew.append(icon('plus'));
+       const menu = button('', () => projectAction(project, menu), 'icon-button project-more'); menu.setAttribute('aria-label', project.name + t(' 메뉴')); menu.dataset.projectMenuKey = project.key; menu.append(icon('more'));
+       const projectNew = button('', () => newChat(project.key), 'icon-button project-new'); projectNew.disabled = project.available === false; projectNew.setAttribute('aria-label', project.name + t(' 새 대화')); projectNew.append(icon('plus'));
        row.append(toggle, select, projectNew, menu); section.append(row);
       const children = node('div', null, 'project-sessions');
       if (project.nameConflicts?.length) { const resolve = button(t('이름 충돌 해결'), () => resolveProjectName(project), 'new-thread'); resolve.disabled = workBusy; children.append(resolve); }
@@ -1348,7 +1369,7 @@
     $('changes-turn-diff').textContent = state.turnDiff || t('이 대화에 기록된 작업 diff가 없습니다.');
     if (selectedChange) $('change-restore').disabled = restoringChange || !selectedChange.data.canRestore || !!state.busy || state.permissions === 'read-only';
     renderProjects();
-    if ($('project-actions-dialog')?.open) $('project-actions').querySelectorAll('button').forEach(button => { button.disabled = projectWorkBusy(); });
+    if ($('project-actions-dialog')?.open) $('project-actions').querySelectorAll('button').forEach(button => { button.disabled = button.projectBlocked(); });
     if ($('project-link-dialog')?.open) $('project-link-choices').querySelectorAll('button').forEach(button => { button.disabled = projectWorkBusy() || projectLinkPending; });
     $('sessions').replaceChildren();
     const projectWorkspaceKeys = new Set((state.projects || []).flatMap(projectKeys));
@@ -1689,7 +1710,7 @@
   }
   function invalidateSyncPreview(cancel = true) {
     const preview = syncState.preview; syncState.preview = null;
-    if (cancel && preview) rpc('sync.cancel').then(result => { if (syncStatus(result)) { setSyncStatus(result); renderSync(); } }).catch(() => {});
+    if (cancel && preview) call('sync.cancel').then(result => { if (syncStatus(result)) { setSyncStatus(result); renderSync(); } }).catch(() => {});
   }
   function renderSync() {
     const status = syncState.status, unavailable = syncState.loaded && status?.configured === false && !status?.authenticated;
@@ -1705,7 +1726,7 @@
     $('sync-indicator').textContent = connected ? t('연결됨') : (authenticated ? t('로그인됨') : t('연결 안 됨'));
     $('sync-indicator').classList.toggle('online', connected);
     $('sync-login-disclosure').hidden = authenticated || !!flow;
-    $('sync-login').hidden = authenticated || !!flow; $('sync-login').disabled = syncBusy() || syncState.busy;
+    $('sync-login').hidden = authenticated || !!flow; $('sync-login').disabled = !syncState.status || syncBusy();
     $('sync-open-browser').hidden = !flow; $('sync-open-browser').disabled = syncState.busy;
     $('sync-cancel-login').hidden = !flow; $('sync-cancel-login').disabled = syncState.busy;
     $('sync-device-flow').hidden = !flow; $('sync-device-code').textContent = flow?.userCode || '';
@@ -1749,27 +1770,27 @@
   async function loadSyncStatus() {
     if (syncState.busy) return;
     syncState.error = ''; renderSync();
-    try { setSyncStatus(await rpc('sync.status')); }
-    catch (error) { syncState.loaded = true; syncState.error = error.message || t('동기화 상태를 불러오지 못했습니다.'); }
+    try { if (!setSyncStatus(await call('sync.status'))) throw new Error(t('동기화 상태를 불러오지 못했습니다.')); }
+    catch (error) { syncState.loaded = true; syncState.error = errorText(error, t('동기화 상태를 불러오지 못했습니다.')); }
     renderSync();
   }
   async function loadSyncRepositories(page = 1) {
     if (syncState.busy || !syncState.status?.authenticated) return;
     syncState.busy = true; syncState.error = ''; renderSync();
     try {
-      const result = await rpc('sync.repositories', {page});
+      const result = await call('sync.repositories', {page});
       const existing = page === 1 ? [] : syncState.repositories;
       const byName = new Map(existing.map(item => [item.fullName, item]));
       for (const item of result.repositories || []) if (item?.fullName) byName.set(item.fullName, item);
       syncState.repositories = [...byName.values()]; syncState.page = result.page || page; syncState.hasMore = !!result.hasMore;
-    } catch (error) { syncState.error = error.message || t('저장소 목록을 불러오지 못했습니다.'); }
+    } catch (error) { syncState.error = errorText(error, t('저장소 목록을 불러오지 못했습니다.')); }
     finally { syncState.busy = false; renderSync(); }
   }
   function stopSyncPolling(cancel = false) {
     if (syncState.pollTimer) clearTimeout(syncState.pollTimer);
     syncState.pollTimer = null; syncState.generation++;
     const flow = syncState.flow; syncState.flow = null;
-    if (cancel && flow?.flowId) rpc('sync.login.cancel', {flowId:flow.flowId}).catch(() => {});
+    if (cancel && flow?.flowId) call('sync.login.cancel', {flowId:flow.flowId}).catch(() => {});
   }
   function scheduleSyncPoll(flow, delay) {
     const generation = syncState.generation;
@@ -1778,7 +1799,7 @@
       if (syncState.pollInFlight) { scheduleSyncPoll(flow, 1); return; }
       syncState.pollInFlight = true;
       try {
-        const result = await rpc('sync.login.poll', {flowId:flow.flowId});
+        const result = await call('sync.login.poll', {flowId:flow.flowId});
         if (generation !== syncState.generation || syncState.flow?.flowId !== flow.flowId) return;
         if (result?.pending) { scheduleSyncPoll(flow, result.interval || flow.interval || 5); return; }
         syncState.flow = null; setSyncStatus(result); renderSync();
@@ -1786,43 +1807,43 @@
       } catch (error) {
         if (generation === syncState.generation) {
           const current = syncState.flow; syncState.flow = null; syncState.generation++;
-          if (current?.flowId) rpc('sync.login.cancel', {flowId:current.flowId}).catch(() => {});
-          syncState.error = error.message || t('GitHub 로그인을 확인하지 못했습니다.'); renderSync();
+          if (current?.flowId) call('sync.login.cancel', {flowId:current.flowId}).catch(() => {});
+          syncState.error = errorText(error, t('GitHub 로그인을 확인하지 못했습니다.')); renderSync();
         }
       } finally { syncState.pollInFlight = false; }
     }, Math.max(1, Number(delay) || 5) * 1000);
   }
   async function startSyncLogin() {
-    if (syncState.busy || projectWorkBusy()) return;
+    if (!syncState.status?.configured || syncState.busy || projectWorkBusy()) return;
     const generation = ++syncState.generation;
     syncState.busy = true; syncState.error = ''; renderSync();
     try {
-      const flow = await rpc('sync.login.start');
-      if (generation !== syncState.generation) { if (flow?.flowId) rpc('sync.login.cancel', {flowId:flow.flowId}).catch(() => {}); return; }
+      const flow = await call('sync.login.start');
+      if (generation !== syncState.generation) { if (flow?.flowId) call('sync.login.cancel', {flowId:flow.flowId}).catch(() => {}); return; }
       syncState.flow = flow;
       scheduleSyncPoll(flow, flow.interval || 5);
-    } catch (error) { syncState.error = error.message || t('GitHub 로그인을 시작하지 못했습니다.'); }
+    } catch (error) { syncState.error = errorText(error, t('GitHub 로그인을 시작하지 못했습니다.')); }
     finally { syncState.busy = false; renderSync(); }
   }
   async function connectSyncRepository(repository) {
     if (!repository || syncState.busy || projectWorkBusy()) return;
     syncState.busy = true; syncState.error = ''; invalidateSyncPreview(); renderSync();
-    try { setSyncStatus(await rpc('sync.connect', {repository}), true); syncState.repositories = syncState.repositories.length ? syncState.repositories : [{fullName:repository}]; }
-    catch (error) { syncState.error = error.message || t('저장소를 연결하지 못했습니다.'); }
+    try { setSyncStatus(await call('sync.connect', {repository}), true); syncState.repositories = syncState.repositories.length ? syncState.repositories : [{fullName:repository}]; }
+    catch (error) { syncState.error = errorText(error, t('저장소를 연결하지 못했습니다.')); }
     finally { syncState.busy = false; renderSync(); }
   }
   async function saveSyncSelection() {
     if (syncState.busy || projectWorkBusy()) return;
     syncState.busy = true; syncState.error = ''; syncState.selectionTouched = true; invalidateSyncPreview(); renderSync();
-    try { setSyncStatus(await rpc('sync.selection', {keys:[...(syncState.selectedKeys || [])]})); }
-    catch (error) { syncState.error = error.message || t('업로드할 프로젝트를 저장하지 못했습니다.'); }
+    try { setSyncStatus(await call('sync.selection', {keys:[...(syncState.selectedKeys || [])]})); }
+    catch (error) { syncState.error = errorText(error, t('업로드할 프로젝트를 저장하지 못했습니다.')); }
     finally { syncState.busy = false; renderSync(); }
   }
   async function previewSync() {
     if (syncBusy() || !syncState.status?.connected) return;
     syncState.busy = true; syncState.error = ''; invalidateSyncPreview(); renderSync();
-    try { syncState.preview = await rpc('sync.preview', {keys:[...(syncState.selectedKeys || [])]}); }
-    catch (error) { syncState.error = error.message || t('동기화 미리보기를 만들지 못했습니다.'); }
+    try { syncState.preview = await call('sync.preview', {keys:[...(syncState.selectedKeys || [])]}); }
+    catch (error) { syncState.error = errorText(error, t('동기화 미리보기를 만들지 못했습니다.')); }
     finally { syncState.busy = false; renderSync(); }
   }
   async function applySync() {
@@ -1830,17 +1851,17 @@
     if (!preview || syncBusy() || !confirm(t('미리보기의 원격 프로젝트와 선택한 프로젝트를 지금 동기화할까요?'))) return;
     syncState.preview = null; syncState.busy = true; syncState.error = ''; renderSync();
     try {
-      const result = await rpc('sync.apply', {token:preview.token}); setSyncStatus(result);
+      const result = await call('sync.apply', {token:preview.token}); setSyncStatus(result);
       if (result?.projects || result?.workspace) render({...state, ...(result.projects ? {projects:result.projects} : {}), ...(result.workspace ? {workspace:result.workspace} : {})});
       await loadSyncStatus();
-    } catch (error) { syncState.error = error.message || t('동기화하지 못했습니다. 미리보기를 다시 확인해 주세요.'); }
+    } catch (error) { syncState.error = errorText(error, t('동기화하지 못했습니다. 미리보기를 다시 확인해 주세요.')); }
     finally { syncState.busy = false; renderSync(); }
   }
   async function disconnectSync() {
     if (syncBusy() || !confirm(t('GitHub 연결을 해제할까요? 저장소의 데이터는 삭제하지 않습니다.'))) return;
     syncState.busy = true; syncState.error = ''; stopSyncPolling(true); invalidateSyncPreview(); renderSync();
-    try { setSyncStatus(await rpc('sync.disconnect'), true); syncState.repositories = []; }
-    catch (error) { syncState.error = error.message || t('GitHub 연결을 해제하지 못했습니다.'); }
+    try { setSyncStatus(await call('sync.disconnect'), true); syncState.repositories = []; }
+    catch (error) { syncState.error = errorText(error, t('GitHub 연결을 해제하지 못했습니다.')); }
     finally { syncState.busy = false; renderSync(); }
   }
   function selectSettingsTab(name) {
@@ -1903,7 +1924,7 @@
       const result = results[i];
       if (result.status === 'fulfilled') toolCache[i] = result.value;
       const data = result.status === 'fulfilled' ? result.value : toolCache[i];
-      if (result.status === 'rejected') { card(t('불러오지 못했습니다'), result.reason.message + (data ? t(' 이전 목록을 표시합니다.') : '')); if (!data) return; }
+      if (result.status === 'rejected') { card(t('불러오지 못했습니다'), errorText(result.reason) + (data ? t(' 이전 목록을 표시합니다.') : '')); if (!data) return; }
       if (i === 0) {
         for (const market of data.marketplaces || []) {
           const heading = node('p', market.interface?.displayName || market.name, 'muted'); target.append(heading);
@@ -1924,7 +1945,7 @@
             }));
           }
         }
-        for (const e of data.marketplaceLoadErrors || []) card(t('마켓플레이스 오류'), e.message);
+        for (const e of data.marketplaceLoadErrors || []) card(t('마켓플레이스 오류'), errorText(e.message));
         if (!data.marketplaces?.length) card(t('등록된 플러그인이 없습니다'), t('마켓플레이스를 추가하거나 계정 연결 상태를 확인하세요.'));
       } else if (i === 1) {
         let count = 0;
@@ -1933,13 +1954,13 @@
             count++; const c = card(skill.interface?.displayName || skill.name, skill.description);
             c.append(node('p', skill.path, 'muted'), button(skill.enabled ? t('비활성화') : t('활성화'), async () => { await rpc('skills/config/write', {path: skill.path, enabled: !skill.enabled}); await loadTools(); }), button(t('대화에 사용'), () => { $('prompt').value += '$' + skill.name + ' '; close('tools-dialog'); $('prompt').focus(); }));
           }
-          for (const e of entry.errors || []) card(t('스킬 로드 오류'), e.message);
+          for (const e of entry.errors || []) card(t('스킬 로드 오류'), errorText(e.message));
         }
         if (!count) card(t('설치된 스킬이 없습니다'), t('SKILL.md가 들어 있는 스킬 폴더를 가져오거나 Codex에게 스킬 생성을 요청하세요.'));
       } else {
         for (const server of data.data || []) {
           const c = card(server.name, (server.runtimeStatus?.status || server.authStatus) + t(' · 도구 ') + Object.keys(server.tools || {}).length + t('개'));
-          if (server.toolsError) c.append(node('p', server.toolsError, 'muted'));
+          if (server.toolsError) c.append(node('p', errorText(server.toolsError), 'muted'));
           c.append(button(t('도구 보기'), () => { logEvent('MCP: ' + server.name, server); show('activity-dialog'); }), button(t('로그인'), async () => { const r = await rpc('mcpServer/oauth/login', {name: server.name}); await call('ui.externalBrowser', {url: r.authorizationUrl}); }));
         }
         if (!data.data?.length) card(t('설정된 MCP 서버가 없습니다'), t('서버 설정에서 HTTP 또는 stdio 서버를 추가할 수 있습니다.'));
@@ -2249,7 +2270,12 @@
   }));
   on('sync-refresh', async () => { await loadSyncStatus(); if (syncState.status?.authenticated) await loadSyncRepositories(1); });
   on('sync-login', startSyncLogin);
-  on('sync-open-browser', () => { if (syncState.flow?.verificationUri) return call('ui.externalBrowser', {url:syncState.flow.verificationUri}); });
+  on('sync-open-browser', async () => {
+    if (!syncState.flow?.verificationUri) return;
+    syncState.error = ''; renderSync();
+    try { await call('ui.externalBrowser', {url:syncState.flow.verificationUri}); }
+    catch (error) { syncState.error = errorText(error, t('브라우저를 열지 못했습니다. 기본 브라우저 설정을 확인해 주세요.')); renderSync(); }
+  });
   on('sync-cancel-login', () => { stopSyncPolling(true); syncState.error = ''; renderSync(); });
   on('sync-copy-code', () => { if (syncState.flow?.userCode) return copyText(syncState.flow.userCode, $('sync-copy-code')); });
   on('sync-more-repositories', () => loadSyncRepositories((syncState.page || 1) + 1));

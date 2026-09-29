@@ -1,5 +1,7 @@
 /* UI messages only; user/model/file content is never translated. */
 window.MobileCodexEnglish = {
+  "요청을 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.": "Could not complete the request. Please try again shortly.",
+  "브라우저를 열지 못했습니다. 기본 브라우저 설정을 확인해 주세요.": "Could not open the browser. Check your default browser settings.",
   "GitHub 계정을 확인하지 못했습니다. 다시 로그인해 주세요.": "Could not verify your GitHub account. Please sign in again.",
   "GitHub 동기화 결과를 확인하지 못했습니다. 다시 미리보기해 주세요.": "Could not verify the GitHub sync result. Please preview again.",
   "GitHub 인증이 취소됐습니다.": "GitHub sign-in was canceled.",

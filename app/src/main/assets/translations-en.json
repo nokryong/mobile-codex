@@ -1061,5 +1061,7 @@
   "원격 프로젝트 정보가 변경되었습니다. 다시 미리보기해 주세요.": "Remote project information changed. Please preview again.",
   "GitHub 확인은 끝났지만 이 기기에 반영하지 못했습니다. 다시 미리보기해 주세요.": "The GitHub step finished, but the changes could not be applied to this device. Please preview again.",
   "동기화 정보가 변경되었습니다. 다시 미리보기해 주세요.": "Sync information changed. Please preview again.",
-  "프로젝트 목록이 변경되었습니다. 다시 선택해 주세요.": "The project list changed. Please select the projects again."
+  "프로젝트 목록이 변경되었습니다. 다시 선택해 주세요.": "The project list changed. Please select the projects again.",
+  "요청을 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.": "Could not complete the request. Please try again shortly.",
+  "브라우저를 열지 못했습니다. 기본 브라우저 설정을 확인해 주세요.": "Could not open the browser. Check your default browser settings."
 }

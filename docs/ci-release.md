@@ -1,17 +1,17 @@
-# CI and paired releases
+# CI and independent releases
 
-The public repository (`nokryong/mobile-codex`) runs UI/source tests first.
+Both repositories (`nokryong/mobile-codex` and `SeeUSoon93/mobile-codex`) run UI/source tests first.
 Only a successful `checks` job permits Android setup and the APK build.
 Browser suites stop at the first failure; opt in to collecting every suite
 with `MOBILE_CODEX_COLLECT_ALL_LAYOUT_FAILURES=1` for manual diagnosis.
 Android tasks stop on failure too; report uploads are the only always-run steps.
 
-The private main branch (`SeeUSoon93/mobile-codex`) does not rebuild the APK.
-It waits for the canonical release with exactly the same Git tree, checks all
-six assets against their sizes and SHA-256 digests, inspects APK identity and
-the pinned signing certificate, and publishes those same bytes and notes.
-A failed/cancelled canonical run for that tree ends the wait early. Unrelated
-failures do not. There is also a bounded timeout.
+Each repository builds and publishes its own main-branch commit after full
+validation, for both pushes and manual runs. The private repository does not
+wait for a public release or copy its APK. Release tags, assets and notes belong
+to the repository where the workflow runs. Both builds reuse the nokryong OAuth
+app through the public `MOBILE_CODEX_GITHUB_CLIENT_ID` repository variable;
+no separate OAuth app is needed for the private repository.
 
 Prepared runtimes and corresponding-source archives use exact content keys.
 Native/package inputs and packaging scripts are part of those keys. Prepared

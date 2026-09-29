@@ -501,7 +501,9 @@ public final class Engine {
                     }
                     case "projects.select" -> { documents.selectProject(args.optString("key", "")); clearActive(); publish(); reply.complete(snapshot(), null); }
                     case "projects.remove" -> {
-                        ensureEngineIdle(); String key = args.getString("key");
+                        String key = args.getString("key");
+                        ensureProjectIdle(key);
+                        boolean activeProjectRemoved = active != null && key.equals(active.optString("workspaceKey"));
                         JSONArray replacement = new JSONArray(sessions.toString()); int moved = moveSessionsToGeneral(replacement, key);
                         if (moved > 0) backupSessionsForProjectRemoval(sessions.toString());
                         JSONObject removed = documents.removeProject(key);
@@ -510,16 +512,16 @@ public final class Engine {
                             catch (IOException error) {
                                 // The durable project tombstone is itself the recovery journal:
                                 // startup will idempotently generalize the still-intact sessions file.
-                                replaceSessions(replacement); serverThreadId = ""; syncCurrentTurn(); publish();
+                                replaceSessions(replacement); if (activeProjectRemoved) serverThreadId = ""; syncCurrentTurn(); publish();
                                 throw new IOException(t("프로젝트 연결은 해제됐지만 대화 기록 저장을 마치지 못했습니다. 대화는 보존되며 앱을 다시 시작하면 일반 대화 이전을 재시도합니다."), error);
                             }
-                            replaceSessions(replacement); serverThreadId = ""; syncCurrentTurn();
+                            replaceSessions(replacement); if (activeProjectRemoved) serverThreadId = ""; syncCurrentTurn();
                         }
                         publish();
                         removed.put("movedChats", moved).put("workspace", documents.workspace());
                         reply.complete(removed, null);
                     }
-                    case "projects.rename" -> { ensureEngineIdle(); JSONObject renamed = documents.renameProject(args.getString("key"), args.getString("name")); publish(); reply.complete(renamed, null); }
+                    case "projects.rename" -> { JSONObject renamed = documents.renameProject(args.getString("key"), args.getString("name")); publish(); reply.complete(renamed, null); }
                     case "projects.export" -> reply.complete(documents.exportProject(args.getString("key")), null);
                     case "projects.import.preview" -> reply.complete(documents.previewProjects(args.getString("content")), null);
                     case "projects.import.apply" -> { ensureEngineIdle(); JSONObject imported = documents.importProjects(args.getString("content"), args.getString("token")); publish(); reply.complete(imported, null); }
@@ -588,7 +590,19 @@ public final class Engine {
         }
         return false;
     }
-    private void ensureIdle() throws IOException { if (busy) throw new IOException(t("현재 대화의 작업을 먼저 중지해 주세요.")); }
+    private void ensureSessionIdle(String id) throws IOException {
+        JSONObject target = session(id);
+        if (runningTurns.containsKey(id) || (id.equals(threadId) && busy))
+            throw new IOException(t("현재 대화의 작업을 먼저 중지해 주세요."));
+        if (target != null && target.optJSONObject("proOperation") != null)
+            throw new IOException(t("GPT-6-Pro 답변을 기다리는 대화는 먼저 중지해 주세요."));
+    }
+    private void ensureProjectIdle(String key) throws IOException {
+        for (int i = 0; i < sessions.length(); i++) {
+            JSONObject target = sessions.optJSONObject(i);
+            if (target != null && key.equals(target.optString("workspaceKey"))) ensureSessionIdle(target.optString("id"));
+        }
+    }
     private void ensureEngineIdle() throws IOException {
         if (hasRunningTurns() || hasProOperations()) throw new IOException(t("진행 중인 작업을 먼저 중지해 주세요."));
     }
@@ -1299,7 +1313,6 @@ public final class Engine {
         throw new IOException(t("대화를 찾을 수 없습니다."));
     }
     private void renameSession(String id, String title) throws Exception {
-        ensureIdle();
         // Titles are Mobile Codex local aliases: they remain available without starting or signing in to Codex.
         String trimmed = title.trim();
         if (trimmed.isEmpty()) throw new IOException(t("대화 제목을 입력해 주세요."));
@@ -1323,10 +1336,7 @@ public final class Engine {
      * failed server calls leave the tombstone to retry on the next start/reconnect.
      */
     private boolean deleteSession(String id) throws Exception {
-        ensureIdle();
-        JSONObject existing = session(id);
-        if (existing != null && existing.optJSONObject("proOperation") != null)
-            throw new IOException(t("GPT-6-Pro 답변을 기다리는 대화는 먼저 중지해 주세요."));
+        ensureSessionIdle(id);
         boolean found = false;
         JSONArray marked = new JSONArray(sessions.toString());
         for (int i = 0; i < marked.length(); i++) {

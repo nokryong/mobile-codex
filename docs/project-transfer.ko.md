@@ -74,7 +74,7 @@ node packages/desktop-companion/cli.cjs sync pull
 이 설정은 앱 배포자가 한 번 수행한다. 일반 사용자에게 Client ID나 토큰 입력을 요구하지 않는다.
 
 1. 앱 소유자의 GitHub 계정에서 Mobile Codex 전용 **OAuth App**을 등록하고 **Enable Device Flow**를 켠다. 다른 앱의 Client ID를 빌려 쓰지 않는다.
-2. 발급된 공개 **Client ID**를 배포 저장소의 Actions variable `GITHUB_OAUTH_CLIENT_ID`에 등록한다. 로컬 빌드는 같은 이름의 환경변수를 사용한다.
+2. 발급된 공개 **Client ID**를 배포 저장소의 Actions variable `MOBILE_CODEX_GITHUB_CLIENT_ID`에 등록한다. 로컬 빌드는 `GITHUB_OAUTH_CLIENT_ID` 환경변수를 사용한다. OAuth 앱은 배포 주체인 `nokryong` 계정에만 등록하며, 개발 저장소 소유자별로 만들 필요는 없다.
 3. Client secret은 이 네이티브 device flow에서 필요하지 않으며 앱·저장소·빌드 설정에 넣지 않는다. 토큰 갱신용 secret도 포함하지 않으며, 만료형 토큰은 만료 시 사용자가 재로그인한다.
 4. 새 APK에서 로그인 승인·취소·만료, 저장소 목록, 프로젝트 왕복을 실기기로 확인한 뒤 배포한다.
 
