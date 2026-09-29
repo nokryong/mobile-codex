@@ -26,7 +26,7 @@ The APK-opening app may separately require **Allow from this source**. Menu name
 
 Mobile Codex is an independent Android client built around the Codex app-server. It bundles an Android port of Codex, Python, Node.js, and Git, so you do not need to install Termux or keep a separate PC server running.
 
-**0.1.43 alpha** · **ARM64 / Android 10+** · Created by [nokryong](https://github.com/nokryong)
+**0.2.0** · **ARM64 / Android 10+** · Created by [nokryong](https://github.com/nokryong)
 
 [Download APK](https://github.com/nokryong/mobile-codex/releases) · [Builds](https://github.com/nokryong/mobile-codex/actions/workflows/android.yml) · [Report an issue](https://github.com/nokryong/mobile-codex/issues)
 
@@ -40,9 +40,13 @@ Chat opens the official ChatGPT website in an app WebView. Its own model picker,
 
 ## Features
 
+The Codex composer also offers **GPT-6-Pro**, a separate read-only route through the signed-in ChatGPT web session. It verifies the actual Pro selection and keeps one remote conversation per local conversation inside `mobile-codex-chat`. This route does not provide Codex file-write, shell, or phone-control tools and does not change the selected Codex permission mode. The lightning button enables Fast only for supported Codex models; it is off by default and can consume more usage.
+
 | Feature | What it does |
 | --- | --- |
-| Projects and chats | Separate chat lists per project, general chats without a folder, saved history, streaming, interruption, and additional instructions during a task |
+| Projects and chats | Per-project chats and general chats using the default Codex folder; saved history, streaming, interruption, and additional instructions during a task |
+| Pro and Fast | Read-only ChatGPT Pro in the same local conversation; an opt-in Fast button for supported Codex models |
+| Project exchange | Manually exchange project identities/names through files or a private GitHub repository; local paths, chats, and credentials stay on each device |
 | Files | Browse, search, read, create, edit, move, rename, and delete files; confirm changes and keep recovery copies |
 | Attachments and images | Attach multiple files, preview images, browse generated image galleries, zoom, swipe, and save originals |
 | Developer tools | Bundled Python/pip, Node.js/npm/npx, and Git; optional Linux development environment; enter commands and stream output |
@@ -62,7 +66,7 @@ You need an **ARM64 device running Android 10 or later**, an up-to-date Android 
 
 ### Download the APK
 
-Open [Releases](https://github.com/nokryong/mobile-codex/releases) and download **`mobile-codex-0.1.43-alpha-arm64.apk`** from the release assets. Open the APK and follow Android’s installation prompts. If requested, allow installation from the app you used to download/open it.
+Open [Releases](https://github.com/nokryong/mobile-codex/releases) and download **`mobile-codex-0.2.0-arm64.apk`** from the release assets. Open the APK and follow Android’s installation prompts. If requested, allow installation from the app you used to download/open it.
 
 New app versions are published automatically after the `main` workflow passes its tests, builds, and original-key signature verification. Alpha versions are marked as prereleases. A published version is never silently replaced; maintainers must increment both `versionName` and `versionCode` for the next release.
 
@@ -86,7 +90,9 @@ Actions artifact downloads require GitHub sign-in and expire after 14 days. Publ
 
 The lower-left quota ring opens **Settings → Account**. From there you can add or switch ChatGPT accounts. Credentials remain in app-private storage, and each account only sees its own saved chats.
 
-Saved chats can be opened without signing in or starting the runtime. Removing a project from the sidebar leaves its folder and chat history intact. Reconnect a folder if Android revokes access.
+Saved chats can be opened without signing in or starting the runtime. Removing or unlinking a project moves its chats into general chats without deleting the folder or its files. General chats use the existing app-private workspace, displayed as **Codex**, without needing a project. Temporary loss of folder access does not move chats; reconnect the folder in that case.
+
+The sidebar's top controls and bottom tools/settings/usage controls stay fixed while the project/chat list scrolls. Long conversations load older messages when you scroll upward; recorded user messages show a small date. See the [0.2.0 release notes](docs/releases/0.2.0.md) and [project exchange guide](docs/project-transfer.ko.md).
 
 ### Update an existing installation
 

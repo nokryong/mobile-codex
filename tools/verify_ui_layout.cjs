@@ -16,8 +16,8 @@ const snapshot = {
  workspace:{selected:true,key:'demo-project',name:'Very long project display name that keeps its menu visible'},projects:[{key:'demo-project',name:'Very long project display name that keeps its menu visible',available:true}],
  account:{type:'chatgpt',email:'demo@example.test'},
  sessions:[{id:'demo',workspaceKey:'demo-project',title:'A very long conversation title that must keep its action button visible'}],
- models:[{id:'gpt-example',model:'gpt-example',displayName:'Default model',isDefault:true,supportedReasoningEfforts:[{reasoningEffort:'medium',description:'Medium'}]}],
- messages:[{id:'u',role:'user',text:'Help me organize this project.'},{id:'a',role:'assistant',text:'I reviewed the project files. Here is a clear place to start.\n\n- Keep the source files in `src/`.\n- Put setup instructions in `README.md`.\n- Review the changes before running the app.\n\n```js\nconst greeting = "Hello, mobile";\nconsole.log(greeting);\n```\n\nWhat would you like to work on first?'}]
+ models:[{id:'gpt-example',model:'gpt-example',displayName:'Default model',isDefault:true,serviceTiers:[{id:'priority',name:'Fast'}],supportedReasoningEfforts:[{reasoningEffort:'medium',description:'Medium'}]}],
+ messages:[{id:'u',role:'user',text:'Help me organize this project.',createdAt:1790670840000},{id:'a',role:'assistant',text:'I reviewed the project files. Here is a clear place to start.\n\n- Keep the source files in `src/`.\n- Put setup instructions in `README.md`.\n- Review the changes before running the app.\n\n```js\nconst greeting = "Hello, mobile";\nconsole.log(greeting);\n```\n\nWhat would you like to work on first?'}]
 };
 async function open(browser, width, height, theme='light', language='en', extra={}, initialSnapshot=snapshot) {
  const context = await browser.newContext({viewport:{width,height},deviceScaleFactor:1,colorScheme:theme,...extra});
@@ -32,13 +32,20 @@ async function open(browser, width, height, theme='light', language='en', extra=
  });
  await page.addInitScript(({snapshot,theme,language})=>{
   localStorage.setItem('chat-icons','off');localStorage.setItem('theme',theme);
+  window.fixtureSnapshot=snapshot;
+  window.fixtureCalls=[];
   window.Native={locale:()=>JSON.stringify({choice:language,systemLanguage:language}),postMessage(raw){
    const m=JSON.parse(raw);let result={};
-   if(m.action==='state') result=snapshot;
+   window.fixtureCalls.push(m);
+   if(m.action==='state') result=window.fixtureSnapshot;
    if(m.action==='updates.state') result={versionName:'0.1.13-alpha',versionCode:14,repository:'nokryong/mobile-codex',prereleases:true};
    if(m.action==='instructions.read') result={content:'Read the relevant files before editing.',activePath:'/private/AGENTS.md'};
    if(m.action==='files.list') result={entries:[]};
    if(m.action==='linux.status') result=snapshot.linux;
+   if(m.action==='chat.history') {
+    const all=snapshot.historyFixture||[],cursor=all.findIndex(item=>item.id===m.args.beforeId),start=Math.max(0,cursor-40);
+    result={threadId:snapshot.threadId,messages:all.slice(start,cursor),messageHistory:{beforeId:start?all[start].id:'',hasMore:start>0,total:all.length}};
+   }
    setTimeout(()=>window.mobileCodexEvent('response',{id:m.id,result}),0);
   }};
  }, {snapshot:initialSnapshot,theme,language});
@@ -52,7 +59,7 @@ async function checkComposer(page) {
  await page.locator('#prompt').focus();
  await page.waitForFunction(()=>document.getElementById('composer')?.classList.contains('composer-expanded'));
  const result=await page.evaluate(()=>{
-  const ids=['add-attachment','composer-folder','composer-options','voice-input','send'];
+  const ids=['add-attachment','composer-folder','fast-mode','approval-mode','composer-options','voice-input','send'];
   const bounds=id=>{const r=document.getElementById(id).getBoundingClientRect();return {id,x:r.x,y:r.y,right:r.right,bottom:r.bottom,width:r.width,height:r.height};};
   return {width:innerWidth,height:innerHeight,scrollWidth:document.documentElement.scrollWidth,controls:ids.map(bounds),composer:bounds('composer'),header:bounds('header-project'),chat:bounds('chat-scroll')};
  });
@@ -68,7 +75,88 @@ async function checkComposer(page) {
   const previous=result.controls[i-1], current=result.controls[i];
   if(previous.bottom>current.y+1 && current.bottom>previous.y+1) assert.ok(previous.right<=current.x+1,'Composer buttons overlap');
  }
+ const fast=result.controls.find(control=>control.id==='fast-mode'),options=result.controls.find(control=>control.id==='composer-options');
+ assert.equal(fast.y,options.y,'Fast belongs to the lowest composer row');
+ assert.ok(fast.x<options.x,'Fast is leftmost in the lowest row');
+ const date=await page.locator('.message-time').first().boundingBox();
+ if(date) {
+  const bubble=await page.locator('.message.user.has-date').first().boundingBox();
+  assert.ok(date.x>=0&&date.x+date.width<=bubble.x+1,'User date fits beside its bubble');
+ }
  return result;
+}
+async function checkFirstMessageBelowHeader(page,label) {
+ const value=await page.evaluate(async()=>{
+  const chat=document.querySelector('#chat-scroll');chat.scrollTop=0;
+  await new Promise(requestAnimationFrame);
+  chat.scrollTop=0;
+  const header=document.querySelector('.topbar').getBoundingClientRect(), first=document.querySelector('#messages article').getBoundingClientRect(), scroll=document.querySelector('#chat-scroll').getBoundingClientRect();
+  return {header:header.toJSON(),first:first.toJSON(),scroll:scroll.toJSON()};
+ });
+ assert.ok(value.first.top>=value.header.bottom+8,`First message is hidden below the header: ${label}`);
+ assert.ok(value.first.top>=value.scroll.top+8,`First message is outside the chat scroller: ${label}`);
+ return value;
+}
+async function checkLongMessageClearance(page,width,height) {
+ await page.evaluate(()=>{
+  const messages=Array.from({length:100},(_,index)=>({id:'long-header-'+index,role:index%2?'assistant':'user',text:'Long conversation message '+index}));
+  window.fixtureSnapshot={...window.fixtureSnapshot,messages,messageHistory:{beforeId:'',hasMore:false,total:messages.length}};
+  window.mobileCodexEvent('state',window.fixtureSnapshot);
+ });
+ await page.waitForFunction(()=>document.querySelectorAll('#messages article').length===100);
+ return checkFirstMessageBelowHeader(page,`long conversation ${width}×${height}`);
+}
+async function checkLazyHistory(browser,width=393,height=852,theme='light',language='ko',keyboard=false) {
+ const all=Array.from({length:120},(_,i)=>({id:'history-'+i,role:i%2?'assistant':'user',text:'History message '+i+'\nSecond line of message.',...(i%2?{}:{createdAt:1790670840000+i*60000})}));
+ const initial={...snapshot,messages:all.slice(-40),messageHistory:{beforeId:'history-80',hasMore:true,total:120},historyFixture:all};
+ const {context,page,errors}=await open(browser,width,height,theme,language,{},initial);
+ try {
+  if(keyboard) await page.evaluate(()=>window.mobileCodexEvent('viewport',{keyboardVisible:true}));
+  assert.equal(await page.locator('#messages article').count(),40);
+  assert.equal(await page.evaluate(()=>fixtureCalls.filter(call=>call.action==='chat.history').length),0);
+  // Deterministically exercise a queued layout callback after newer upward navigation.
+  // Both real viewport changes and focus must recheck follow mode at callback time.
+  const deferred=await page.evaluate(keyboard=>{
+   const area=document.getElementById('chat-scroll'), original=window.requestAnimationFrame, results=[];
+   try {
+    for(const trigger of ['viewport','focus']) {
+     area.scrollTop=area.scrollHeight;area.dispatchEvent(new Event('scroll'));
+     const queued=[];window.requestAnimationFrame=callback=>queued.push(callback);
+     if(trigger==='viewport')window.mobileCodexEvent('viewport',{keyboardVisible:keyboard});
+     else document.getElementById('prompt').dispatchEvent(new Event('focus'));
+     area.scrollTop=300;area.dispatchEvent(new Event('scroll'));
+     const before=area.scrollTop;
+     for(const callback of queued)callback(performance.now());
+     results.push({trigger,before,after:area.scrollTop,callbacks:queued.length});
+    }
+   } finally {window.requestAnimationFrame=original;}
+   area.scrollTop=area.scrollHeight;area.dispatchEvent(new Event('scroll'));
+   return results;
+  },keyboard);
+  for(const result of deferred) {
+   assert.ok(result.callbacks>0,result.trigger+' queued a layout callback');
+   assert.equal(result.after,result.before,`${result.trigger} callback must preserve upward navigation at ${width}×${height}`);
+  }
+  await page.evaluate(()=>{
+   const area=document.getElementById('chat-scroll');area.style.scrollBehavior='auto';area.scrollTop=100;
+   window.fixtureAnchor={id:'history-81',top:document.querySelector('[data-id="history-81"]').getBoundingClientRect().top};
+  });
+  await page.waitForFunction(()=>document.querySelectorAll('#messages article').length===80);
+  const delta=await page.evaluate(()=>document.querySelector('[data-id="'+fixtureAnchor.id+'"]').getBoundingClientRect().top-fixtureAnchor.top);
+  assert.ok(Math.abs(delta)<2,`Prepending older messages preserves the exact visible position at ${width}×${height}${keyboard?' with keyboard':''}: ${delta}`);
+  assert.equal(await page.locator('#messages article').first().getAttribute('data-id'),'history-40');
+  await page.evaluate(()=>{document.getElementById('chat-scroll').scrollTop=0;});
+  await page.waitForFunction(()=>document.querySelectorAll('#messages article').length===120);
+  await checkFirstMessageBelowHeader(page,`lazy-prepended conversation ${width}×${height}${keyboard?' keyboard':''}`);
+  assert.equal(await page.locator('#messages article').first().getAttribute('data-id'),'history-0');
+  await page.evaluate(()=>{document.getElementById('chat-scroll').scrollTop=0;});await page.waitForTimeout(100);
+  assert.equal(await page.evaluate(()=>fixtureCalls.filter(call=>call.action==='chat.history').length),2);
+  assert.deepEqual(errors,[],'Lazy history browser errors');
+  await page.screenshot({path:path.join(output,`lazy-history-${width}-${height}-${theme}-${language}${keyboard?'-keyboard':''}.png`)});
+ } catch (error) {
+  await page.screenshot({path:path.join(output,`lazy-history-failure-${width}-${height}${keyboard?'-keyboard':''}.png`)});
+  throw error;
+ } finally {await context.close();}
 }
 async function checkCompactComposer(page) {
  const draft=await page.locator('#prompt').inputValue();
@@ -94,6 +182,53 @@ async function checkCompactComposer(page) {
  await page.waitForFunction(()=>!document.getElementById('composer')?.classList.contains('composer-expanded'));
  const draftHeight=await page.locator('#prompt').evaluate(el=>({scroll:el.scrollHeight,client:el.clientHeight}));
  assert.ok(draftHeight.scroll<=draftHeight.client+1,'Compact draft wraps behind the composer edge');
+}
+async function ensureSidebarOpen(page) {
+ const visible=await page.locator('#sidebar').evaluate(el=>{
+  const box=el.getBoundingClientRect();return box.right>0&&box.left<innerWidth&&!el.inert;
+ });
+ if(!visible) { await page.locator('.topbar .sidebar-toggle').click();await page.waitForTimeout(180); }
+}
+async function checkFixedSidebar(page,width,height) {
+ await page.evaluate(()=>{
+  const sessions=Array.from({length:96},(_,index)=>({id:'sidebar-history-'+index,title:'Long sidebar conversation '+index+' that must remain inside the navigation scroller'}));
+  window.fixtureSnapshot={...window.fixtureSnapshot,sessions};
+  window.mobileCodexEvent('state',window.fixtureSnapshot);
+ });
+ await page.waitForFunction(()=>document.querySelectorAll('#sessions .session-row').length===96);
+ await ensureSidebarOpen(page);
+ const before=await page.evaluate(()=>{
+  const box=selector=>document.querySelector(selector).getBoundingClientRect().toJSON();
+  const scroll=document.querySelector('.sidebar-scroll');
+  return {top:box('.sidebar-top'),bottom:box('.sidebar-bottom'),scroll:box('.sidebar-scroll'),first:box('#sessions .session-row'),last:box('#sessions .session-row:last-child'),controls:['#show-tools','#settings','#account-button'].map(box),scrollHeight:scroll.scrollHeight,clientHeight:scroll.clientHeight,scrollTop:scroll.scrollTop};
+ });
+ assert.ok(before.scrollHeight>before.clientHeight,`Sidebar list does not overflow at ${width}×${height}`);
+ assert.ok(before.scroll.height>0,`Sidebar navigation has no scroll region at ${width}×${height}`);
+ await page.locator('.sidebar-scroll').evaluate(el=>el.scrollTop=el.scrollHeight);
+ const after=await page.evaluate(()=>{
+  const box=selector=>document.querySelector(selector).getBoundingClientRect().toJSON();
+  const scroll=document.querySelector('.sidebar-scroll');
+  return {top:box('.sidebar-top'),bottom:box('.sidebar-bottom'),scroll:box('.sidebar-scroll'),first:box('#sessions .session-row'),last:box('#sessions .session-row:last-child'),controls:['#show-tools','#settings','#account-button'].map(box),scrollTop:scroll.scrollTop};
+ });
+ assert.ok(after.scrollTop>0,`Sidebar navigation did not scroll at ${width}×${height}`);
+ assert.ok(after.first.y<before.first.y-5,`Sidebar list did not move at ${width}×${height}`);
+ assert.ok(Math.abs(after.top.y-before.top.y)<.5,`Sidebar identity moved while navigation scrolled at ${width}×${height}`);
+ assert.ok(Math.abs(after.bottom.y-before.bottom.y)<.5,`Sidebar footer moved while navigation scrolled at ${width}×${height}`);
+ assert.ok(after.last.bottom<=after.scroll.bottom+1,`Last sidebar conversation is unreachable at ${width}×${height}`);
+ for(const [index,control] of after.controls.entries()) {
+  assert.ok(control.width>=43.5&&control.height>=43.5,`Sidebar footer control ${index} loses its 44px target at ${width}×${height}`);
+  assert.ok(control.top>=after.bottom.top-1&&control.bottom<=after.bottom.bottom+1,`Sidebar footer control ${index} leaves its fixed area at ${width}×${height}`);
+  assert.ok(control.left>=0&&control.right<=width+1&&control.top>=0&&control.bottom<=height+1,`Sidebar footer control ${index} is unreachable at ${width}×${height}`);
+ }
+ await page.locator('#show-tools').click();await page.locator('#tool-menu-dialog').waitFor({state:'visible'});
+ await page.locator('#tool-menu-dialog [data-close]').first().click();await page.locator('#tool-menu-dialog').waitFor({state:'hidden'});
+ await page.locator('#settings').click();await page.locator('#settings-dialog').waitFor({state:'visible'});
+ await page.locator('#settings-dialog [data-close]').first().click();await page.locator('#settings-dialog').waitFor({state:'hidden'});
+ await ensureSidebarOpen(page);
+ await page.locator('#account-button').click();await page.locator('#settings-dialog').waitFor({state:'visible'});
+ assert.equal(await page.locator('[data-settings-tab="account"]').evaluate(el=>el.classList.contains('active')),true,'Account action must remain reachable from the sidebar footer');
+ await page.locator('#settings-dialog [data-close]').first().click();await page.locator('#settings-dialog').waitFor({state:'hidden'});
+ return {before,after};
 }
 async function checkSidebar(page,width) {
  await page.locator('.topbar .sidebar-toggle').click();await page.waitForTimeout(180);
@@ -171,11 +306,17 @@ async function checkLinuxSettings(page,width,theme,language) {
  const browser=await chromium.launch({headless:true,executablePath:process.env.MOBILE_CODEX_BROWSER_EXECUTABLE||undefined,args:['--no-sandbox','--disable-dev-shm-usage']});
  const results=[];
  try {
+  for(const [width,height,theme,language,keyboard] of [[320,720,'light','en',false],[393,852,'light','ko',false],[800,1100,'light','en',false],[1280,900,'dark','en',false],[393,430,'light','ko',true]]) await checkLazyHistory(browser,width,height,theme,language,keyboard);
   for(const [width,height,theme,language] of [[320,720,'light','en'],[393,852,'light','ko'],[393,852,'dark','en'],[800,1100,'light','en'],[1280,900,'dark','en']]){
    const {context,page,errors}=await open(browser,width,height,theme,language);
+   const shortHeader=await checkFirstMessageBelowHeader(page,`short conversation ${width}×${height}`);
+   const longHeader=await checkLongMessageClearance(page,width,height);
    await checkCompactComposer(page);
-   const layout=await checkComposer(page);const sidebar=width<=393?await checkSidebar(page,width):null;
-   results.push({width,height,theme,language,layout,sidebar});
+   const layout=await checkComposer(page);const fixedSidebar=await checkFixedSidebar(page,width,height);const sidebar=width<=393?await checkSidebar(page,width):null;
+   await page.locator('#prompt').focus();await page.locator('#fast-mode').click();
+   assert.equal(await page.locator('#fast-mode').getAttribute('aria-pressed'),'true');
+   assert.equal(await page.evaluate(()=>fixtureCalls.some(call=>call.action==='chat.send')),false,'Fast toggle never sends a request by itself');
+   const result={width,height,theme,language,layout,sidebar,fixedSidebar,shortHeader,longHeader};results.push(result);
    await page.screenshot({path:path.join(output,`chat-${width}-${theme}-${language}.png`)});
    await page.locator('#files-toggle').click();
    const fileHeader=await page.locator('#file-panel .panel-head').boundingBox();
@@ -197,6 +338,8 @@ async function checkLinuxSettings(page,width,theme,language) {
     await page.setViewportSize({width,height:430});await page.evaluate(()=>window.mobileCodexEvent('viewport',{keyboardVisible:true}));
     await page.locator('#prompt').fill('A longer draft\nwith several lines\nthat stays above the keyboard.');
     await checkComposer(page);
+    result.keyboardHeader=await checkFirstMessageBelowHeader(page,`keyboard conversation ${width}×430`);
+    result.keyboardSidebar=await checkFixedSidebar(page,width,430);
     const keyboardControls=await page.evaluate(()=>({folder:document.getElementById('composer-folder').getBoundingClientRect().toJSON(),folderText:document.getElementById('context-folder').textContent,options:document.getElementById('composer-options').getBoundingClientRect().toJSON()}));
     assert.ok(keyboardControls.folder.width>=120,'Keyboard composer folder label has no meaningful space');
     assert.ok(keyboardControls.options.width>=100,'Keyboard composer model control is too narrow');
@@ -221,7 +364,7 @@ async function checkLinuxSettings(page,width,theme,language) {
   assert.equal(await page.locator('#send').evaluate(el=>getComputedStyle(el).transitionDuration),'0s');
   await page.screenshot({path:path.join(output,'options-reduced-motion.png')});await context.close();
   const sourceGitDiffHash=crypto.createHash('sha256').update(execFileSync('git',['diff','--no-ext-diff'],{cwd:root,encoding:'utf8'})).digest('hex');
-  fs.writeFileSync(path.join(output,'layout-results.json'),JSON.stringify({sourceTimestamp:new Date().toISOString(),sourceGitDiffHash,viewports:results,assertions:'composer bounds, Chat and Codex round-trip with distinct sidebars, sidebar long-label action columns, 44px targets, settings visibility, file panel, keyboard resize, reduced motion'},null,2));
-  console.log('Browser layouts passed: 320/393/800/1280px, light/dark, English/Korean, resized keyboard, sheet drag and reduced motion.');
+  fs.writeFileSync(path.join(output,'layout-results.json'),JSON.stringify({sourceTimestamp:new Date().toISOString(),sourceGitDiffHash,viewports:results,assertions:'composer bounds, Chat and Codex round-trip with distinct sidebars, fixed sidebar identity and footer with a long navigation list, 44px targets, tools/settings/account reachability, settings visibility, file panel, keyboard resize, reduced motion'},null,2));
+  console.log('Browser layouts passed: 320/393/800/1280px, light/dark, English/Korean, fixed sidebar footer under long-list and keyboard viewport, sheet drag and reduced motion.');
  } finally {await browser.close();}
 })().catch(error=>{console.error(error);process.exitCode=1;});

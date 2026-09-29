@@ -1,10 +1,13 @@
 {
   "name": "mobile-codex-ui-tests",
-  "version": "0.1.43-alpha",
+  "version": "0.2.0",
   "private": true,
   "scripts": {
     "test": "node --test tests/*.test.cjs",
-    "test:layout": "node tools/verify_ui_layout.cjs && node tools/verify_character_pack_browser.cjs"
+    "test:layout": "node tools/verify_ui_layout.cjs && node tools/verify_character_pack_browser.cjs && node tools/verify_project_identity_browser.cjs",
+    "test:project-layout": "node tools/verify_project_identity_browser.cjs",
+    "test:project-transfer": "node tools/verify_project_transfer.cjs",
+    "desktop": "node packages/desktop-companion/cli.cjs"
   },
   "devDependencies": {
     "jsdom": "26.1.0",

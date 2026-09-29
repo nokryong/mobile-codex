@@ -7,10 +7,14 @@ const root = 'app/src/main/assets/web/';
 const opened = [];
 afterEach(() => { for (const dom of opened.splice(0)) dom.window.close(); });
 const tick = () => new Promise(r => setTimeout(r, 10));
+const fastModel = {id:'fast-model',model:'fast-model',displayName:'Fast-capable model',isDefault:true,serviceTiers:[{id:'priority',name:'Fast'}]};
+const historyMessages = (from, to) => Array.from({length:to-from+1}, (_,i)=>({id:'m'+(from+i),role:(from+i)%2?'user':'assistant',text:'Message '+(from+i)}));
+const historyMeta = (before, total=100) => ({beforeId:before?'m'+before:'',hasMore:!!before,total});
 const resetCredit = (id, expiresAt) => ({id, expiresAt, grantedAt:1900000000, status:'available', resetType:'codexRateLimits'});
 function setup(overrides = {}, options = {}) {
   const dom = new JSDOM(fs.readFileSync(root+'index.html','utf8'), {url: 'https://appassets.androidplatform.net/index.html', runScripts: 'outside-only'}); opened.push(dom);
-  const w = dom.window, calls = [], responses = [];
+  const w = dom.window, calls = [], responses = [], frames = [];
+  if (options.manualFrames) w.requestAnimationFrame = callback => frames.push(callback);
   w.matchMedia = query => ({matches:!!options.mobile && query.includes('max-width'), addEventListener(){}});
   if (options.drafts) for (const [key,value] of Object.entries(options.drafts)) w.localStorage.setItem(key,value);
   w.HTMLDialogElement.prototype.showModal = function(){this.setAttribute('open','');};
@@ -27,8 +31,118 @@ function setup(overrides = {}, options = {}) {
   w.Native.locale = () => JSON.stringify({choice:options.language || 'ko',systemLanguage:options.systemLanguage || 'ko'});
   w.eval(fs.readFileSync(root+'translations.js','utf8')); w.eval(fs.readFileSync(root+'locale.js','utf8'));
   w.eval(fs.readFileSync(root+'ui-core.js','utf8')); w.eval(fs.readFileSync(root+'app.js','utf8'));
-  return {w,calls,responses,snapshot};
+  return {w,calls,responses,snapshot,frames};
 }
+test('Fast is an explicit per-draft lightning toggle first in the bottom row',async()=>{
+ const {w,calls,snapshot}=setup();await tick();const d=w.document;
+ w.mobileCodexEvent('state',{...snapshot,models:[fastModel]});
+ const toggle=d.getElementById('fast-mode');
+ assert.equal(d.querySelector('.composer-actions').firstElementChild,toggle);
+ assert.equal(toggle.querySelector('use').getAttribute('href'),'#i-bolt');
+ assert.equal(toggle.disabled,false);assert.equal(toggle.getAttribute('aria-pressed'),'false');
+ toggle.click();await tick();assert.equal(toggle.getAttribute('aria-pressed'),'true');
+ assert.equal(calls.some(c=>c.action==='chat.send'),false,'toggling never sends a paid request');
+ d.getElementById('prompt').value='test';d.getElementById('composer').dispatchEvent(new w.Event('submit',{cancelable:true}));await tick();
+ assert.equal(calls.find(c=>c.action==='chat.send').args.fastMode,true);
+ toggle.click();await tick();d.getElementById('prompt').value='normal';d.getElementById('composer').dispatchEvent(new w.Event('submit',{cancelable:true}));await tick();
+ assert.equal(calls.filter(c=>c.action==='chat.send').at(-1).args.fastMode,false);
+ assert.equal(calls.some(c=>c.action==='config.write'||c.action==='permissions.set'),false);
+});
+test('Fast stays unavailable for unsupported models and Pro, and cannot change a running turn',async()=>{
+ const {w,calls,snapshot}=setup();await tick();const d=w.document,toggle=d.getElementById('fast-mode');
+ assert.equal(toggle.disabled,true);
+ w.mobileCodexEvent('state',{...snapshot,models:[fastModel],busy:true});assert.equal(toggle.disabled,true);
+ w.mobileCodexEvent('state',{...snapshot,models:[fastModel]});assert.equal(toggle.disabled,false);
+ d.querySelector('#model-list input[value="chatgpt-web:gpt-6-pro"]').click();await tick();
+ assert.equal(toggle.disabled,true);assert.equal(toggle.getAttribute('aria-pressed'),'false');
+ d.getElementById('prompt').value='Pro test';d.getElementById('composer').dispatchEvent(new w.Event('submit',{cancelable:true}));await tick();
+ assert.equal(Object.hasOwn(calls.find(c=>c.action==='chat.pro.send').args,'fastMode'),false);
+});
+test('Fast choices are isolated between conversation drafts',async()=>{
+ const {w,snapshot}=setup();await tick();const toggle=w.document.getElementById('fast-mode');
+ const first={...snapshot,models:[fastModel]};w.mobileCodexEvent('state',first);
+ toggle.click();await tick();assert.equal(toggle.getAttribute('aria-pressed'),'true');
+ w.mobileCodexEvent('state',{...first,threadId:'second',fastMode:false});assert.equal(toggle.getAttribute('aria-pressed'),'false');
+ w.mobileCodexEvent('state',first);assert.equal(toggle.getAttribute('aria-pressed'),'true');
+});
+test('user bubbles show small dates only when a real timestamp exists',async()=>{
+ const {w,snapshot}=setup();await tick();const now=Date.UTC(2026,8,29,12,34);
+ w.mobileCodexEvent('state',{...snapshot,messages:[
+  {id:'dated',role:'user',text:'hello',createdAt:now},
+  {id:'assistant',role:'assistant',text:'answer',createdAt:now},
+  {id:'legacy',role:'user',text:'old'},
+  {id:'invalid',role:'user',text:'invalid',createdAt:'bad date'},
+  {id:'zero',role:'user',text:'unknown',createdAt:0}
+ ]});
+ const dates=w.document.querySelectorAll('#messages time');assert.equal(dates.length,1);
+ assert.equal(dates[0].dateTime,new Date(now).toISOString());assert.match(dates[0].textContent,/09\.29 \d{2}:\d{2}/);
+ assert.equal(dates[0].closest('article').dataset.id,'dated');assert.ok(dates[0].title);
+});
+test('history lazy-loads in the existing scroller and keeps order, nodes and reading position',async()=>{
+ let resolveHistory;
+ const {w,calls,snapshot}=setup({'chat.history':()=>new Promise(resolve=>{resolveHistory=resolve;})});await tick();
+ const d=w.document,area=d.getElementById('chat-scroll'),list=d.getElementById('messages');
+ Object.defineProperty(area,'scrollHeight',{get:()=>list.children.length*100});Object.defineProperty(area,'clientHeight',{value:300});
+ const recent={...snapshot,messages:historyMessages(61,100),messageHistory:historyMeta(61)};
+ w.mobileCodexEvent('state',recent);await tick();assert.equal(list.children.length,40);
+ assert.equal(calls.filter(c=>c.action==='chat.history').length,0);
+ const original=d.querySelector('[data-id="m61"]');area.scrollTop=100;area.dispatchEvent(new w.Event('scroll'));await tick();
+ area.dispatchEvent(new w.Event('wheel'));await tick();
+ assert.equal(calls.filter(c=>c.action==='chat.history').length,1);
+ assert.deepEqual(calls.find(c=>c.action==='chat.history').args,{threadId:'t',beforeId:'m61',limit:40});
+ resolveHistory({threadId:'t',messages:historyMessages(21,61),messageHistory:historyMeta(21)});await tick();
+ assert.equal(list.children.length,80);assert.equal(list.firstElementChild.dataset.id,'m21');assert.equal(list.lastElementChild.dataset.id,'m100');
+ assert.equal(d.querySelector('[data-id="m61"]'),original);assert.equal(area.scrollTop,4100);
+ assert.equal(d.querySelectorAll('#chat-scroll').length,1);assert.equal(d.querySelector('#history-status button'),null);
+ w.mobileCodexEvent('state',{...recent,messages:historyMessages(62,101),messageHistory:historyMeta(62,101)});
+ assert.equal(list.children.length,81);assert.equal(list.firstElementChild.dataset.id,'m21');assert.equal(list.lastElementChild.dataset.id,'m101');
+ assert.equal(d.querySelector('[data-id="m61"]'),original);
+});
+test('deferred viewport and focus scrolling respects newer upward navigation',async()=>{
+ for (const trigger of ['viewport','focus']) {
+  const {w,snapshot,frames}=setup({}, {manualFrames:true});await tick();
+  const area=w.document.getElementById('chat-scroll');
+  Object.defineProperty(area,'scrollHeight',{value:4000});
+  Object.defineProperty(area,'clientHeight',{value:300});
+  w.mobileCodexEvent('state',{...snapshot,messages:historyMessages(61,100),messageHistory:historyMeta(0)});
+  for(const callback of frames.splice(0))callback();
+  if(trigger==='viewport')w.mobileCodexEvent('viewport',{keyboardVisible:true});
+  else w.document.getElementById('prompt').dispatchEvent(new w.Event('focus'));
+  assert.ok(frames.length>0,trigger+' schedules a layout follow-up');
+  area.scrollTop=100;area.dispatchEvent(new w.Event('scroll'));
+  for(const callback of frames.splice(0))callback();
+  assert.equal(area.scrollTop,100,trigger+' must not pull the reader back to the tail');
+ }
+});
+test('history never expands the recent window without upward navigation',async()=>{
+ const {w,calls,snapshot}=setup();await tick();const list=w.document.getElementById('messages');
+ w.mobileCodexEvent('state',{...snapshot,messages:historyMessages(61,100),messageHistory:historyMeta(61)});
+ w.mobileCodexEvent('state',{...snapshot,messages:historyMessages(62,101),messageHistory:historyMeta(62,101)});
+ assert.equal(list.children.length,40);assert.equal(list.firstElementChild.dataset.id,'m62');
+ assert.equal(calls.some(c=>c.action==='chat.history'),false);
+});
+test('history discards an in-flight page after switching conversations',async()=>{
+ let resolveHistory;
+ const {w,snapshot}=setup({'chat.history':()=>new Promise(resolve=>{resolveHistory=resolve;})});await tick();
+ w.mobileCodexEvent('state',{...snapshot,messages:historyMessages(61,100),messageHistory:historyMeta(61)});
+ w.document.getElementById('chat-scroll').dispatchEvent(new w.WheelEvent('wheel',{deltaY:-20}));await tick();
+ w.mobileCodexEvent('state',{...snapshot,threadId:'second',messages:[{id:'other',role:'user',text:'Other conversation'}],messageHistory:historyMeta(0,1)});
+ resolveHistory({threadId:'t',messages:historyMessages(21,60),messageHistory:historyMeta(21)});await tick();
+ assert.equal(w.document.getElementById('messages').children.length,1);assert.equal(w.document.querySelector('#messages article').dataset.id,'other');
+});
+test('history preserves the live tail while a page is pending and errors retry only on upward navigation',async()=>{
+ let resolveHistory,attempt=0;
+ const {w,calls,snapshot}=setup({'chat.history':()=>{if(++attempt===1)throw new Error('offline');return new Promise(resolve=>{resolveHistory=resolve;});}});await tick();
+ const area=w.document.getElementById('chat-scroll'),list=w.document.getElementById('messages');
+ const recent={...snapshot,messages:historyMessages(61,100),messageHistory:historyMeta(61)};w.mobileCodexEvent('state',recent);
+ area.dispatchEvent(new w.WheelEvent('wheel',{deltaY:-20}));await tick();assert.equal(list.children.length,40);
+ assert.match(w.document.getElementById('history-status').textContent,/다시 시도/);await tick();assert.equal(attempt,1);
+ area.dispatchEvent(new w.WheelEvent('wheel',{deltaY:-20}));await tick();
+ w.mobileCodexEvent('state',{...recent,messages:historyMessages(62,101),messageHistory:historyMeta(62,101)});
+ resolveHistory({threadId:'t',messages:historyMessages(21,60),messageHistory:historyMeta(21,100)});await tick();
+ assert.equal(list.children.length,81);assert.equal(list.firstElementChild.dataset.id,'m21');assert.equal(list.lastElementChild.dataset.id,'m101');
+ assert.equal(calls.filter(c=>c.action==='chat.history').length,2);assert.equal(w.document.getElementById('history-status').hidden,true);
+});
 test('cold startup keeps the normal screen while the account is restored silently',async()=>{
  let resolveState;
  const {w}=setup({state:()=>new Promise(resolve=>{resolveState=resolve;})});
@@ -181,18 +295,47 @@ test('Chat opening failure leaves Codex usable and reports the failure',async()=
  assert.equal(w.document.body.classList.contains('chat-mode'),false);
  assert.match(w.document.getElementById('toast').textContent,/open failed/);
 });
-test('packaged Chat surface has no native send, reply requery, or fetch observer',()=>{
+test('GPT-6-Pro uses an isolated transport without a remote Android bridge or credential observer',()=>{
  const main=fs.readFileSync('app/src/main/java/dev/mobilecodex/app/MainActivity.java','utf8');
  const app=fs.readFileSync(root+'app.js','utf8');
  const web=fs.readFileSync('app/src/main/java/dev/mobilecodex/app/ChatWebActivity.java','utf8');
+ const transport=fs.readFileSync('app/src/main/java/dev/mobilecodex/app/ProWebTransport.java','utf8');
+ const adapter=fs.readFileSync('app/src/main/assets/pro-web-transport.js','utf8');
  assert.equal(fs.existsSync('app/src/main/java/dev/mobilecodex/app/ChatWebTransport.java'),false);
- assert.doesNotMatch(main,/chat\.web\.|ChatWebTransport/);
+ assert.match(main,/chat\.pro\.send|ProWebTransport/);
+ assert.match(app,/chat\.pro\.send|chatgpt-web:gpt-6-pro/);
  assert.doesNotMatch(app,/chat\.web\.|chat-web-messages|chat-web-draft/);
  assert.doesNotMatch(web,/addJavascriptInterface|backend-api\/f\/conversation/);
+ assert.doesNotMatch(transport,/addJavascriptInterface|getCookie|accessToken|Authorization|backend-api/);
+ assert.match(transport,/onPermissionRequest\(PermissionRequest request\)[\s\S]*?request\.deny\(\)/);
+ assert.doesNotMatch(adapter,/document\.cookie|localStorage|sessionStorage|accessToken|Authorization|backend-api|window\.fetch\s*=/);
  for(const name of ['chat-web-custom.js','chat-icon-renderer.js']) {
    const script=fs.readFileSync('app/src/main/assets/'+name,'utf8');
    assert.doesNotMatch(script,/window\.fetch\s*=|XMLHttpRequest|backend-api\/f\/conversation/);
  }
+});
+test('GPT-6-Pro is synthetic, read-only, and sends through its dedicated action',async()=>{
+ const {w,calls,snapshot}=setup();await tick();const d=w.document;
+ w.mobileCodexEvent('state',{...snapshot,permissions:'danger-full-access',approvalMode:'allow-all'});
+ const pro=d.querySelector('#model-list input[value="chatgpt-web:gpt-6-pro"]');assert.ok(pro);pro.click();await tick();
+ assert.equal(d.getElementById('model-summary').textContent,'GPT-6-Pro · 읽기 전용');
+ assert.equal(d.getElementById('effort').disabled,true);assert.equal(d.getElementById('effort').selectedOptions[0].textContent,'Pro에서 자동 결정');
+ assert.equal(d.getElementById('permissions').value,'read-only');assert.equal(d.getElementById('permissions').disabled,true);
+ assert.equal(d.getElementById('approval-mode').disabled,true);assert.equal(d.getElementById('approval-mode').selectedOptions[0].textContent,'승인 사용 안 함');
+ assert.equal(calls.some(call=>call.action==='permissions.set'||call.action==='approvals.set'),false);
+ d.getElementById('prompt').value='이 변경을 검토해줘';d.getElementById('composer').dispatchEvent(new w.Event('submit',{cancelable:true}));await tick();
+ const sent=calls.find(call=>call.action==='chat.pro.send');assert.ok(sent);assert.equal(sent.args.model,'chatgpt-web:gpt-6-pro');
+ assert.equal(calls.some(call=>call.action==='chat.send'||call.action==='chat.steer'),false);
+ w.mobileCodexEvent('state',{...snapshot,proBusy:true});assert.equal(d.getElementById('activity-text').textContent,'Pro 답변 중');d.getElementById('stop').click();await tick();
+ assert.equal(calls.at(-1).action,'chat.pro.cancel');
+});
+test('ChatGPT Pro message metadata is visible and uncertain sends warn against retry',async()=>{
+ const {w,snapshot}=setup();await tick();
+ w.mobileCodexEvent('state',{...snapshot,messages:[
+  {id:'u',role:'user',text:'검토',backend:'chatgpt-web',source:'ChatGPT Pro',displayModel:'GPT-6-Pro',status:'uncertain'},
+  {id:'a',role:'assistant',text:'답변',backend:'chatgpt-web',source:'ChatGPT Pro',status:'completed'}
+ ]});
+ const text=w.document.getElementById('messages').textContent;assert.match(text,/GPT-6-Pro/);assert.match(text,/ChatGPT Pro/);assert.match(text,/다시 보내기 전에/);
 });
 test('sidebar sections collapse independently and restore their state',async()=>{
  const {w,snapshot}=setup();await tick();const d=w.document;
@@ -208,7 +351,10 @@ test('sidebar sections collapse independently and restore their state',async()=>
  assert.equal(d.getElementById('toggle-projects').getAttribute('aria-expanded'),'true');
  assert.equal(d.querySelector('.topbar .sidebar-toggle use').getAttribute('href'),'#i-menu');
  assert.equal(d.querySelector('#files-toggle use').getAttribute('href'),'#i-panel');
- for(const id of ['new-chat','projects','sessions','show-tools','account-button']) assert.ok(d.getElementById(id).closest('.sidebar-scroll'));
+ for(const id of ['new-chat','projects','sessions']) assert.ok(d.getElementById(id).closest('.sidebar-scroll'));
+ for(const id of ['show-tools','settings','account-button']) assert.equal(d.getElementById(id).closest('.sidebar-bottom'),d.querySelector('.sidebar-bottom'));
+ assert.equal(d.querySelector('.sidebar-bottom').parentElement,d.getElementById('sidebar'));
+ assert.equal(d.querySelector('.sidebar-bottom').closest('.sidebar-scroll'),null);
  const restored=setup({}, {drafts:{'sidebar-section-sessions':'collapsed'}});await tick();
  assert.equal(restored.w.document.getElementById('sessions').hidden,true);
 });
@@ -582,6 +728,27 @@ test('general and workspace drafts keep attachments separately and picker receip
  assert.match(w.localStorage.getItem(projectKey+':context'),/project.txt/);assert.equal(calls.filter(c=>c.action==='attachments.ack').length,1);
 });
 
+test('a removed project keeps its same-thread draft when the conversation becomes general',async()=>{
+ const {w,snapshot}=setup({
+  'files.list':()=>({entries:[{name:'old.md',path:'old.md'}]}),
+  'files.mention':()=>({name:'old.md',path:'old.md'}),
+  rpc:m=>m.args.method==='skills/list'?{data:[{skills:[{name:'review',path:'/skills/review'}]}]}:{data:[]},
+ });await tick();const d=w.document,p=d.getElementById('prompt');
+ const project={...snapshot,models:[fastModel],threadId:'moved',workspace:{selected:true,key:'gone',name:'Gone',available:true},projects:[{key:'gone',name:'Gone',available:true}]};
+ w.mobileCodexEvent('state',project);await tick();
+ w.mobileCodexEvent('attachments.picked',{receiptId:'gone-attachment',draftKey:C.draftKey('gone','moved'),attachments:[{id:'keep',name:'keep.txt'}],errors:[]});await tick();
+ p.value='@';p.setSelectionRange(1,1);p.click();await tick();d.querySelector('.autocomplete-item').click();await tick();
+ p.value='$re';p.setSelectionRange(p.value.length,p.value.length);p.click();await tick();d.querySelector('.autocomplete-item').click();await tick();
+ p.value='keep this draft';p.dispatchEvent(new w.Event('input'));d.getElementById('fast-mode').click();await tick();
+ const source='draft:'+C.draftKey('gone','moved'), target='draft:'+C.draftKey('','moved');
+ w.mobileCodexEvent('state',{...project,workspace:{selected:false,key:'',projectId:'',name:'Codex',hasLocalFolder:true,available:true,defaultWorkspace:true},projects:[],sessions:[{id:'moved',title:'Moved chat'}]});await tick();
+ assert.equal(p.value,'keep this draft');assert.equal(w.localStorage.getItem(source),'keep this draft');assert.equal(w.localStorage.getItem(target),'keep this draft');
+ const oldContext=JSON.parse(w.localStorage.getItem(source+':context')), movedContext=JSON.parse(w.localStorage.getItem(target+':context'));
+ assert.deepEqual(movedContext.attachments,[{id:'keep',name:'keep.txt'}]);assert.deepEqual(movedContext.skills,[{name:'review',path:'/skills/review'}]);assert.deepEqual(movedContext.mentions,[]);
+ assert.deepEqual(oldContext.mentions,[{name:'old.md',path:'old.md'}]);assert.equal(JSON.parse(w.localStorage.getItem(target+':options')).fastMode,true);
+ assert.match(d.getElementById('toast').textContent,/원래 초안/);
+});
+
 test('picker cancellation and partial errors preserve the draft while accepted attachments are sent',async()=>{
  const {w,calls}=setup({'attachments.pick':()=>({cancelled:false,attachments:[{id:'a1',name:'ok.txt'}],errors:['bad.bin을 읽지 못했습니다.']})});await tick();const d=w.document;
  d.getElementById('add-attachment').click();await tick();assert.match(d.getElementById('draft-context').textContent,/ok.txt/);
@@ -660,7 +827,8 @@ test('permission radio values remain synchronized with the native permission com
 
 test('adding a project never rebinds the selected project while reconnect targets its stable key',async()=>{
  const {w,calls,snapshot}=setup();await tick();w.mobileCodexEvent('state',{...snapshot,workspace:{selected:true,key:'a',name:'A'},projects:[{key:'a',name:'A',selected:true,available:true},{key:'b',name:'B',available:false}]});const d=w.document;
- d.getElementById('add-project').click();await tick();assert.deepEqual(calls.filter(c=>c.action==='files.pick').at(-1).args,{});
+ d.getElementById('add-project').click();await tick();
+ [...d.querySelectorAll('#project-link-choices button')].find(b=>b.textContent==='로컬 폴더 연결').click();await tick();assert.deepEqual(calls.filter(c=>c.action==='files.pick').at(-1).args,{});
  [...d.querySelectorAll('.project-tree')].at(-1).querySelector('.new-thread').click();await tick();assert.deepEqual(calls.filter(c=>c.action==='files.pick').at(-1).args,{projectKey:'b'});
 });
 
@@ -904,19 +1072,31 @@ test('development tool partial failures and rejected checks keep output and allo
  d.getElementById('devtools-check').click();await tick();assert.match(d.getElementById('devtools-status').textContent,/완료/);assert.match(d.getElementById('devtools-output').textContent,/✓ Git/);
 });
 
-test('removing a project keeps its conversations and draft scope in the detached group',async()=>{
+test('general Codex workspace uses its default folder and orphan conversations fall back to general chat',async()=>{
  const {w,calls,snapshot}=setup({'projects.remove':()=>({...snapshot,workspace:{selected:false},projects:[]})});await tick();const d=w.document;
- const project={key:'gone',name:'Keep files',selected:true,available:true};
- w.mobileCodexEvent('state',{...snapshot,workspace:{selected:true,key:'gone',name:'Keep files'},projects:[project],sessions:[{id:'old',title:'보존 대화',workspaceKey:'gone'}]});
- const draft='draft:'+C.draftKey('gone','old');w.localStorage.setItem(draft,'첨부와 초안');
+ const project={key:'kept',name:'Keep this project',selected:false,available:false,hasLocalFolder:true};
+ w.mobileCodexEvent('state',{...snapshot,workspace:{selected:false,key:'',projectId:'',name:'Codex',hasLocalFolder:true,available:true,defaultWorkspace:true},projects:[project],sessions:[{id:'old',title:'보존 대화',workspaceKey:'gone'}]});
+ assert.equal(d.getElementById('context-folder').textContent,'Codex');assert.equal(d.getElementById('header-project').textContent,'일반 대화');
+ assert.equal(d.querySelectorAll('.detached-projects').length,0);assert.equal(d.querySelectorAll('#projects .session').length,0);assert.equal(d.querySelectorAll('#sessions .session').length,1);
+ assert.equal(d.querySelector('#projects .new-thread').textContent,'폴더 다시 연결');
+ d.getElementById('files-toggle').click();await tick();assert.equal(calls.some(c=>c.action==='files.list'),true);
   const menu=d.querySelector('.project-more');assert.ok(menu);menu.click();await tick();
-  assert.match(d.getElementById('project-actions').textContent,/새 대화/);
-  [...d.querySelectorAll('#project-actions button')].find(b=>b.textContent==='프로젝트 목록에서 제거').click();await tick();
-  assert.deepEqual(calls.filter(c=>c.action==='projects.remove').at(-1).args,{key:'gone'});
- w.mobileCodexEvent('state',{...snapshot,workspace:{selected:false},projects:[],sessions:[{id:'old',title:'보존 대화',workspaceKey:'gone'}]});
- assert.match(d.querySelector('.detached-projects').textContent,/연결 해제된 프로젝트/);assert.match(d.querySelector('.detached-projects').textContent,/보존 대화/);assert.equal(w.localStorage.getItem(draft),'첨부와 초안');
- d.querySelector('.detached-projects .session').click();await tick();assert.deepEqual(calls.filter(c=>c.action==='chat.resume').at(-1).args,{id:'old'});
+ const confirmation=[];w.confirm=message=>{confirmation.push(message);return true;};
+ [...d.querySelectorAll('#project-actions button')].find(b=>b.textContent==='프로젝트 목록에서 제거').click();await tick();
+ assert.deepEqual(calls.filter(c=>c.action==='projects.remove').at(-1).args,{key:'kept'});assert.match(confirmation[0],/^프로젝트를 제거할까요\? 대화는 일반 대화로 이동해요\./);assert.match(confirmation[0],/파일은 그대로 유지됩니다/);
+ d.querySelector('#sessions .session').click();await tick();assert.deepEqual(calls.filter(c=>c.action==='chat.resume').at(-1).args,{id:'old'});
  });
+test('project mutation controls stay disabled while Pro or any conversation is busy',async()=>{
+ const {w,calls,snapshot}=setup();await tick();const d=w.document;
+ const project={key:'a',projectId:'pa',name:'A',available:false,hasLocalFolder:false,bindings:[{key:'a',name:'A'}]};
+ w.mobileCodexEvent('state',{...snapshot,projects:[project],sessions:[{id:'other',title:'Other',workspaceKey:'',busy:false}]});
+ d.getElementById('add-project').click();await tick();assert.equal(d.querySelectorAll('#project-link-choices button').length,3);
+ w.mobileCodexEvent('state',{...snapshot,proBusy:true,projects:[project],sessions:[{id:'other',title:'Other',workspaceKey:'',busy:false}]});
+ assert.equal(d.getElementById('add-project').disabled,true);assert.ok([...d.querySelectorAll('#project-link-choices button')].every(button=>button.disabled));assert.equal(d.querySelector('.project-more').disabled,true);assert.equal(d.querySelector('.project-new').disabled,true);assert.equal(d.querySelector('#projects .new-thread').disabled,true);
+ d.getElementById('add-project').click();await tick();assert.equal(calls.some(c=>/^projects\.(create|import|merge|prefer|rename|remove)$/.test(c.action)||c.action==='files.pick'),false);
+ w.mobileCodexEvent('state',{...snapshot,projects:[project],sessions:[{id:'other',title:'Other',workspaceKey:'',busy:true}]});
+ assert.equal(d.getElementById('add-project').disabled,true);assert.equal(d.querySelector('.project-more').disabled,true);assert.equal(d.querySelector('#projects .new-thread').disabled,true);
+});
 test('mobile project menu supports new chat, persisted display rename and cancellable removal',async()=>{
   let confirmResult=true;
   const {w,calls,snapshot}=setup({
@@ -937,6 +1117,95 @@ test('mobile project menu supports new chat, persisted display rename and cancel
   open();await tick();confirmResult=true;[...d.querySelectorAll('#project-actions button')].find(b=>b.textContent==='프로젝트 목록에서 제거').click();await tick();assert.deepEqual(calls.filter(c=>c.action==='projects.remove').at(-1).args,{key:project.key});
  });
 
+test('shared projects group conversations without changing their original workspace keys',async()=>{
+ const {w,calls,snapshot}=setup();await tick();const d=w.document;
+ const project={key:'b',projectId:'shared',name:'Shared',selected:true,available:true,workspaceKeys:['a','b'],bindings:[{key:'a',name:'A',uri:'content://a',hasLocalFolder:true},{key:'b',name:'B',uri:'content://b',hasLocalFolder:true}]};
+ w.mobileCodexEvent('state',{...snapshot,workspace:{selected:true,key:'a',name:'Shared'},projects:[project],sessions:[{id:'one',workspaceKey:'a',title:'From A'},{id:'two',workspaceKey:'b',title:'From B'}]});
+ assert.equal(d.querySelectorAll('.project-tree').length,1);assert.equal(d.querySelectorAll('.detached-projects').length,0);
+ assert.equal(d.querySelectorAll('#projects .session').length,2);
+ d.querySelectorAll('#projects .session')[0].click();await tick();assert.deepEqual(calls.filter(c=>c.action==='chat.resume').at(-1).args,{id:'one'});
+ d.querySelector('.project-new').click();await tick();assert.deepEqual(calls.filter(c=>c.action==='chat.new').at(-1).args,{workspaceKey:'b'});
+});
+test('project merge requires confirmation, handles failure, and suppresses duplicate writes',async()=>{
+ let confirmResult=false, resolveMerge, fail=true;
+ const {w,calls,snapshot}=setup({'projects.merge':()=>fail?Promise.reject(new Error('storage full')):new Promise(resolve=>{resolveMerge=resolve;})},{confirm:()=>confirmResult});
+ await tick();const d=w.document;
+ const projects=[{key:'a',projectId:'pa',name:'Same',available:true,bindings:[{key:'a',uri:'content://one'}]},{key:'b',projectId:'pb',name:'Same',available:true,bindings:[{key:'b',uri:'content://two'}]}];
+ w.mobileCodexEvent('state',{...snapshot,projects});d.querySelector('.project-more').click();await tick();
+ [...d.querySelectorAll('#project-actions button')].find(b=>b.textContent==='프로젝트 병합').click();await tick();
+ let choice=d.querySelector('#project-link-choices button');assert.match(choice.textContent,/content:\/\/two/);
+ choice.click();await tick();assert.equal(calls.some(c=>c.action==='projects.merge'),false);
+ confirmResult=true;choice.click();await tick();assert.equal(d.getElementById('project-link-dialog').open,true);assert.match(d.getElementById('toast').textContent,/storage full/);
+ assert.equal(d.querySelectorAll('.project-tree').length,2);
+ fail=false;choice.click();choice.click();await tick();assert.equal(calls.filter(c=>c.action==='projects.merge').length,2);
+ assert.deepEqual(calls.filter(c=>c.action==='projects.merge').at(-1).args,{sourceKey:'a',targetKey:'b'});
+ resolveMerge({projects:[{...projects[1],workspaceKeys:['a','b']}]});await tick();await tick();
+ assert.equal(d.getElementById('project-link-dialog').open,false);assert.equal(d.querySelectorAll('.project-tree').length,1);
+ assert.equal(d.activeElement.dataset.projectMenuKey,'b');
+});
+test('default local binding is persisted without switching an existing conversation',async()=>{
+ const {w,calls,snapshot}=setup({'projects.prefer':()=>({})});await tick();const d=w.document;
+ const project={key:'a',projectId:'p',name:'Shared',available:true,workspaceKeys:['a','b'],bindings:[{key:'a',name:'A',uri:'content://a'},{key:'b',name:'B',uri:'content://b'}]};
+ w.mobileCodexEvent('state',{...snapshot,projects:[project]});d.querySelector('.project-more').click();await tick();
+ [...d.querySelectorAll('#project-actions button')].find(b=>b.textContent==='기본 로컬 폴더').click();await tick();
+ d.querySelectorAll('#project-link-choices button')[1].click();await tick();
+ assert.deepEqual(calls.filter(c=>c.action==='projects.prefer').at(-1).args,{key:'b'});
+ assert.equal(calls.some(c=>c.action==='projects.select'||c.action==='chat.new'),false);
+});
+test('unbound projects keep history readable but block send including keyboard submit',async()=>{
+ const {w,calls,snapshot}=setup();await tick();const d=w.document;
+ w.mobileCodexEvent('state',{...snapshot,workspace:{key:'none',selected:true,available:false},projects:[{key:'none',projectId:'p',name:'Remote',hasLocalFolder:false,available:false}],sessions:[{id:'saved',workspaceKey:'none',title:'Saved'}]});
+ assert.match(d.getElementById('projects').textContent,/로컬 폴더 연결/);assert.equal(d.querySelector('#projects .sidebar-empty'),null);
+ assert.equal(d.querySelector('.project-new').disabled,true);assert.equal(d.querySelector('#projects .session').disabled,false);
+ d.getElementById('prompt').value='Run';d.getElementById('prompt').dispatchEvent(new w.Event('input'));
+ assert.equal(d.getElementById('send').disabled,true);
+ d.getElementById('composer').dispatchEvent(new w.Event('submit',{cancelable:true,bubbles:true}));await tick();
+ assert.equal(calls.some(c=>c.action==='chat.send'),false);
+ d.querySelector('#projects .new-thread').click();await tick();assert.deepEqual(calls.filter(c=>c.action==='files.pick').at(-1).args,{projectKey:'none'});
+});
+test('project creation without a folder persists only after entering a name',async()=>{
+ const {w,calls}=setup();await tick();const d=w.document;
+ d.getElementById('add-project').click();await tick();[...d.querySelectorAll('#project-link-choices button')].find(b=>b.textContent==='폴더 없이 프로젝트 만들기').click();await tick();
+ d.getElementById('input-value').value='Metadata only';d.getElementById('input-confirm').click();await tick();await tick();
+ assert.deepEqual(calls.filter(c=>c.action==='projects.create').at(-1).args,{name:'Metadata only'});
+ assert.equal(calls.some(c=>c.action==='files.pick'||c.action==='runtime.start'),false);
+});
+test('shared project choices escape project content and translate action labels',async()=>{
+ const {w,snapshot}=setup({}, {language:'en'});await tick();const d=w.document;
+ w.mobileCodexEvent('state',{...snapshot,projects:[{key:'a',projectId:'pa',name:'A'},{key:'b',projectId:'pb',name:'<img src=x onerror=bad()>',bindings:[{uri:'<script>bad()</script>'}]}]});
+ d.querySelector('.project-more').click();await tick();[...d.querySelectorAll('#project-actions button')].find(b=>b.textContent==='Merge projects').click();await tick();
+ assert.equal(d.querySelectorAll('#project-link-choices img, #project-link-choices script').length,0);
+ assert.match(d.getElementById('project-link-choices').textContent,/<script>/);
+});
+
+test('project import previews safely, cancels without applying, and uses the exact confirmation token',async()=>{
+ let cancelled=false, fail=false, applied=0;
+ const project={key:'new',projectId:'proj_new',name:'<img src=x>',nameConflicts:['Desktop','Phone'],available:false,hasLocalFolder:false};
+ const {w,calls}=setup({
+  'ui.projects.importFile':()=>cancelled?{cancelled:true}:{content:'portable-content'},
+  'projects.import.preview':()=>({token:'exact-preview',result:{addedEvents:2,summary:{projects:[project],linkCount:1}}}),
+  'projects.import.apply':()=>{applied++;if(fail)throw new Error('stale preview');return{projects:[project]};}
+ }); await tick();const d=w.document;
+ const pick=async()=>{d.getElementById('add-project').click();await tick();[...d.querySelectorAll('#project-link-choices button')].find(b=>b.textContent==='프로젝트 가져오기').click();await tick();await tick();};
+ cancelled=true;await pick();assert.equal(calls.some(c=>c.action==='projects.import.preview'),false);d.getElementById('project-link-dialog').close();
+ cancelled=false;await pick();assert.equal(applied,0);assert.match(d.getElementById('project-link-description').textContent,/이름 충돌/);assert.equal(d.querySelector('#project-link-dialog img'),null);
+ d.getElementById('project-link-dialog').close();assert.equal(applied,0);
+ await pick();fail=true;d.querySelector('#project-link-choices button').click();await tick();assert.equal(d.getElementById('project-link-dialog').open,true);assert.match(d.getElementById('toast').textContent,/stale preview/);
+ fail=false;d.querySelector('#project-link-choices button').click();await tick();
+ assert.deepEqual(calls.filter(c=>c.action==='projects.import.apply').at(-1).args,{content:'portable-content',token:'exact-preview'});
+ assert.equal(d.getElementById('project-link-dialog').open,false);assert.equal(d.querySelector('.project-new').disabled,true);
+});
+test('project export asks before opening a destination and conflict resolution can select current display name',async()=>{
+ let approved=false;
+ const bundle={format:'mobile-codex-projects',schemaVersion:1,events:[]};
+ const {w,calls,snapshot}=setup({'projects.export':()=>bundle},{confirm:()=>approved}); await tick();const d=w.document;
+ w.mobileCodexEvent('state',{...snapshot,projects:[{key:'a',projectId:'proj_a',name:'Desktop',nameConflicts:['Desktop','Phone'],available:true}]});
+ const exportIt=async()=>{d.querySelector('.project-more').click();await tick();[...d.querySelectorAll('#project-actions button')].find(b=>b.textContent==='프로젝트 내보내기').click();await tick();};
+ await exportIt();assert.equal(calls.some(c=>c.action==='ui.projects.exportFile'),false);
+ approved=true;await exportIt();assert.equal(calls.filter(c=>c.action==='ui.projects.exportFile').at(-1).args.content,JSON.stringify(bundle));
+ [...d.querySelectorAll('#projects button')].find(b=>b.textContent==='이름 충돌 해결').click();await tick();d.querySelector('#project-link-choices button').click();await tick();
+ assert.deepEqual(calls.filter(c=>c.action==='projects.rename').at(-1).args,{key:'a',name:'Desktop'});
+});
 test('phone control requires native consent and does not enable on service connection',async()=>{
  const {w,calls,snapshot}=setup({'ui.phoneEnable':()=>({cancelled:true})});await tick();
  w.mobileCodexEvent('state',{...snapshot,phone:{connected:true,enabled:false,status:'접근성 연결됨',screenshotsSupported:true},phoneToolsAvailable:false});

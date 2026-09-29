@@ -18,10 +18,14 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
+import androidx.core.content.FileProvider;
 import org.json.JSONObject;
+import org.json.JSONArray;
+import java.io.File;
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
+import java.util.Set;
 import static dev.mobilecodex.app.core.Json.*;
 
 public final class MainActivity extends Activity implements Engine.Ui {
@@ -64,6 +68,7 @@ public final class MainActivity extends Activity implements Engine.Ui {
     static final String HOST = "appassets.androidplatform.net";
     private static final int PICK_FOLDER = 31, EXPORT_RECOVERY = 32, IMPORT_SKILL = 33, EXPORT_IMAGE = 34, PICK_ATTACHMENTS = 35, EXPORT_ATTACHMENT = 36, INSTALL_UPDATE = 37, PICK_CHARACTERS = 38;
     private WebView web;
+    private ProWebTransport proTransport;
     private SafeWebViewLayout root;
     private boolean keyboardVisible;
     private String theme = "system";
@@ -73,9 +78,12 @@ public final class MainActivity extends Activity implements Engine.Ui {
     private static final int MICROPHONE_PERMISSION = 82;
     private boolean loaded, foreground;
     private AppUpdates updates;
+    private GitHubProjectSync projectSync;
     private AlertDialog approvalDialog;
     private String approvalId = "", exportId = "";
     private String pendingPickerId, pendingSkillId;
+    private static final int IMPORT_PROJECTS = 39, EXPORT_PROJECTS = 40;
+    private String pendingProjectRequest, pendingProjectExport;
     private String pendingImageId;
     private String reconnectProjectKey = "", pendingAttachmentRequest, attachmentDraftKey, exportAttachmentId;
     private final java.util.ArrayDeque<String> pendingUiEvents = new java.util.ArrayDeque<>();
@@ -90,7 +98,10 @@ public final class MainActivity extends Activity implements Engine.Ui {
         engine = ((MobileCodexApp) getApplication()).engine();
         characterPacks = new CharacterPacks(this);
         updates = ((MobileCodexApp) getApplication()).updates();
+        projectSync = new GitHubProjectSync(this);
         if (savedInstanceState != null) { exportId = savedInstanceState.getString("exportId", ""); pendingPickerId = savedInstanceState.getString("pickerId"); pendingSkillId = savedInstanceState.getString("skillId"); }
+        // Request IDs belong to the old WebView. A recreated page must start a new import preview.
+        if (savedInstanceState != null) { pendingProjectExport = savedInstanceState.getString("projectExport"); }
         if (savedInstanceState != null) pendingImageId = savedInstanceState.getString("imageId");
         if (savedInstanceState != null) {
             reconnectProjectKey = savedInstanceState.getString("reconnectProjectKey", "");
@@ -161,6 +172,7 @@ public final class MainActivity extends Activity implements Engine.Ui {
             }
         });
         root.addView(web, new FrameLayout.LayoutParams(-1, -1));
+        proTransport = new ProWebTransport(this, root);
         setContentView(root);
         applyTheme("system");
         if (Build.VERSION.SDK_INT >= 33) getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
@@ -190,12 +202,14 @@ public final class MainActivity extends Activity implements Engine.Ui {
         out.putString("attachmentDraftKey", attachmentDraftKey);
         out.putString("exportAttachmentId", exportAttachmentId);
         out.putString("imageId", pendingImageId);
+        out.putString("projectExport", pendingProjectExport);
         out.putString("skillId", pendingSkillId); out.putString("exportId", exportId); out.putString("pickerId", pendingPickerId); super.onSaveInstanceState(out);
     }
     @Override protected void onDestroy() {
         if (dictation != null) dictation.cancel();
         engine.detach(this);
         if (approvalDialog != null) approvalDialog.dismiss();
+        if (proTransport != null) proTransport.destroy();
         web.removeJavascriptInterface("Native"); web.destroy(); super.onDestroy();
     }
     @Override public void onBackPressed() { handleBack(); }
@@ -286,10 +300,193 @@ public final class MainActivity extends Activity implements Engine.Ui {
         try { startActivityForResult(pick, PICK_CHARACTERS); }
         catch (Exception e) { pendingPickerId = null; respond(id, null, e); }
     }
+    private void chooseProjectTransfer(String id, String content) {
+        if (pendingProjectRequest != null || projectTransferPrompt) {
+            respond(id, null, new IllegalStateException(t("파일 선택이 진행 중입니다."))); return;
+        }
+        JSONObject sync = projectSync.status();
+        boolean connected = sync.optBoolean("connected");
+        String repository = sync.optString("repository", "");
+        String fileLabel = content == null ? t("파일에서 가져오기") : t("파일에 저장");
+        String syncLabel = content == null ? (connected ? t("GitHub에서 가져오기") : t("GitHub 연결 후 가져오기"))
+            : (connected ? t("GitHub에 동기화") : t("GitHub 연결 후 동기화"));
+        java.util.ArrayList<String> choices = new java.util.ArrayList<>();
+        choices.add(fileLabel);
+        choices.add(syncLabel + (connected ? "\n" + repository : ""));
+        if (connected) {
+            choices.add(t("GitHub 연결 변경"));
+            choices.add(t("GitHub 연결 해제"));
+        }
+        projectTransferPrompt = true;
+        new AlertDialog.Builder(this)
+            .setTitle(content == null ? t("프로젝트 가져오기") : t("프로젝트 내보내기"))
+            .setItems(choices.toArray(new String[0]), (dialog, which) -> {
+                projectTransferPrompt = false;
+                if (which == 0) { chooseProjectFile(id, content); return; }
+                if (which == 1) {
+                    if (connected) runProjectSync(id, content);
+                    else promptGitHubConnection(id, content);
+                    return;
+                }
+                if (which == 2) { promptGitHubConnection(id, content); return; }
+                engine.io.execute(() -> {
+                    try {
+                        projectSync.disconnect();
+                        event("notice", obj("message", t("GitHub 연결이 해제되었습니다.")));
+                        respond(id, obj("cancelled", true), null);
+                    } catch (Exception error) { respond(id, null, error); }
+                });
+            })
+            .setNegativeButton(t("취소"), (dialog, which) -> {
+                projectTransferPrompt = false;
+                respond(id, obj("cancelled", true), null);
+            })
+            .setOnCancelListener(dialog -> {
+                projectTransferPrompt = false;
+                respond(id, obj("cancelled", true), null);
+            }).show();
+    }
+
+    private boolean projectTransferPrompt;
+
+    private void promptGitHubConnection(String id, String content) {
+        if (projectTransferPrompt) {
+            respond(id, null, new IllegalStateException(t("GitHub 연결 설정이 진행 중입니다."))); return;
+        }
+        projectTransferPrompt = true;
+        android.widget.EditText repository = new android.widget.EditText(this);
+        repository.setSingleLine(true);
+        repository.setHint("OWNER/REPO");
+        repository.setText(projectSync.status().optString("repository", ""));
+        repository.setSelectAllOnFocus(true);
+        new AlertDialog.Builder(this)
+            .setTitle(t("GitHub 동기화"))
+            .setMessage(t("쓰기 가능한 비공개 GitHub 저장소를 OWNER/REPO 형식으로 입력하세요. 이 저장소에는 프로젝트 ID·이름·병합 이력만 projects.json으로 저장합니다."))
+            .setView(repository)
+            .setPositiveButton(t("계속"), (dialog, which) -> {
+                String value = repository.getText().toString().trim();
+                projectTransferPrompt = false;
+                promptGitHubToken(id, content, value);
+            })
+            .setNegativeButton(t("취소"), (dialog, which) -> {
+                projectTransferPrompt = false;
+                respond(id, obj("cancelled", true), null);
+            })
+            .setOnCancelListener(dialog -> {
+                projectTransferPrompt = false;
+                respond(id, obj("cancelled", true), null);
+            }).show();
+    }
+
+    private void promptGitHubToken(String id, String content, String repository) {
+        if (projectTransferPrompt) {
+            respond(id, null, new IllegalStateException(t("GitHub 연결 설정이 진행 중입니다."))); return;
+        }
+        projectTransferPrompt = true;
+        android.widget.EditText token = new android.widget.EditText(this);
+        token.setSingleLine(true);
+        token.setHint("github_pat_…");
+        token.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        new AlertDialog.Builder(this)
+            .setTitle(t("GitHub 토큰"))
+            .setMessage(t("이 비공개 저장소의 Contents 읽기/쓰기가 가능한 토큰을 입력하세요. 토큰은 Android Keystore로 암호화해 이 기기에만 저장합니다."))
+            .setView(token)
+            .setPositiveButton(t("연결"), (dialog, which) -> {
+                String secret = token.getText().toString();
+                token.setText("");
+                projectTransferPrompt = false;
+                engine.io.execute(() -> {
+                    try {
+                        projectSync.connect(repository, secret);
+                        performProjectSync(id, content);
+                    } catch (Exception error) { respond(id, null, error); }
+                });
+            })
+            .setNegativeButton(t("취소"), (dialog, which) -> {
+                projectTransferPrompt = false;
+                token.setText("");
+                respond(id, obj("cancelled", true), null);
+            })
+            .setOnCancelListener(dialog -> {
+                projectTransferPrompt = false;
+                token.setText("");
+                respond(id, obj("cancelled", true), null);
+            }).show();
+    }
+
+    private void runProjectSync(String id, String content) {
+        engine.io.execute(() -> {
+            try { performProjectSync(id, content); }
+            catch (Exception error) { respond(id, null, error); }
+        });
+    }
+
+    private void performProjectSync(String id, String content) throws Exception {
+        JSONObject sync = projectSync.status();
+        if (content == null) {
+            String raw = projectSync.pull();
+            respond(id, obj("content", raw, "source", "github", "repository", sync.optString("repository")), null);
+        } else {
+            JSONObject result = projectSync.push(content);
+            result.put("saved", true);
+            result.put("synced", true);
+            respond(id, result, null);
+            event("notice", obj("message", result.optBoolean("changed")
+                ? t("프로젝트 정보를 GitHub에 동기화했습니다.")
+                : t("GitHub의 프로젝트 정보가 이미 최신입니다.")));
+        }
+    }
+
+    private void chooseProjectFile(String id, String content) {
+        if (pendingProjectRequest != null) { respond(id, null, new IllegalStateException(t("파일 선택이 진행 중입니다."))); return; }
+        pendingProjectRequest = id;
+        try {
+            if (content != null) {
+                java.io.File cache = java.io.File.createTempFile("project-export-", ".json", getCacheDir());
+                pendingProjectExport = cache.getName();
+                try (var out = new java.io.FileOutputStream(cache)) { ProjectTransferFiles.write(out, content); }
+            }
+            Intent pick = new Intent(content == null ? Intent.ACTION_OPEN_DOCUMENT : Intent.ACTION_CREATE_DOCUMENT)
+                .addCategory(Intent.CATEGORY_OPENABLE).setType("application/json");
+            if (content != null) pick.putExtra(Intent.EXTRA_TITLE, "mobile-codex-project.json");
+            startActivityForResult(pick, content == null ? IMPORT_PROJECTS : EXPORT_PROJECTS);
+        } catch (Exception e) {
+            if (pendingProjectExport != null) new java.io.File(getCacheDir(), pendingProjectExport).delete();
+            pendingProjectRequest = null; pendingProjectExport = null; respond(id, null, e);
+        }
+    }
     @SuppressLint("WrongConstant") // URI grant flags are explicitly masked to the two accepted constants.
     @Override protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);
-        if (request == INSTALL_UPDATE) { updates.installEnded(); event("updates.changed", updates.snapshot()); }
+        if (request == IMPORT_PROJECTS || request == EXPORT_PROJECTS) {
+            String id = pendingProjectRequest, cacheName = pendingProjectExport;
+            pendingProjectRequest = null; pendingProjectExport = null;
+            Uri uri = result == RESULT_OK && data != null ? data.getData() : null;
+            engine.io.execute(() -> {
+                java.io.File cache = cacheName == null ? null : new java.io.File(getCacheDir(), cacheName);
+                try {
+                    if (uri == null) { if (id != null) respond(id, obj("cancelled", true), null); return; }
+                    if (!"content".equals(uri.getScheme())) throw new IllegalArgumentException("Invalid document URI");
+                    if (request == IMPORT_PROJECTS) {
+                        try (var in = getContentResolver().openInputStream(uri)) {
+                            String content = ProjectTransferFiles.read(in);
+                            // A recreated WebView has no pending confirmation; never import silently.
+                            if (id != null) respond(id, obj("content", content), null);
+                            else event("notice", obj("message", t("화면이 다시 열렸습니다. 프로젝트 파일을 다시 선택해 주세요.")));
+                        }
+                    } else {
+                        if (cache == null) throw new java.io.IOException(t("다시 내보내 주세요."));
+                        String content;
+                        try (var in = new java.io.FileInputStream(cache)) { content = ProjectTransferFiles.read(in); }
+                        try (var out = getContentResolver().openOutputStream(uri, "wt")) { ProjectTransferFiles.write(out, content); }
+                        if (id != null) respond(id, obj("saved", true), null);
+                        event("notice", obj("message", t("프로젝트 정보를 저장했습니다.")));
+                    }
+                } catch (Exception e) { if (id != null) respond(id, null, e); event("error", obj("message", e.getMessage())); }
+                finally { if (cache != null) cache.delete(); }
+            });
+        }
+        else if (request == INSTALL_UPDATE) { updates.installEnded(); event("updates.changed", updates.snapshot()); }
         else if (request == PICK_ATTACHMENTS) {
             String id = pendingAttachmentRequest, scope = attachmentDraftKey;
             pendingAttachmentRequest = null; attachmentDraftKey = null;
@@ -365,7 +562,7 @@ public final class MainActivity extends Activity implements Engine.Ui {
                 getContentResolver().takePersistableUriPermission(uri, flags);
                 engine.io.execute(() -> {
                     try {
-                        JSONObject workspace = engine.documents.select(uri, projectKey); engine.workspaceChanged(); respond(id, workspace, null);
+                        JSONObject workspace = engine.selectProjectFolder(uri, projectKey); respond(id, workspace, null);
                     }
                     catch (Exception e) { respond(id, null, e); }
                 });
@@ -397,6 +594,60 @@ public final class MainActivity extends Activity implements Engine.Ui {
             }));
         } catch (Exception error) { respond(requestId, null, error); }
     }
+    private void sendPro(String requestId, JSONObject args) {
+        engine.handle("chat.pro.prepare", args, (prepared, prepareError) -> {
+            if (prepareError != null) { respond(requestId, null, prepareError); return; }
+            runOnUiThread(() -> {
+                try {
+                    Uri[] uploads = proUploadUris(prepared.optJSONArray("uploads"));
+                    proTransport.send(prepared, uploads, (result, transportError) ->
+                        finishPro(requestId, prepared, result, transportError));
+                } catch (Exception error) {
+                    finishPro(requestId, prepared, null, error);
+                }
+            });
+        });
+    }
+    private Uri[] proUploadUris(JSONArray values) throws Exception {
+        if (values == null || values.length() == 0) return new Uri[0];
+        File root = new File(getFilesDir(), "attachments").getCanonicalFile();
+        Uri[] result = new Uri[values.length()];
+        for (int i = 0; i < values.length(); i++) {
+            JSONObject value = values.getJSONObject(i);
+            File file = new File(value.getString("path")).getCanonicalFile();
+            if (!file.isFile() || !file.getPath().startsWith(root.getPath() + File.separator))
+                throw new java.io.IOException(t("GPT-6-Pro 첨부 파일 경로가 올바르지 않습니다."));
+            result[i] = FileProvider.getUriForFile(this, getPackageName() + ".proattachments", file);
+        }
+        return result;
+    }
+    private void finishPro(String requestId, JSONObject prepared, JSONObject result, Throwable transportError) {
+        String operationId = prepared.optString("operationId"), localThread = prepared.optString("threadId");
+        if (result != null && "completed".equals(result.optString("status")) && transportError == null) {
+            JSONObject complete = obj("threadId", localThread, "operationId", operationId,
+                "reply", result.optString("reply"), "remoteMessageId", result.optString("remoteMessageId"),
+                "chatConversationId", result.optString("chatConversationId"), "chatConversationPath", result.optString("chatConversationPath"),
+                "chatProjectPath", result.optString("chatProjectPath"));
+            engine.handle("chat.pro.complete", complete, (saved, saveError) -> {
+                if (saveError == null) proTransport.acknowledge(operationId);
+                respond(requestId, saved, saveError);
+            });
+            return;
+        }
+        String webStatus = result == null ? "failed" : result.optString("status", "failed");
+        String localStatus = "uncertain".equals(webStatus) || (result != null && result.optBoolean("clicked")) ? "uncertain"
+            : Set.of("login_required", "unavailable", "web_changed", "not_sent").contains(webStatus) ? "not_sent" : "failed";
+        String reason = transportError == null ? (result == null ? t("GPT-6-Pro 웹 전송에 실패했습니다.") : result.optString("reason", t("GPT-6-Pro 웹 전송에 실패했습니다.")))
+            : (transportError.getMessage() == null ? t("GPT-6-Pro 웹 전송에 실패했습니다.") : transportError.getMessage());
+        JSONObject failed = obj("threadId", localThread, "operationId", operationId, "status", localStatus, "reason", reason,
+            "chatConversationId", result == null ? "" : result.optString("chatConversationId"),
+            "chatConversationPath", result == null ? "" : result.optString("chatConversationPath"));
+        if (result != null) try { failed.put("chatProjectPath", result.optString("chatProjectPath")); } catch (Exception ignored) {}
+        engine.handle("chat.pro.fail", failed, (saved, saveError) -> {
+            if (saveError != null) respond(requestId, null, saveError);
+            else { proTransport.acknowledge(operationId); respond(requestId, null, new IllegalStateException(reason)); }
+        });
+    }
     private final class Bridge {
         @JavascriptInterface public String locale() { return AppLanguage.snapshot(MainActivity.this).toString(); }
         @JavascriptInterface public void postMessage(String raw) {
@@ -408,6 +659,11 @@ public final class MainActivity extends Activity implements Engine.Ui {
                 requestId = id;
                 JSONObject args = message.optJSONObject("args"); if (args == null) args = new JSONObject();
                 JSONObject parameters = args;
+                if (action.equals("chat.pro.send")) { sendPro(id, args); return; }
+                if (action.equals("chat.pro.cancel")) {
+                    runOnUiThread(() -> proTransport.cancel((result, error) -> respond(id, result, error))); return;
+                }
+                if (action.equals("chat.pro.diagnostic")) { runOnUiThread(() -> respond(id, proTransport.diagnostic(), null)); return; }
                 if (action.equals("attachments.recover")) {
                     String saved = getSharedPreferences("attachment-result", 0).getString("pending", "");
                     respond(id, saved.isEmpty() ? obj("attachments", new org.json.JSONArray()) : new JSONObject(saved), null); return;
@@ -571,6 +827,12 @@ public final class MainActivity extends Activity implements Engine.Ui {
                     }); return;
                 }
                 if (action.equals("files.pick")) { String key = args.optString("projectKey", ""); runOnUiThread(() -> chooseFolder(id, key)); return; }
+                if (action.equals("ui.projects.importFile")) { runOnUiThread(() -> chooseProjectTransfer(id, null)); return; }
+                if (action.equals("ui.projects.exportFile")) {
+                    String content = args.getString("content");
+                    dev.mobilecodex.app.core.sync.PortableProjects.parse(content, true);
+                    runOnUiThread(() -> chooseProjectTransfer(id, content)); return;
+                }
                 if (action.equals("ui.loginBrowser")) {
                     Uri uri = Uri.parse(args.getString("url"));
                     if (!"https".equals(uri.getScheme()) || !("auth.openai.com".equals(uri.getHost()) || "chatgpt.com".equals(uri.getHost())))

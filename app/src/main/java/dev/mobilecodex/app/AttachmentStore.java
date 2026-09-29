@@ -90,6 +90,10 @@ final class AttachmentStore {
         return metadata;
     }
     InputStream open(String id) throws Exception { return new FileInputStream(get(id).getString("path")); }
+    boolean owns(File file) throws IOException {
+        File canonical = file.getCanonicalFile(), root = directory.getCanonicalFile();
+        return canonical.isFile() && canonical.getPath().startsWith(root.getPath() + File.separator);
+    }
     JSONArray inputs(JSONArray ids) throws Exception {
         JSONArray input = new JSONArray();
         if (ids == null) return input;

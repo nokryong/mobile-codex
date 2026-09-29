@@ -70,6 +70,12 @@ jobs:
       - name: Build and check Android app
         if: ${{ !inputs.apk_only }}
         run: ./gradlew --no-daemon assembleDebug testDebugUnitTest lintDebug assembleDebugAndroidTest
+      - name: Verify Android and desktop project transfer interoperability
+        if: ${{ !inputs.apk_only }}
+        run: |
+          JSON_JAR="$(find "${GRADLE_USER_HOME:-$HOME/.gradle}/caches/modules-2/files-2.1/org.json/json" -name 'json-*.jar' -type f -print -quit)"
+          test -n "$JSON_JAR"
+          JAVA_HOME="$JAVA_HOME" JSON_JAR="$JSON_JAR" npm run test:project-transfer
       - name: Build test APK
         if: ${{ inputs.apk_only }}
         run: ./gradlew --no-daemon assembleDebug
@@ -84,6 +90,11 @@ jobs:
       - name: Collect corresponding tool sources
         if: github.event_name != 'pull_request'
         run: python3 tools/prepare_devtools_sources.py
+      - name: Mirror canonical release assets
+        if: github.repository == 'SeeUSoon93/mobile-codex' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && !inputs.apk_only
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 tools/sync_release_assets.py --build-tools "$ANDROID_HOME/build-tools/35.0.0"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: github.event_name != 'pull_request'
         with:
@@ -115,4 +126,5 @@ jobs:
             app/build/reports/tests/
             app/build/reports/lint-results-debug.*
             artifacts/ui-preview/
+            artifacts/project-identity-preview/
           retention-days: 14
