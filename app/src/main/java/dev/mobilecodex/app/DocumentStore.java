@@ -41,11 +41,24 @@ public final class DocumentStore {
         projects = ProjectRegistry.fromJson(registry);
         // Migrate the old single-folder preference into the multi-project registry once.
         String saved = context.getSharedPreferences("workspace", 0).getString("uri", "");
+        boolean legacyDeferred = false;
         if (registry.isBlank() && !saved.isEmpty()) {
             try {
                 Uri uri = Uri.parse(saved); Node node = query(documentUri(uri));
-                projects.put(uri.toString(), node.name, WorkspacePath.hash(uri.toString())); saveProjects();
-            } catch (Exception ignored) { }
+                ProjectRegistry staged = ProjectRegistry.fromJson(projects.toJson());
+                staged.put(uri.toString(), node.name, WorkspacePath.hash(uri.toString())); projects = staged;
+            } catch (Exception ignored) { legacyDeferred = true; }
+        }
+        if (!legacyDeferred && (registry.isBlank() || !dev.mobilecodex.app.core.Json.parse(registry).has("identities"))) {
+            android.content.SharedPreferences.Editor migration = context.getSharedPreferences("projects", 0).edit();
+            if (!registry.isBlank()) migration.putString("registry-before-identities-v1", registry);
+            if (!migration.putString("registry", projects.toJson()).commit())
+                throw new IllegalStateException(t("프로젝트 목록 변경을 저장하지 못했습니다."));
+        }
+        if (!legacyDeferred && !registry.isBlank() && dev.mobilecodex.app.core.Json.parse(registry).has("identities")
+            && !dev.mobilecodex.app.core.Json.parse(registry).optJSONObject("identities").has("history")) {
+            if (!context.getSharedPreferences("projects", 0).edit().putString("registry-before-portable-v1", registry)
+                .putString("registry", projects.toJson()).commit()) throw new IllegalStateException(t("프로젝트 목록 변경을 저장하지 못했습니다."));
         }
         try { activate(projects.selected()); } catch (Exception ignored) { tree = null; }
     }
@@ -59,34 +72,73 @@ public final class DocumentStore {
         String stableKey = projectKey == null || projectKey.isBlank() ? WorkspacePath.hash(uri.toString()) : projectKey;
         ProjectRegistry.Project existing = projects.get(stableKey);
         String displayName = existing == null ? selected.name : existing.name;
-        projects.put(uri.toString(), displayName, stableKey);
+        ProjectRegistry staged = ProjectRegistry.fromJson(projects.toJson());
+        staged.put(uri.toString(), displayName, stableKey);
+        commitProjects(staged);
         tree = uri;
         label = displayName;
         detachedKey = ""; detachedName = "";
         context.getSharedPreferences("workspace", 0).edit().putString("uri", uri.toString()).apply();
-        saveProjects();
         return workspace();
     }
     /** Switches among stored projects without asking Android's picker again. Empty selects general chat. */
     public synchronized JSONObject selectProject(String key) throws Exception {
         if (projects.removed(key)) { detachedKey = key; detachedName = t("연결 해제된 프로젝트"); tree = null; label = detachedName; return workspace(); }
+        ProjectRegistry staged = ProjectRegistry.fromJson(projects.toJson());
+        staged.select(key);
+        commitProjects(staged);
         detachedKey = ""; detachedName = "";
-        projects.select(key);
         ProjectRegistry.Project project = projects.selected();
         tree = null; label = project == null ? "" : project.name;
         try { activate(project); } catch (Exception ignored) { tree = null; }
-        saveProjects();
         return workspace();
     }
     public synchronized JSONArray projects() { return projects.entries(this::available); }
+    public synchronized String projectId(String key) { return projects.projectId(key); }
+    public synchronized JSONObject exportProject(String key) { return projects.exportProject(key); }
+    public synchronized JSONObject previewProjects(String raw) {
+        ProjectRegistry staged = ProjectRegistry.fromJson(projects.toJson());
+        JSONObject result = staged.importProjects(raw);
+        return obj("result", result, "projects", staged.entries(this::available), "token", WorkspacePath.hash(projects.toJson() + "\n" + raw));
+    }
+    public synchronized JSONObject importProjects(String raw, String token) throws IOException {
+        if (!WorkspacePath.hash(projects.toJson() + "\n" + raw).equals(token)) throw new IllegalArgumentException(t("프로젝트 목록이 변경되었습니다. 다시 가져와 주세요."));
+        ProjectRegistry staged = ProjectRegistry.fromJson(projects.toJson()); staged.importProjects(raw);
+        commitProjects(staged);
+        if (!projects.selectedKey().isBlank()) label = projects.displayName(projects.selectedKey());
+        return obj("projects", projects(), "workspace", workspace());
+    }
+    public synchronized JSONObject createProject(String name) throws IOException {
+        ProjectRegistry staged = ProjectRegistry.fromJson(projects.toJson());
+        staged.createUnbound(name);
+        commitProjects(staged);
+        tree = null; detachedKey = ""; detachedName = ""; label = projects.displayName(projects.selectedKey());
+        return workspace();
+    }
+    public synchronized JSONObject mergeProjects(String sourceKey, String targetKey) throws IOException {
+        ProjectRegistry staged = ProjectRegistry.fromJson(projects.toJson());
+        String projectId = staged.merge(sourceKey, targetKey);
+        commitProjects(staged);
+        if (!projects.selectedKey().isBlank()) label = projects.displayName(projects.selectedKey());
+        return obj("projectId", projectId, "projects", projects());
+    }
+    public synchronized JSONObject preferProject(String key) throws IOException {
+        ProjectRegistry staged = ProjectRegistry.fromJson(projects.toJson());
+        staged.prefer(key);
+        commitProjects(staged);
+        return obj("projects", projects());
+    }
+    private void commitProjects(ProjectRegistry staged) throws IOException {
+        if (!context.getSharedPreferences("projects", 0).edit().putString("registry", staged.toJson()).commit())
+            throw new IOException(t("프로젝트 목록 변경을 저장하지 못했습니다."));
+        projects = staged;
+    }
     /** Removes only the registry entry. The underlying SAF folder and its files are untouched. */
     public synchronized JSONObject removeProject(String key) throws IOException {
         ProjectRegistry staged = ProjectRegistry.fromJson(projects.toJson());
         boolean current = key != null && (key.equals(projects.selectedKey()) || key.equals(detachedKey));
         ProjectRegistry.Project removed = staged.remove(key);
-        if (!context.getSharedPreferences("projects", 0).edit().putString("registry", staged.toJson()).commit())
-            throw new IOException(t("프로젝트 목록 변경을 저장하지 못했습니다."));
-        projects = staged;
+        commitProjects(staged);
         if (current) { tree = null; label = ""; detachedKey = ""; detachedName = ""; }
         return obj("key", removed.key, "name", removed.name);
     }
@@ -94,20 +146,19 @@ public final class DocumentStore {
     public synchronized JSONObject renameProject(String key, String name) throws IOException {
         ProjectRegistry staged = ProjectRegistry.fromJson(projects.toJson());
         ProjectRegistry.Project renamed = staged.rename(key, name);
-        if (!context.getSharedPreferences("projects", 0).edit().putString("registry", staged.toJson()).commit())
-            throw new IOException(t("프로젝트 목록 변경을 저장하지 못했습니다."));
-        projects = staged;
-        if (key != null && key.equals(projects.selectedKey())) label = renamed.name;
+        commitProjects(staged);
+        if (!projects.selectedKey().isBlank()) label = projects.displayName(projects.selectedKey());
         return obj("key", renamed.key, "name", renamed.name);
     }
     public synchronized String restoreProjectKey(String sessionId, String oldKey, String oldName) {
         String before = projects.toJson();
-        String key = projects.restoreLegacyKey(sessionId, oldKey, oldName);
-        if (!before.equals(projects.toJson())) saveProjects();
+        ProjectRegistry staged = ProjectRegistry.fromJson(before);
+        String key = staged.restoreLegacyKey(sessionId, oldKey, oldName);
+        if (!before.equals(staged.toJson())) {
+            try { commitProjects(staged); }
+            catch (IOException error) { throw new IllegalStateException(error.getMessage(), error); }
+        }
         return key;
-    }
-    private void saveProjects() {
-        context.getSharedPreferences("projects", 0).edit().putString("registry", projects.toJson()).apply();
     }
     private Uri documentUri(Uri value) {
         return DocumentsContract.buildDocumentUriUsingTree(value, DocumentsContract.getTreeDocumentId(value));
@@ -131,8 +182,9 @@ public final class DocumentStore {
     public synchronized JSONObject workspace() {
         ProjectRegistry.Project project = projects.selected();
         if (!detachedKey.isBlank()) return obj("selected", true, "name", detachedName, "key", detachedKey, "available", false, "detached", true);
-        return obj("selected", project != null, "name", project == null ? "" : project.name,
-            "key", project == null ? "" : project.key, "available", project == null || (tree != null && available(project)));
+        return obj("selected", project != null, "name", project == null ? "" : projects.displayName(project.key),
+            "key", project == null ? "" : project.key, "projectId", project == null ? "" : projects.projectId(project.key),
+            "hasLocalFolder", project != null && !project.uri.isBlank(), "available", project == null || (tree != null && available(project)));
     }
     public synchronized String key() { return detachedKey.isBlank() ? projects.selectedKey() : detachedKey; }
     public synchronized void requireWorkspaceAvailable() throws IOException {

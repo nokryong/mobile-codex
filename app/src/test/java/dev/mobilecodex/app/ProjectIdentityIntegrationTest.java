@@ -1,0 +1,147 @@
+package dev.mobilecodex.app;
+
+import android.app.Application;
+import android.content.Context;
+import android.content.ContextWrapper;
+import android.content.SharedPreferences;
+import dev.mobilecodex.app.core.ProjectRegistry;
+import dev.mobilecodex.app.core.Utf8Files;
+import org.json.JSONObject;
+import org.json.JSONArray;
+import org.junit.*;
+import org.junit.runner.RunWith;
+import org.robolectric.RobolectricTestRunner;
+import org.robolectric.RuntimeEnvironment;
+import org.robolectric.annotation.Config;
+import java.io.File;
+import java.nio.file.Files;
+import java.lang.reflect.Proxy;
+import java.util.concurrent.*;
+import static dev.mobilecodex.app.core.Json.*;
+import static org.junit.Assert.*;
+
+@RunWith(RobolectricTestRunner.class)
+@Config(sdk = 29, application = Application.class)
+public class ProjectIdentityIntegrationTest {
+    private Context context;
+    private Engine engine;
+    @Before public void setup() throws Exception {
+        context = RuntimeEnvironment.getApplication();
+        context.getSharedPreferences("projects", 0).edit().clear().commit();
+        context.getSharedPreferences("workspace", 0).edit().clear().commit();
+        Files.deleteIfExists(new File(context.getFilesDir(), "sessions.json").toPath());
+    }
+    @After public void cleanup() { if (engine != null) engine.io.shutdownNow(); }
+    private JSONObject call(String action, JSONObject args) throws Exception {
+        CompletableFuture<JSONObject> result = new CompletableFuture<>();
+        engine.handle(action, args, (value, error) -> { if (error == null) result.complete(value); else result.completeExceptionally(error); });
+        return result.get(10, TimeUnit.SECONDS);
+    }
+    private String seed() {
+        String legacy = obj("selectedKey", "a", "projects", array(
+            obj("key", "a", "name", "A", "uri", "content://provider/tree/a"),
+            obj("key", "b", "name", "B", "uri", "content://provider/tree/b")), "removed", array()).toString();
+        context.getSharedPreferences("projects", 0).edit().putString("registry", legacy).commit(); return legacy;
+    }
+    @Test public void migrationBacksUpOriginalAndMergeKeepsSessionsAndFolderBytes() throws Exception {
+        String legacy = seed();
+        File source = new File(context.getFilesDir(), "project-file.txt"); Utf8Files.write(source.toPath(), "unchanged source");
+        String sessions = array(obj("id", "thread-a", "title", "A chat", "workspaceKey", "a", "messages", array()),
+            obj("id", "thread-b", "title", "B chat", "workspaceKey", "b", "messages", array())).toString();
+        Utf8Files.write(new File(context.getFilesDir(), "sessions.json").toPath(), sessions);
+        engine = new Engine(context);
+        engine.setTestTransport((method, params) -> { throw new AssertionError("Unexpected Codex RPC: " + method); });
+        assertEquals(legacy, context.getSharedPreferences("projects", 0).getString("registry-before-identities-v1", ""));
+        call("chat.resume", obj("id", "thread-a"));
+        call("projects.merge", obj("sourceKey", "a", "targetKey", "b"));
+        JSONObject snapshot = call("state", obj());
+        assertEquals("thread-a", snapshot.getString("threadId"));
+        assertEquals("a", snapshot.getJSONObject("workspace").getString("key"));
+        assertEquals("B", snapshot.getJSONObject("workspace").getString("name"));
+        assertEquals(1, snapshot.getJSONArray("projects").length());
+        assertEquals(sessions, Utf8Files.read(new File(context.getFilesDir(), "sessions.json").toPath()));
+        assertEquals("unchanged source", Utf8Files.read(source.toPath()));
+        String projectId = snapshot.getJSONObject("workspace").getString("projectId");
+        engine.io.shutdownNow(); engine = new Engine(context);
+        snapshot = call("chat.resume", obj("id", "thread-b"));
+        assertEquals("b", snapshot.getJSONObject("workspace").getString("key"));
+        assertEquals(projectId, snapshot.getJSONObject("workspace").getString("projectId"));
+        assertEquals(2, snapshot.getJSONArray("sessions").length());
+        assertEquals(legacy, context.getSharedPreferences("projects", 0).getString("registry-before-identities-v1", ""));
+    }
+    @Test public void unboundProjectIsPersistentAndCannotStartCodex() throws Exception {
+        engine = new Engine(context);
+        engine.setTestTransport((method, params) -> { throw new AssertionError("Unbound project must not call Codex"); });
+        JSONObject created = call("projects.create", obj("name", "Only metadata"));
+        assertFalse(created.getBoolean("available")); assertFalse(created.getBoolean("hasLocalFolder"));
+        ExecutionException error = assertThrows(ExecutionException.class, () -> call("chat.send", obj("text", "run", "workspaceKey", created.getString("key"))));
+        assertTrue(error.getCause().getMessage().contains("폴더"));
+        engine.io.shutdownNow(); engine = new Engine(context);
+        assertEquals(created.getString("projectId"), call("state", obj()).getJSONObject("workspace").getString("projectId"));
+    }
+    @Test public void failedCommitDoesNotPublishAnInMemoryMergeOrDefaultChange() throws Exception {
+        seed(); new DocumentStore(context); // Complete the migration before injecting failure.
+        SharedPreferences real = context.getSharedPreferences("projects", 0);
+        String before = real.getString("registry", "");
+        SharedPreferences failing = (SharedPreferences) Proxy.newProxyInstance(getClass().getClassLoader(), new Class[]{SharedPreferences.class}, (proxy, method, args) -> {
+            if (!method.getName().equals("edit")) return method.invoke(real, args);
+            SharedPreferences.Editor editor = real.edit();
+            return Proxy.newProxyInstance(getClass().getClassLoader(), new Class[]{SharedPreferences.Editor.class}, (p, m, a) -> {
+                if (m.getName().equals("commit")) return false;
+                if (m.getReturnType() == SharedPreferences.Editor.class) return p;
+                return m.invoke(editor, a);
+            });
+        });
+        Context wrapper = new ContextWrapper(context) {
+            @Override public SharedPreferences getSharedPreferences(String name, int mode) { return name.equals("projects") ? failing : super.getSharedPreferences(name, mode); }
+        };
+        DocumentStore store = new DocumentStore(wrapper);
+        assertThrows(java.io.IOException.class, () -> store.mergeProjects("a", "b"));
+        assertThrows(java.io.IOException.class, () -> store.preferProject("b"));
+        assertThrows(java.io.IOException.class, () -> store.createProject("Uncommitted"));
+        assertThrows(java.io.IOException.class, () -> store.selectProject("b"));
+        assertThrows(IllegalStateException.class, () -> store.restoreProjectKey("old-thread", "unknown", "Old"));
+        assertEquals(2, store.projects().length());
+        assertEquals("a", store.workspace().getString("key"));
+        assertNotEquals(store.projectId("a"), store.projectId("b"));
+        assertEquals(before, real.getString("registry", ""));
+    }
+    @Test public void backgroundTurnBlocksIdentityMutationsWithoutChangingRegistry() throws Exception {
+        seed(); engine = new Engine(context);
+        String before = context.getSharedPreferences("projects", 0).getString("registry", "");
+        java.lang.reflect.Field field = Engine.class.getDeclaredField("runningTurns"); field.setAccessible(true);
+        @SuppressWarnings("unchecked") java.util.Map<String, String> turns = (java.util.Map<String, String>) field.get(engine);
+        turns.put("background-thread", "turn-running");
+        assertThrows(ExecutionException.class, () -> call("projects.merge", obj("sourceKey", "a", "targetKey", "b")));
+        assertThrows(ExecutionException.class, () -> call("projects.create", obj("name", "Pending")));
+        assertThrows(ExecutionException.class, () -> call("projects.prefer", obj("key", "b")));
+        assertEquals(before, context.getSharedPreferences("projects", 0).getString("registry", ""));
+    }
+    @Test public void temporarilyUnavailableSingleFolderMigrationCanRetry() {
+        String uri = "content://unavailable.provider/tree/old-folder";
+        context.getSharedPreferences("workspace", 0).edit().putString("uri", uri).commit();
+        new DocumentStore(context);
+        assertEquals("", context.getSharedPreferences("projects", 0).getString("registry", ""));
+        assertEquals(uri, context.getSharedPreferences("workspace", 0).getString("uri", ""));
+    }
+    @Test public void importPreviewIsReadOnlyAndStaleConfirmationCannotWrite() throws Exception {
+        seed(); engine = new Engine(context);
+        engine.setTestTransport((method, params) -> { throw new AssertionError("Project import must not call Codex"); });
+        ProjectRegistry other = new ProjectRegistry(); other.createUnbound("From desktop");
+        String raw = other.exportProject(other.selectedKey()).toString();
+        String before = context.getSharedPreferences("projects",0).getString("registry", "");
+        JSONObject preview = call("projects.import.preview", obj("content",raw));
+        assertEquals(before,context.getSharedPreferences("projects",0).getString("registry", ""));
+        call("projects.rename",obj("key","a","name","New local name"));
+        String changed = context.getSharedPreferences("projects",0).getString("registry", "");
+        assertThrows(ExecutionException.class, () -> call("projects.import.apply",obj("content",raw,"token",preview.getString("token"))));
+        assertEquals(changed,context.getSharedPreferences("projects",0).getString("registry", ""));
+        JSONObject fresh = call("projects.import.preview",obj("content",raw));
+        JSONObject applied = call("projects.import.apply",obj("content",raw,"token",fresh.getString("token")));
+        assertEquals(3,applied.getJSONArray("projects").length()); assertEquals("a",applied.getJSONObject("workspace").getString("key"));
+        JSONObject imported = applied.getJSONArray("projects").getJSONObject(2);
+        assertFalse(imported.getBoolean("hasLocalFolder")); assertFalse(imported.getBoolean("available"));
+        assertEquals(0,call("projects.import.preview",obj("content",raw)).getJSONObject("result").getInt("addedEvents"));
+        DocumentStore restarted = new DocumentStore(context); assertEquals(3,restarted.projects().length());
+    }
+}

@@ -165,7 +165,7 @@ public final class Engine {
         for (int i = sessions.length() - 1; i >= 0; i--) {
             JSONObject s = sessions.optJSONObject(i);
             if (s != null && !s.optBoolean("deletionPending")) summaries.put(obj("id", s.optString("id"), "title", s.optString("title"),
-                "workspace", s.optString("workspace"), "workspaceKey", s.optString("workspaceKey"),
+                "workspace", s.optString("workspace"), "workspaceKey", s.optString("workspaceKey"), "projectId", documents.projectId(s.optString("workspaceKey")),
                 "busy", runningTurns.containsKey(s.optString("id")), "approvalPending", s.optBoolean("approvalPending")));
         }
         return obj("ready", ready, "busy", busy, "status", t(status), "account", account,
@@ -358,6 +358,12 @@ public final class Engine {
                     case "projects.select" -> { documents.selectProject(args.optString("key", "")); clearActive(); publish(); reply.complete(snapshot(), null); }
                     case "projects.remove" -> { ensureEngineIdle(); String key = args.getString("key"); boolean current = key.equals(documents.key()); JSONObject removed = documents.removeProject(key); if (current) clearActive(); publish(); reply.complete(removed, null); }
                     case "projects.rename" -> { ensureEngineIdle(); JSONObject renamed = documents.renameProject(args.getString("key"), args.getString("name")); publish(); reply.complete(renamed, null); }
+                    case "projects.export" -> reply.complete(documents.exportProject(args.getString("key")), null);
+                    case "projects.import.preview" -> reply.complete(documents.previewProjects(args.getString("content")), null);
+                    case "projects.import.apply" -> { ensureEngineIdle(); JSONObject imported = documents.importProjects(args.getString("content"), args.getString("token")); publish(); reply.complete(imported, null); }
+                    case "projects.create" -> { ensureEngineIdle(); JSONObject created = documents.createProject(args.getString("name")); clearActive(); publish(); reply.complete(created, null); }
+                    case "projects.merge" -> { ensureEngineIdle(); JSONObject merged = documents.mergeProjects(args.getString("sourceKey"), args.getString("targetKey")); publish(); reply.complete(merged, null); }
+                    case "projects.prefer" -> { ensureEngineIdle(); JSONObject result = documents.preferProject(args.getString("key")); publish(); reply.complete(result, null); }
                     case "documents.projects" -> reply.complete(obj("projects", documents.projects()), null);
                     case "chat.send" -> { requireChatScope(args); send(args.optString("text", ""), args.optString("model", ""), args.optString("effort", ""),
                         args.optJSONArray("attachments"), args.optJSONArray("skills"), args.optJSONArray("mentions")); reply.complete(obj("ok", true), null); }

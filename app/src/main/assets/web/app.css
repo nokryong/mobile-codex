@@ -1014,3 +1014,8 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-vis
 .sent-attachments .image-open { width:88px; height:88px; overflow:hidden; border-radius:10px; }
 .sent-attachments .image-card img { width:100%; height:100%; max-height:none; object-fit:cover; }
 .sent-attachments .image-card figcaption { display:none; }
+
+#project-link-description { margin:0 20px 12px; line-height:1.6; overflow-wrap:anywhere; white-space:pre-wrap; max-height:32dvh; overflow:auto; }
+#project-link-description:empty { display:none; }
+.project-choice { display:flex; flex-direction:column; align-items:flex-start; gap:6px; min-height:44px; text-align:left; white-space:normal; overflow-wrap:anywhere; }
+.project-choice small { max-width:100%; white-space:pre-wrap; font-size:12px; }

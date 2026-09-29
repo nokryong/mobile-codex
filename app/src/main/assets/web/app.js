@@ -235,7 +235,7 @@
     efforts(); if ([...$('effort').options].some(o => o.value === draftOptions.effort)) $('effort').value = draftOptions.effort;
     sizeComposer();
   }
-  function updateSend() { $('voice-input').disabled = !draftScope || voiceStarting || voiceActive || !!sending; $('voice-input').setAttribute('aria-busy', String(voiceStarting || voiceActive)); $('send').disabled = ((!$('prompt').value.trim() && !(draftContext.attachments || []).length) || !!sending || voiceStarting || voiceActive); $('send').setAttribute('aria-label', state.busy ? t('진행 중인 작업에 추가 지시') : t('메시지 보내기')); $('send').title = state.busy ? t('추가 지시') : t('보내기'); }
+  function updateSend() { $('voice-input').disabled = !draftScope || voiceStarting || voiceActive || !!sending; $('voice-input').setAttribute('aria-busy', String(voiceStarting || voiceActive)); $('send').disabled = ((state.workspace?.selected && state.workspace.available === false) || (!$('prompt').value.trim() && !(draftContext.attachments || []).length) || !!sending || voiceStarting || voiceActive); $('send').setAttribute('aria-label', state.busy ? t('진행 중인 작업에 추가 지시') : t('메시지 보내기')); $('send').title = state.busy ? t('추가 지시') : t('보내기'); }
   function scrollLatest() { following = true; $('chat-scroll').scrollTop = $('chat-scroll').scrollHeight; $('jump-latest').hidden = true; }
   function sizeComposer() {
     const field = $('prompt'), cap = Math.max(60, Math.min(160, window.innerHeight * .24));
@@ -915,30 +915,121 @@
     await call('chat.new', {workspaceKey:workspaceKey || ''}); sidebar(false);
   }
   async function removeProject(project) {
-    if (state.busy || !confirm(t('“{name}”을 프로젝트 목록에서 제거할까요?\n\n폴더와 파일은 삭제되지 않습니다. 이 프로젝트의 기존 대화는 “연결 해제된 프로젝트”에 남아 폴더를 다시 연결할 수 있습니다.', {name:project.name || t('프로젝트')}))) return;
+    const question = project.bindings?.length > 1 ? t('기본 로컬 연결을 해제할까요? 다른 연결과 실제 파일은 유지됩니다. 이 연결의 대화는 “연결 해제된 프로젝트”에 남습니다.') : t('“{name}”을 프로젝트 목록에서 제거할까요?\n\n폴더와 파일은 삭제되지 않습니다. 이 프로젝트의 기존 대화는 “연결 해제된 프로젝트”에 남아 폴더를 다시 연결할 수 있습니다.', {name:project.name || t('프로젝트')});
+    if (state.busy || !confirm(question)) return;
     await call('projects.remove', {key:project.key});
-    toast(t('프로젝트 목록에서 제거했습니다. 폴더와 파일은 그대로 있습니다.'));
+    toast(t(project.bindings?.length > 1 ? '로컬 연결을 해제했습니다.' : '프로젝트 목록에서 제거했습니다. 폴더와 파일은 그대로 있습니다.'));
   }
   async function renameProject(project) {
     if (state.busy) return;
     const name = await input(t('프로젝트 이름 변경'), t('새 프로젝트 표시 이름을 입력하세요.'), project.name || '');
-    if (!name || !name.trim() || name.trim() === project.name) return;
+    if (!name || !name.trim() || (name.trim() === project.name && !project.nameConflicts?.length)) return;
     const result = await call('projects.rename', {key:project.key, name:name.trim()});
-    const projects = (state.projects || []).map(value => value.key === project.key ? {...value, name:result.name || name.trim()} : value);
-    const workspace = state.workspace?.key === project.key ? {...state.workspace, name:result.name || name.trim()} : state.workspace;
+    const projects = (state.projects || []).map(value => value.key === project.key ? {...value, name:result.name || name.trim(), nameConflicts:[]} : value);
+    const workspace = projectKeys(project).includes(state.workspace?.key) ? {...state.workspace, name:result.name || name.trim()} : state.workspace;
     render({...state, projects, workspace});
     toast(t('프로젝트 이름을 변경했습니다.'));
+  }
+  function projectKeys(project) { return project.workspaceKeys || [project.key]; }
+  let projectLinkReturnKey = '', projectLinkPending = false;
+  function projectChoices(title, description, choices, returnKey = '') {
+    projectLinkReturnKey = returnKey;
+    $('project-link-title').textContent = title;
+    $('project-link-description').textContent = description;
+    $('project-link-choices').replaceChildren(...choices.map(choice => {
+      const item = button('', async () => {
+        if (projectLinkPending || state.busy) return;
+        projectLinkPending = true;
+        $('project-link-choices').querySelectorAll('button').forEach(b => { b.disabled = true; });
+        try { await choice.run(); }
+        finally { projectLinkPending = false; $('project-link-choices').querySelectorAll('button').forEach(b => { b.disabled = !!state.busy; }); }
+      }, 'secondary-button project-choice');
+      item.append(node('span', choice.label));
+      if (choice.detail) item.append(node('small', choice.detail, 'muted'));
+      item.disabled = !!state.busy;
+      return item;
+    }));
+    show('project-link-dialog');
+  }
+  function addProject() {
+    if (projectLinkPending) return;
+    projectChoices(t('프로젝트 추가'), '', [
+      {label:t('로컬 폴더 연결'), run:async () => { close('project-link-dialog'); await pickFolder(); }},
+      {label:t('프로젝트 가져오기'), run:importProjects},
+      {label:t('폴더 없이 프로젝트 만들기'), run:async () => {
+        close('project-link-dialog');
+        const name = await input(t('프로젝트 만들기'), t('프로젝트 이름을 입력하세요.'));
+        if (name?.trim()) await call('projects.create', {name:name.trim()});
+      }}
+    ]);
+  }
+  async function importProjects() {
+    const picked = await call('ui.projects.importFile');
+    if (picked.cancelled) return;
+    const preview = await call('projects.import.preview', {content:picked.content});
+    const summary = preview.result.summary;
+    const names = summary.projects.map(p => p.name + (p.nameConflicts?.length ? '\n' + t('이름 충돌') + ': ' + p.nameConflicts.join(' / ') : '')).join('\n');
+    projectChoices(t('프로젝트 가져오기'), t('새 변경 {count}개 · 병합 이력 {links}개', {count:preview.result.addedEvents, links:summary.linkCount}) + '\n\n' + names, [
+      {label:t('가져오기'), detail:t('프로젝트 ID가 같으면 기존 항목을 갱신합니다. 포함된 병합 이력도 적용됩니다.'), run:async () => {
+        const result = await call('projects.import.apply', {content:picked.content, token:preview.token});
+        render({...state, ...result}); close('project-link-dialog'); toast(t('프로젝트 정보를 가져왔습니다.'));
+      }}
+    ]);
+  }
+  async function exportProject(project) {
+    const bundle = await call('projects.export', {key:project.key});
+    if (!confirm(t('“{name}”의 프로젝트 ID, 이름, 병합 이력을 내보낼까요?\n\n대화, 파일, 로컬 경로, 인증정보는 포함되지 않습니다.', {name:project.name}))) return;
+    await call('ui.projects.exportFile', {content:JSON.stringify(bundle)});
+  }
+  function resolveProjectName(project) {
+    if (projectLinkPending) return;
+    projectChoices(t('이름 충돌 해결'), t('다른 기기에서 동시에 변경된 이름입니다. 사용할 이름을 선택하세요.'), project.nameConflicts.map(name => ({label:name, run:async () => {
+      await call('projects.rename', {key:project.key, name}); close('project-link-dialog');
+    }})), project.key);
+  }
+  function mergeProject(project) {
+    if (projectLinkPending) return;
+    const candidates = (state.projects || []).filter(p => p.projectId && p.projectId !== project.projectId);
+    projectChoices(t('프로젝트 병합'), t('같은 프로젝트로 묶을 항목을 선택하세요. 폴더와 파일은 그대로 유지됩니다.'), candidates.map(target => ({
+      label:target.name,
+      detail:(target.bindings || []).map(b => b.uri || t('로컬 폴더 없음')).join('\n'),
+      run:async () => {
+        if (!confirm(t('“{source}”와 “{target}”을 같은 프로젝트로 묶을까요?\n\n대상 프로젝트의 이름과 기본 폴더를 사용합니다. 기존 대화는 각자의 폴더에 연결된 채 유지됩니다.', {source:project.name, target:target.name}))) return;
+        const result = await call('projects.merge', {sourceKey:project.key, targetKey:target.key});
+        if (result.projects) render({...state, projects:result.projects});
+        projectLinkReturnKey = target.key;
+        close('project-link-dialog');
+        toast(t('프로젝트를 병합했습니다.'));
+      }
+    })), project.key);
+  }
+  function chooseProjectBinding(project) {
+    if (projectLinkPending) return;
+    projectChoices(t('기본 로컬 폴더'), t('새 대화에서 사용할 폴더를 선택하세요. 기존 대화의 폴더는 바뀌지 않습니다.'), (project.bindings || []).map(binding => ({
+      label:binding.name,
+      detail:(binding.uri || t('로컬 폴더 없음')) + (binding.key === project.key ? '\n' + t('기본 폴더') : ''),
+      run:async () => {
+        const result = await call('projects.prefer', {key:binding.key});
+        if (result.projects) render({...state, projects:result.projects});
+        projectLinkReturnKey = binding.key;
+        close('project-link-dialog');
+      }
+    })), project.key);
   }
   function projectAction(project, trigger) {
     projectMenuFocus = trigger;
     $('project-actions-title').textContent = project.name || t('프로젝트');
     const action = (label, fn, cls) => { const item = button(label, async () => { projectMenuActionClosing = true; close('project-actions-dialog'); await fn(); }, cls); item.disabled = !!state.busy; return item; };
     const actions = [
-      action(t('새 대화'), () => newChat(project.key)),
       action(t('이름 변경'), () => renameProject(project))
     ];
-    if (project.available === false) actions.push(action(t('폴더 다시 연결'), () => pickFolder(project.key)));
-    actions.push(action(t('프로젝트 목록에서 제거'), () => removeProject(project), 'secondary-button danger'));
+    if (project.projectId) actions.push(action(t('프로젝트 내보내기'), () => exportProject(project)));
+    if (project.nameConflicts?.length) actions.push(action(t('이름 충돌 해결'), () => resolveProjectName(project)));
+    if (project.available !== false) actions.unshift(action(t('새 대화'), () => newChat(project.key)));
+    if (project.available === false) actions.push(action(t(project.hasLocalFolder === false ? '로컬 폴더 연결' : '폴더 다시 연결'), () => pickFolder(project.key)));
+    if (project.projectId && (state.projects || []).some(p => p.projectId && p.projectId !== project.projectId)) actions.push(action(t('프로젝트 병합'), () => mergeProject(project)));
+    if (project.bindings?.length > 1) actions.push(action(t('기본 로컬 폴더'), () => chooseProjectBinding(project)));
+    actions.push(action(t(project.bindings?.length > 1 ? '기본 로컬 연결 해제' : '프로젝트 목록에서 제거'), () => removeProject(project), 'secondary-button danger'));
     $('project-actions').replaceChildren(...actions);
     show('project-actions-dialog');
   }
@@ -980,20 +1071,22 @@
     const target = $('projects'); target.replaceChildren();
     const projects = state.projects || [];
     for (const project of projects) {
-      const expandedKey = 'project-expanded:' + project.key, expanded = localStorage.getItem(expandedKey) !== 'false';
+      const expandedKey = 'project-expanded:' + (project.projectId || project.key), expanded = localStorage.getItem(expandedKey) !== 'false';
       const section = node('section', null, 'project-tree' + (project.selected ? ' selected' : ''));
       const row = node('div', null, 'project-row');
       const toggle = button('', () => { const expandedNow = section.classList.toggle('collapsed') === false; localStorage.setItem(expandedKey, String(expandedNow)); toggle.setAttribute('aria-expanded', String(expandedNow)); }, 'tree-toggle'); toggle.setAttribute('aria-label', project.name + t(' 대화 펼치기')); toggle.setAttribute('aria-expanded', String(expanded)); toggle.append(icon('down'));
       const select = button('', () => selectProject(project.key), 'project-button'); select.append(icon('folder'), node('span', project.name || t('이름 없는 프로젝트'))); select.setAttribute('aria-current', String(!!project.selected));
        const menu = button('', () => projectAction(project, menu), 'icon-button project-more'); menu.disabled = !!state.busy; menu.setAttribute('aria-label', project.name + t(' 메뉴')); menu.dataset.projectMenuKey = project.key; menu.append(icon('more'));
-       const projectNew = button('', () => newChat(project.key), 'icon-button project-new'); projectNew.setAttribute('aria-label', project.name + t(' 새 대화')); projectNew.append(icon('plus'));
+       const projectNew = button('', () => newChat(project.key), 'icon-button project-new'); projectNew.disabled = project.available === false; projectNew.setAttribute('aria-label', project.name + t(' 새 대화')); projectNew.append(icon('plus'));
        row.append(toggle, select, projectNew, menu); section.append(row);
       const children = node('div', null, 'project-sessions');
-      if (project.available === false) { children.append(node('p', t('폴더 접근을 다시 연결해야 합니다.'), 'sidebar-empty'), button(t('폴더 다시 연결'), () => pickFolder(project.key), 'new-thread')); }
-      for (const session of (state.sessions || []).filter(s => s.workspaceKey === project.key)) children.append(sessionRow(session));
+      if (project.nameConflicts?.length) children.append(button(t('이름 충돌 해결'), () => resolveProjectName(project), 'new-thread'));
+      if (project.available === false) { children.append(node('p', t(project.hasLocalFolder === false ? '이 기기에 연결된 로컬 폴더가 없습니다.' : '폴더 접근을 다시 연결해야 합니다.'), 'sidebar-empty'), button(t(project.hasLocalFolder === false ? '로컬 폴더 연결' : '폴더 다시 연결'), () => pickFolder(project.key), 'new-thread')); }
+      if (project.bindings?.length > 1) children.append(button(t('기본 로컬 폴더'), () => chooseProjectBinding(project), 'new-thread'));
+      for (const session of (state.sessions || []).filter(s => projectKeys(project).includes(s.workspaceKey))) children.append(sessionRow(session));
       section.append(children); if (!expanded) section.classList.add('collapsed'); target.append(section);
     }
-    const detached = (state.sessions || []).filter(s => s.workspaceKey && !projects.some(p => p.key === s.workspaceKey));
+    const detached = (state.sessions || []).filter(s => s.workspaceKey && !projects.some(p => projectKeys(p).includes(s.workspaceKey)));
     if (detached.length) {
       const section = node('section', null, 'project-tree detached-projects'); section.append(node('div', t('연결 해제된 프로젝트'), 'section-title'));
       const children = node('div', null, 'project-sessions');
@@ -1064,6 +1157,7 @@
     if (selectedChange) $('change-restore').disabled = restoringChange || !selectedChange.data.canRestore || !!state.busy || state.permissions === 'read-only';
     renderProjects();
     if ($('project-actions-dialog')?.open) $('project-actions').querySelectorAll('button').forEach(button => { button.disabled = !!state.busy; });
+    if ($('project-link-dialog')?.open) $('project-link-choices').querySelectorAll('button').forEach(button => { button.disabled = !!state.busy || projectLinkPending; });
     $('sessions').replaceChildren();
     for (const session of (state.sessions || []).filter(s => !(s.workspaceKey || s.workspace))) $('sessions').append(sessionRow(session));
     if (!state.sessions?.length) $('sessions').append(node('p', t('대화를 시작하면 여기에 표시됩니다.'), 'sidebar-empty'));
@@ -1642,7 +1736,15 @@
     on(buttonId, () => { const expanded = button.getAttribute('aria-expanded') !== 'true'; apply(expanded); localStorage.setItem(key, expanded ? 'expanded' : 'collapsed'); });
   }
   on('scrim', () => sidebar(false)); on('new-chat', async () => newChat(''));
-  ['add-project', 'choose-folder', 'composer-folder'].forEach(id => on(id, () => pickFolder()));
+  on('add-project', addProject);
+  ['choose-folder', 'composer-folder'].forEach(id => on(id, () => pickFolder()));
+  $('project-link-dialog').addEventListener('close', () => {
+    if (document.querySelector('dialog[open]')) return;
+    const key = projectLinkReturnKey;
+    const trigger = key ? [...document.querySelectorAll('[data-project-menu-key]')].find(b => b.dataset.projectMenuKey === key) : $('add-project');
+    if (matchMedia('(max-width:760px)').matches && !document.body.classList.contains('sidebar-open')) sidebar(true);
+    trigger?.focus({preventScroll:true});
+  });
    const closeToolMenu = () => { if ($('tool-menu-dialog').open) close('tool-menu-dialog'); };
    setFilePanelOpen(false);
    ['show-files', 'files-toggle'].forEach(id => on(id, async () => { closeToolMenu(); setFilePanelOpen($('file-panel').hidden); sidebar(false); if (!$('file-panel').hidden) await listFiles(); }));
@@ -1658,6 +1760,7 @@
   $('input-dialog').addEventListener('close', () => { if (inputResolve) { const r = inputResolve; inputResolve = null; r(null); } });
   on('input-value', e => { if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) $('input-confirm').click(); }, 'keydown');
   on('composer', async () => {
+    if (state.workspace?.selected && state.workspace.available === false) { toast(t('먼저 로컬 폴더를 연결해 주세요.')); return; }
     const value = $('prompt').value, text = value.trim();
     if ((!text && !draftContext.attachments.length) || sending || voiceStarting || voiceActive) return;
     const steer = !!state.busy, expectedTurnId = state.turnId || '', expectedThreadId = state.threadId || '', workspaceKey = state.workspace?.key || '';

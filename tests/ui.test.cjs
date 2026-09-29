@@ -660,7 +660,8 @@ test('permission radio values remain synchronized with the native permission com
 
 test('adding a project never rebinds the selected project while reconnect targets its stable key',async()=>{
  const {w,calls,snapshot}=setup();await tick();w.mobileCodexEvent('state',{...snapshot,workspace:{selected:true,key:'a',name:'A'},projects:[{key:'a',name:'A',selected:true,available:true},{key:'b',name:'B',available:false}]});const d=w.document;
- d.getElementById('add-project').click();await tick();assert.deepEqual(calls.filter(c=>c.action==='files.pick').at(-1).args,{});
+ d.getElementById('add-project').click();await tick();
+ [...d.querySelectorAll('#project-link-choices button')].find(b=>b.textContent==='로컬 폴더 연결').click();await tick();assert.deepEqual(calls.filter(c=>c.action==='files.pick').at(-1).args,{});
  [...d.querySelectorAll('.project-tree')].at(-1).querySelector('.new-thread').click();await tick();assert.deepEqual(calls.filter(c=>c.action==='files.pick').at(-1).args,{projectKey:'b'});
 });
 
@@ -937,6 +938,95 @@ test('mobile project menu supports new chat, persisted display rename and cancel
   open();await tick();confirmResult=true;[...d.querySelectorAll('#project-actions button')].find(b=>b.textContent==='프로젝트 목록에서 제거').click();await tick();assert.deepEqual(calls.filter(c=>c.action==='projects.remove').at(-1).args,{key:project.key});
  });
 
+test('shared projects group conversations without changing their original workspace keys',async()=>{
+ const {w,calls,snapshot}=setup();await tick();const d=w.document;
+ const project={key:'b',projectId:'shared',name:'Shared',selected:true,available:true,workspaceKeys:['a','b'],bindings:[{key:'a',name:'A',uri:'content://a',hasLocalFolder:true},{key:'b',name:'B',uri:'content://b',hasLocalFolder:true}]};
+ w.mobileCodexEvent('state',{...snapshot,workspace:{selected:true,key:'a',name:'Shared'},projects:[project],sessions:[{id:'one',workspaceKey:'a',title:'From A'},{id:'two',workspaceKey:'b',title:'From B'}]});
+ assert.equal(d.querySelectorAll('.project-tree').length,1);assert.equal(d.querySelectorAll('.detached-projects').length,0);
+ assert.equal(d.querySelectorAll('#projects .session').length,2);
+ d.querySelectorAll('#projects .session')[0].click();await tick();assert.deepEqual(calls.filter(c=>c.action==='chat.resume').at(-1).args,{id:'one'});
+ d.querySelector('.project-new').click();await tick();assert.deepEqual(calls.filter(c=>c.action==='chat.new').at(-1).args,{workspaceKey:'b'});
+});
+test('project merge requires confirmation, handles failure, and suppresses duplicate writes',async()=>{
+ let confirmResult=false, resolveMerge, fail=true;
+ const {w,calls,snapshot}=setup({'projects.merge':()=>fail?Promise.reject(new Error('storage full')):new Promise(resolve=>{resolveMerge=resolve;})},{confirm:()=>confirmResult});
+ await tick();const d=w.document;
+ const projects=[{key:'a',projectId:'pa',name:'Same',available:true,bindings:[{key:'a',uri:'content://one'}]},{key:'b',projectId:'pb',name:'Same',available:true,bindings:[{key:'b',uri:'content://two'}]}];
+ w.mobileCodexEvent('state',{...snapshot,projects});d.querySelector('.project-more').click();await tick();
+ [...d.querySelectorAll('#project-actions button')].find(b=>b.textContent==='프로젝트 병합').click();await tick();
+ let choice=d.querySelector('#project-link-choices button');assert.match(choice.textContent,/content:\/\/two/);
+ choice.click();await tick();assert.equal(calls.some(c=>c.action==='projects.merge'),false);
+ confirmResult=true;choice.click();await tick();assert.equal(d.getElementById('project-link-dialog').open,true);assert.match(d.getElementById('toast').textContent,/storage full/);
+ assert.equal(d.querySelectorAll('.project-tree').length,2);
+ fail=false;choice.click();choice.click();await tick();assert.equal(calls.filter(c=>c.action==='projects.merge').length,2);
+ assert.deepEqual(calls.filter(c=>c.action==='projects.merge').at(-1).args,{sourceKey:'a',targetKey:'b'});
+ resolveMerge({projects:[{...projects[1],workspaceKeys:['a','b']}]});await tick();await tick();
+ assert.equal(d.getElementById('project-link-dialog').open,false);assert.equal(d.querySelectorAll('.project-tree').length,1);
+ assert.equal(d.activeElement.dataset.projectMenuKey,'b');
+});
+test('default local binding is persisted without switching an existing conversation',async()=>{
+ const {w,calls,snapshot}=setup({'projects.prefer':()=>({})});await tick();const d=w.document;
+ const project={key:'a',projectId:'p',name:'Shared',available:true,workspaceKeys:['a','b'],bindings:[{key:'a',name:'A',uri:'content://a'},{key:'b',name:'B',uri:'content://b'}]};
+ w.mobileCodexEvent('state',{...snapshot,projects:[project]});d.querySelector('.project-more').click();await tick();
+ [...d.querySelectorAll('#project-actions button')].find(b=>b.textContent==='기본 로컬 폴더').click();await tick();
+ d.querySelectorAll('#project-link-choices button')[1].click();await tick();
+ assert.deepEqual(calls.filter(c=>c.action==='projects.prefer').at(-1).args,{key:'b'});
+ assert.equal(calls.some(c=>c.action==='projects.select'||c.action==='chat.new'),false);
+});
+test('unbound projects keep history readable but block send including keyboard submit',async()=>{
+ const {w,calls,snapshot}=setup();await tick();const d=w.document;
+ w.mobileCodexEvent('state',{...snapshot,workspace:{key:'none',selected:true,available:false},projects:[{key:'none',projectId:'p',name:'Remote',hasLocalFolder:false,available:false}],sessions:[{id:'saved',workspaceKey:'none',title:'Saved'}]});
+ assert.match(d.getElementById('projects').textContent,/이 기기에 연결된 로컬 폴더가 없습니다/);
+ assert.equal(d.querySelector('.project-new').disabled,true);assert.equal(d.querySelector('#projects .session').disabled,false);
+ d.getElementById('prompt').value='Run';d.getElementById('prompt').dispatchEvent(new w.Event('input'));
+ assert.equal(d.getElementById('send').disabled,true);
+ d.getElementById('composer').dispatchEvent(new w.Event('submit',{cancelable:true,bubbles:true}));await tick();
+ assert.equal(calls.some(c=>c.action==='chat.send'),false);
+ d.querySelector('#projects .new-thread').click();await tick();assert.deepEqual(calls.filter(c=>c.action==='files.pick').at(-1).args,{projectKey:'none'});
+});
+test('project creation without a folder persists only after entering a name',async()=>{
+ const {w,calls}=setup();await tick();const d=w.document;
+ d.getElementById('add-project').click();await tick();[...d.querySelectorAll('#project-link-choices button')].find(b=>b.textContent==='폴더 없이 프로젝트 만들기').click();await tick();
+ d.getElementById('input-value').value='Metadata only';d.getElementById('input-confirm').click();await tick();await tick();
+ assert.deepEqual(calls.filter(c=>c.action==='projects.create').at(-1).args,{name:'Metadata only'});
+ assert.equal(calls.some(c=>c.action==='files.pick'||c.action==='runtime.start'),false);
+});
+test('shared project choices escape project content and translate action labels',async()=>{
+ const {w,snapshot}=setup({}, {language:'en'});await tick();const d=w.document;
+ w.mobileCodexEvent('state',{...snapshot,projects:[{key:'a',projectId:'pa',name:'A'},{key:'b',projectId:'pb',name:'<img src=x onerror=bad()>',bindings:[{uri:'<script>bad()</script>'}]}]});
+ d.querySelector('.project-more').click();await tick();[...d.querySelectorAll('#project-actions button')].find(b=>b.textContent==='Merge projects').click();await tick();
+ assert.equal(d.querySelectorAll('#project-link-choices img, #project-link-choices script').length,0);
+ assert.match(d.getElementById('project-link-choices').textContent,/<script>/);
+});
+
+test('project import previews safely, cancels without applying, and uses the exact confirmation token',async()=>{
+ let cancelled=false, fail=false, applied=0;
+ const project={key:'new',projectId:'proj_new',name:'<img src=x>',nameConflicts:['Desktop','Phone'],available:false,hasLocalFolder:false};
+ const {w,calls}=setup({
+  'ui.projects.importFile':()=>cancelled?{cancelled:true}:{content:'portable-content'},
+  'projects.import.preview':()=>({token:'exact-preview',result:{addedEvents:2,summary:{projects:[project],linkCount:1}}}),
+  'projects.import.apply':()=>{applied++;if(fail)throw new Error('stale preview');return{projects:[project]};}
+ }); await tick();const d=w.document;
+ const pick=async()=>{d.getElementById('add-project').click();await tick();[...d.querySelectorAll('#project-link-choices button')].find(b=>b.textContent==='프로젝트 가져오기').click();await tick();await tick();};
+ cancelled=true;await pick();assert.equal(calls.some(c=>c.action==='projects.import.preview'),false);d.getElementById('project-link-dialog').close();
+ cancelled=false;await pick();assert.equal(applied,0);assert.match(d.getElementById('project-link-description').textContent,/이름 충돌/);assert.equal(d.querySelector('#project-link-dialog img'),null);
+ d.getElementById('project-link-dialog').close();assert.equal(applied,0);
+ await pick();fail=true;d.querySelector('#project-link-choices button').click();await tick();assert.equal(d.getElementById('project-link-dialog').open,true);assert.match(d.getElementById('toast').textContent,/stale preview/);
+ fail=false;d.querySelector('#project-link-choices button').click();await tick();
+ assert.deepEqual(calls.filter(c=>c.action==='projects.import.apply').at(-1).args,{content:'portable-content',token:'exact-preview'});
+ assert.equal(d.getElementById('project-link-dialog').open,false);assert.equal(d.querySelector('.project-new').disabled,true);
+});
+test('project export asks before opening a destination and conflict resolution can select current display name',async()=>{
+ let approved=false;
+ const bundle={format:'mobile-codex-projects',schemaVersion:1,events:[]};
+ const {w,calls,snapshot}=setup({'projects.export':()=>bundle},{confirm:()=>approved}); await tick();const d=w.document;
+ w.mobileCodexEvent('state',{...snapshot,projects:[{key:'a',projectId:'proj_a',name:'Desktop',nameConflicts:['Desktop','Phone'],available:true}]});
+ const exportIt=async()=>{d.querySelector('.project-more').click();await tick();[...d.querySelectorAll('#project-actions button')].find(b=>b.textContent==='프로젝트 내보내기').click();await tick();};
+ await exportIt();assert.equal(calls.some(c=>c.action==='ui.projects.exportFile'),false);
+ approved=true;await exportIt();assert.equal(calls.filter(c=>c.action==='ui.projects.exportFile').at(-1).args.content,JSON.stringify(bundle));
+ [...d.querySelectorAll('#projects button')].find(b=>b.textContent==='이름 충돌 해결').click();await tick();d.querySelector('#project-link-choices button').click();await tick();
+ assert.deepEqual(calls.filter(c=>c.action==='projects.rename').at(-1).args,{key:'a',name:'Desktop'});
+});
 test('phone control requires native consent and does not enable on service connection',async()=>{
  const {w,calls,snapshot}=setup({'ui.phoneEnable':()=>({cancelled:true})});await tick();
  w.mobileCodexEvent('state',{...snapshot,phone:{connected:true,enabled:false,status:'접근성 연결됨',screenshotsSupported:true},phoneToolsAvailable:false});
