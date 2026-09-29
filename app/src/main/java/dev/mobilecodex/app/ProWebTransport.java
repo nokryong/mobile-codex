@@ -25,7 +25,7 @@ import java.nio.charset.StandardCharsets;
 /** Fail-closed transport for the official ChatGPT web UI. Remote content receives no Android JS bridge. */
 final class ProWebTransport {
     interface Done { void complete(JSONObject result, Exception error); }
-    static final int FEATURE_VERSION = 3;
+    static final int FEATURE_VERSION = 5;
     static final String PROJECT_NAME = "mobile-codex-chat";
 
     private final Activity activity;
@@ -191,16 +191,19 @@ final class ProWebTransport {
             evaluate("openModelPicker()", opened -> {
                 if (!live(current)) return;
                 if (!"opened".equals(opened.optString("status"))) { finish(status("unavailable", reason(opened))); return; }
-                page.postDelayed(() -> chooseModel(current), 250);
+                page.postDelayed(() -> chooseModel(current, 0), 250);
             });
         });
     }
 
-    private void chooseModel(long current) {
+    private void chooseModel(long current, int attempt) {
         if (!live(current) || clicked) return;
         evaluate("choosePro()", chosen -> {
             if (!live(current)) return;
             String status = chosen.optString("status");
+            if ("waiting".equals(status) && attempt < 20 && !expired()) {
+                page.postDelayed(() -> chooseModel(current, attempt + 1), 250); return;
+            }
             if (!"selected".equals(status)) { finish(status(status.isBlank() ? "web_changed" : status, reason(chosen))); return; }
             page.postDelayed(() -> confirmModel(current, 0), 350);
         });
@@ -323,12 +326,18 @@ final class ProWebTransport {
             case "sidebar_closing" -> "ChatGPT 사이드바가 닫히기를 기다리다 중단되었습니다.";
             case "sidebar_close_ambiguous" -> "ChatGPT 사이드바 닫기 버튼을 구분하지 못했습니다.";
             case "project_page_pending", "project_navigation_pending" -> "ChatGPT 프로젝트 화면이 준비되지 않았습니다.";
+            case "project_home_pending" -> "프로젝트 홈 열기 버튼이 준비되지 않았습니다.";
+            case "project_home_ambiguous" -> "프로젝트 홈 열기 버튼을 구분하지 못했습니다.";
             case "project_missing" -> "mobile-codex-chat 프로젝트를 확인하지 못했습니다.";
             case "project_ambiguous" -> "mobile-codex-chat 프로젝트가 여러 개라 구분하지 못했습니다.";
             case "composer_blocked" -> "ChatGPT 입력창이 다른 창에 가려져 있습니다.";
             case "prompt_missing" -> "ChatGPT 메시지 입력창을 찾지 못했습니다.";
             case "model_trigger_missing" -> "ChatGPT 모델 선택 버튼을 찾지 못했습니다.";
             case "model_trigger_ambiguous" -> "ChatGPT 모델 선택 버튼을 구분하지 못했습니다.";
+            case "model_picker_pending", "model_selection_pending" -> "ChatGPT Pro 모델 선택이 완료되지 않았습니다.";
+            case "pro_slider_unavailable" -> "ChatGPT 성능 메뉴의 Pro 선택 항목을 확인하지 못했습니다.";
+            case "gpt_6_pro_missing" -> "ChatGPT 모델 메뉴에서 GPT-6 Pro를 확인하지 못했습니다.";
+            case "gpt_6_pro_disabled" -> "현재 ChatGPT 화면에서 GPT-6 Pro를 선택할 수 없습니다.";
             case "project_dialog_ambiguous" -> "프로젝트 생성창이 여러 개 열려 있습니다. ChatGPT 화면을 확인해 주세요.";
             case "project_name_input_ambiguous" -> "프로젝트 이름 입력란을 구분하지 못했습니다. ChatGPT 화면을 확인해 주세요.";
             case "project_create_button_ambiguous" -> "프로젝트 만들기 버튼을 구분하지 못했습니다. ChatGPT 화면을 확인해 주세요.";

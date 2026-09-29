@@ -1,7 +1,7 @@
 /* Isolated adapter for the official ChatGPT page. It never reads cookies, tokens, or storage. */
 (function (root) {
   'use strict';
-  if (root.MCProWeb?.version === 3) return;
+  if (root.MCProWeb?.version === 5) return;
   const d = root.document;
   const normalize = value => String(value || '').normalize('NFKC').replace(/\s+/g, ' ').trim();
   const exactPro = value => /^(?:GPT[ -]?6[ -]?Pro|6[ -]?Pro)$/i.test(normalize(value).replace(/^(?:model|모델)\s*:?\s*/i, ''));
@@ -13,19 +13,36 @@
   const label = element => normalize(element?.getAttribute?.('aria-label'))
     || normalize((element?.getAttribute?.('aria-labelledby') || '').split(/\s+/).map(id => d.getElementById(id)?.textContent || '').join(' '))
     || normalize(element?.textContent);
-  const prompt = () => d.querySelector('#prompt-textarea,[data-testid="prompt-textarea"],textarea[placeholder]');
+  const prompt = () => {
+    // querySelector with comma-separated selectors uses document order, not
+    // selector priority. ChatGPT's hidden fallback textarea precedes ProseMirror.
+    const primary = [...d.querySelectorAll('#prompt-textarea,[data-testid="prompt-textarea"]')];
+    const fallback = [...d.querySelectorAll('textarea[placeholder]')];
+    return primary.find(visible) || fallback.find(visible) || primary[0] || fallback[0] || null;
+  };
+  const press = element => {
+    // Radix menu triggers open on pointerdown, not HTMLElement.click alone.
+    const Pointer = root.PointerEvent || root.MouseEvent;
+    for (const type of ['pointerdown','pointerup']) element.dispatchEvent(new Pointer(type,
+      {bubbles:true,cancelable:true,button:0,pointerType:'mouse',pointerId:1,isPrimary:true}));
+    element.click();
+  };
+  const effortLabel = value => /^(?:Extra High|High|Medium|Low|Light|Standard|Extended|Heavy|Max|Maximum|추론 수준|Reasoning level|Reasoning effort|Intelligence|성능)$/i.test(normalize(value));
   const modelTriggers = () => {
     const composer = prompt()?.closest('form') || prompt()?.parentElement;
     return [...d.querySelectorAll('button,[role="button"]')].filter(element => {
       if (!visible(element) || element.getAttribute('data-testid') === 'composer-plus-btn' || element.closest('[role="menu"],[role="dialog"],[role="listbox"]')) return false;
       const text = label(element), popup = element.getAttribute('aria-haspopup');
       return exactPro(text) || ((popup === 'menu' || popup === 'listbox') && composer?.contains(element)
-        && /model|모델|gpt|pro|6/i.test(text));
+        && (/model|모델|gpt|pro|6/i.test(text) || effortLabel(text)));
     });
   };
   const loginVisible = () => /auth\.openai\.com$/i.test(location.host) || (!prompt() && [...d.querySelectorAll('a,button')]
     .some(element => visible(element) && /^(log in|sign up|로그인|가입)/i.test(label(element))));
   const exactProject = (element, name) => normalize(element?.textContent) === name || normalize(element?.getAttribute?.('aria-label')) === name;
+  const visibleProjectTitle = name => [...d.querySelectorAll('h1,h2,[role="heading"],div,span')].some(element =>
+    !element.closest('nav,[role="navigation"],[role="dialog"],dialog,[role="menu"],form,a,button,[data-sidebar-item],[data-message-author-role]')
+    && normalize(element.textContent) === name && visible(element));
   const projectPath = href => {
     try {
       const url = new URL(href, location.origin);
@@ -64,10 +81,13 @@
       const headings = [...d.querySelectorAll('h1,h2,[role="heading"]')]
         .filter(element => !element.closest('[role="dialog"],dialog,nav,[role="navigation"]'));
       const currentNames = headings.filter(element => exactProject(element, name));
-      if (currentNames.length > 1) return {status:'web_changed', reason:'project_ambiguous'};
-      if (currentNames.length === 1) {
+      if (currentNames.length) {
         const closing = dismissSidebar(); if (closing) return closing;
-        if (!visible(currentNames[0])) return {status:'waiting', reason:'project_page_pending'};
+        // Mobile renders a separate title DIV and hides the desktop H1's parent.
+        // The URL and semantic title identify the project; either rendered title
+        // is valid. Never use a sidebar row or a conversation mention as evidence.
+        if (!currentNames.some(visible) && !(visible(prompt()) && visibleProjectTitle(name)))
+          return {status:'waiting', reason:'project_page_pending'};
         navigatingProject = null; return {status:'available', projectPath:current, current:true};
       }
       // onPageFinished can precede React hydration. Opening the sidebar here
@@ -80,8 +100,20 @@
     if (rows.length === 1) {
       if (navigatingProject?.element === rows[0] && navigatingProject.path === location.pathname)
         return {status:'waiting', reason:'project_navigation_pending'};
+      const row = rows[0], scope = row.parentElement;
+      // The current sidebar row is an accordion. Its sibling home button,
+      // not the row itself or its options menu, opens the project workspace.
+      const homes = [...scope.querySelectorAll('button,[role="button"],a[href]')].filter(element => visible(element)
+        && /^(?:Open project home|Open project|프로젝트 홈 열기)$/i.test(label(element)));
+      if (homes.length > 1) return {status:'web_changed', reason:'project_home_ambiguous'};
+      const accordion = row.hasAttribute('aria-controls') || row.hasAttribute('aria-expanded');
+      if (!homes.length && accordion) return {status:'waiting', reason:'project_home_pending'};
+      if (homes.length && [...scope.querySelectorAll('[data-sidebar-item]')].some(element => element !== row))
+        return {status:'web_changed', reason:'project_home_ambiguous'};
+      const target = homes[0] || row;
+      if (target.disabled || target.getAttribute('aria-disabled') === 'true') return {status:'waiting', reason:'project_home_pending'};
       navigatingProject = {element:rows[0], path:location.pathname};
-      rows[0].click(); return {status:'opening_project', reason:'project_navigation_pending'};
+      target.click(); return {status:'opening_project', reason:'project_navigation_pending'};
     }
     if (navigatingProject) return {status:'waiting', reason:'project_navigation_pending'};
     const sidebar = [...d.querySelectorAll('button,[role="button"]')].filter(element => visible(element)
@@ -174,18 +206,49 @@
   }
   function openModelPicker() {
     const state = inspect(); if (state.status !== 'available') return state;
-    const trigger = modelTriggers()[0]; trigger.click();
+    const trigger = modelTriggers()[0];
+    if (trigger.getAttribute('aria-expanded') !== 'true') press(trigger);
     return {status:'opened'};
+  }
+  const sliderSteps = new WeakMap();
+  function chooseSliderPro(containers) {
+    const pickers = [...new Set(containers.flatMap(container => [...container.querySelectorAll('[data-testid="composer-intelligence-picker-content"]')]))].filter(visible);
+    if (pickers.length !== 1) return {status:pickers.length ? 'web_changed' : 'unavailable', reason:pickers.length ? 'gpt_6_pro_ambiguous' : 'gpt_6_pro_missing'};
+    const picker = pickers[0];
+    const control = [...picker.querySelectorAll('[role="menuitem"][aria-keyshortcuts]')].filter(element => visible(element)
+      && /ArrowLeft/.test(element.getAttribute('aria-keyshortcuts')) && /ArrowRight/.test(element.getAttribute('aria-keyshortcuts'))
+      && element.querySelector('[data-model-reasoning-effort-slider]'));
+    if (control.length !== 1) return {status:'unavailable', reason:'pro_slider_unavailable'};
+    const modelLabel = [...picker.querySelectorAll('[role="menuitem"][aria-label]')].filter(element => visible(element)
+      && /^(?:모델 선택|Select model|Choose model)$/i.test(element.getAttribute('aria-label')));
+    if (modelLabel.length === 1 && exactPro(modelLabel[0].textContent)) {
+      const menu = picker.closest('[role="menu"]');
+      menu.dispatchEvent(new root.KeyboardEvent('keydown', {key:'Escape',code:'Escape',bubbles:true,cancelable:true}));
+      return {status:'selected'};
+    }
+    const slider = control[0].querySelector('[role="slider"]');
+    if (!slider || slider.closest('[aria-disabled="true"],[data-locked="true"]')) return {status:'unavailable',reason:'gpt_6_pro_disabled'};
+    const value = Number(slider.getAttribute('aria-valuenow')), maximum = Number(slider.getAttribute('aria-valuemax'));
+    if (!Number.isInteger(value) || !Number.isInteger(maximum) || maximum > 10 || value >= maximum)
+      return {status:'unavailable',reason:'gpt_6_pro_missing'};
+    if (sliderSteps.get(slider) !== value) {
+      sliderSteps.set(slider,value); control[0].focus();
+      for (const type of ['keydown','keyup']) control[0].dispatchEvent(new root.KeyboardEvent(type,
+        {key:'ArrowRight',code:'ArrowRight',bubbles:true,cancelable:true}));
+    }
+    // Reinspect rendered model text after React updates. The slider endpoint
+    // itself is NEVER evidence of Pro; only the exact model label confirms it.
+    return {status:'waiting',reason:'model_selection_pending'};
   }
   function choosePro() {
     const containers = [...d.querySelectorAll('[role="menu"],[role="listbox"],[role="dialog"]')].filter(visible);
     const options = containers.flatMap(container => [...container.querySelectorAll('[role="menuitem"],[role="menuitemradio"],[role="option"],button')])
       .filter(element => visible(element) && exactPro(label(element)));
-    if (!containers.length) return {status:'web_changed', reason:'model_picker_missing'};
-    if (!options.length) return {status:'unavailable', reason:'gpt_6_pro_missing'};
+    if (!containers.length) return {status:'waiting', reason:'model_picker_pending'};
+    if (!options.length) return chooseSliderPro(containers);
     if (options.length !== 1) return {status:'web_changed', reason:'gpt_6_pro_ambiguous', optionCount:options.length};
     if (options[0].disabled || options[0].getAttribute('aria-disabled') === 'true') return {status:'unavailable', reason:'gpt_6_pro_disabled'};
-    options[0].click(); return {status:'selected'};
+    press(options[0]); return {status:'selected'};
   }
   function confirmPro() {
     const state = inspect();
@@ -249,7 +312,7 @@
     if (button && visible(button)) { button.click(); return {status:'stop_requested'}; }
     return {status:'not_running'};
   }
-  root.MCProWeb = {version:3, inspectProject, openProject, startProjectCreation, finishProjectCreation, inspectProjectCreation,
+  root.MCProWeb = {version:5, inspectProject, openProject, startProjectCreation, finishProjectCreation, inspectProjectCreation,
     inspect, prepareComposer, openModelPicker, choosePro, confirmPro, requestFiles, insert, clickSend, observe, stop, exactPro, projectPath, conversationLocation};
   if (typeof module !== 'undefined' && module.exports) module.exports = root.MCProWeb;
 })(typeof window === 'undefined' ? globalThis : window);

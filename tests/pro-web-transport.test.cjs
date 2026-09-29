@@ -153,3 +153,87 @@ test('can leave a different project without toggling the sidebar closed again', 
   let closed=0,selected=0;w.document.getElementById('close').addEventListener('click',()=>closed++);w.document.getElementById('target').addEventListener('click',()=>selected++);
   assert.equal(adapter.inspectProject('mobile-codex-chat').status,'opening_project');assert.equal(selected,1);assert.equal(closed,0);
 });
+
+test('opens project home instead of the accordion that only expands the chat list', () => {
+  const {w,adapter}=setup('<div role="dialog"><ul><li><div><div id="project-row" role="button" data-sidebar-item aria-expanded="false" aria-controls="project-chats"><span>mobile-codex-chat</span></div>'+
+    '<div><button id="home" aria-label="프로젝트 홈 열기"></button><button id="options" aria-label="mobile-codex-chat 프로젝트 옵션 열기" aria-haspopup="menu"></button></div></div>'+
+    '<div id="project-chats" hidden>프로젝트 채팅 없음</div></li></ul><button>새 프로젝트</button></div>');
+  let expanded=0,opened=0,options=0;
+  w.document.getElementById('project-row').addEventListener('click',()=>{expanded++;w.document.getElementById('project-chats').hidden=false;});
+  w.document.getElementById('home').addEventListener('click',()=>opened++);
+  w.document.getElementById('options').addEventListener('click',()=>options++);
+  assert.equal(adapter.inspectProject('mobile-codex-chat').status,'opening_project');
+  assert.equal(opened,1);assert.equal(expanded,0);assert.equal(options,0);
+  assert.equal(adapter.inspectProject('mobile-codex-chat').status,'waiting');assert.equal(opened,1);
+  w.history.replaceState({},'', '/g/g-p-existing/project');
+  w.document.body.insertAdjacentHTML('afterbegin','<main aria-hidden="true"><h1>mobile-codex-chat</h1><form><div id="prompt-textarea" contenteditable="true" tabindex="0"></div><button aria-haspopup="menu">6Pro</button></form></main>');
+  const close=w.document.createElement('button');close.setAttribute('aria-label','사이드바 닫기');w.document.querySelector('[role="dialog"]').append(close);
+  close.addEventListener('click',()=>{w.document.querySelector('[role="dialog"]').hidden=true;w.document.querySelector('main').removeAttribute('aria-hidden');});
+  assert.equal(adapter.inspectProject('mobile-codex-chat').status,'closing_sidebar');
+  assert.equal(adapter.inspectProject('mobile-codex-chat').status,'available');
+  assert.equal(adapter.prepareComposer().currentModel,'GPT-6 Pro');
+});
+
+test('never treats expanding a project as navigation when home is absent or ambiguous', () => {
+  const row='<div id="project-row" role="button" data-sidebar-item aria-expanded="false" aria-controls="chats">mobile-codex-chat</div>';
+  let {w,adapter}=setup('<div>'+row+'</div><button>새 프로젝트</button>');
+  let expanded=0;w.document.getElementById('project-row').addEventListener('click',()=>expanded++);
+  assert.equal(adapter.inspectProject('mobile-codex-chat').reason,'project_home_pending');assert.equal(expanded,0);
+  ({adapter}=setup('<div>'+row+'<button aria-label="Open project home"></button><button aria-label="Open project home"></button></div>'));
+  assert.equal(adapter.inspectProject('mobile-codex-chat').reason,'project_home_ambiguous');
+});
+
+for (const populated of [false, true]) test(`recognizes mobile project ${populated ? 'list' : 'empty'} with a hidden desktop heading`, () => {
+  const {w,adapter}=setup('<div><div>mobile-codex-chat</div></div><div style="display:none"><h1>mobile-codex-chat</h1></div>'+
+    (populated ? '<a href="/c/unrelated-chat">New chat</a>' : '<div>아직 채팅 없음</div>')+
+    '<form><textarea placeholder="mobile-codex-chat에서 새 채팅" style="display:none"></textarea><div id="prompt-textarea" contenteditable="true" aria-label="mobile-codex-chat에서 새 채팅"></div><button aria-haspopup="menu">Extra High</button></form>',
+    'https://chatgpt.com/g/g-p-6abb78d32fd88191a6c6493ae7abfe1b-mobile-codex-chat/project');
+  w.document.querySelector('h1').getBoundingClientRect=()=>({width:0,height:0});
+  let unrelatedClicks=0;w.document.querySelector('a')?.addEventListener('click',()=>unrelatedClicks++);
+  assert.equal(adapter.inspectProject('mobile-codex-chat').status,'available');
+  assert.equal(adapter.inspectProject('mobile-codex-chat').current,true);
+  assert.equal(unrelatedClicks,0);
+});
+
+test('inserts into the visible ProseMirror editor, never its earlier hidden fallback textarea', () => {
+  const {w,adapter}=setup('<form><textarea placeholder="메시지 입력" style="display:none"></textarea><div id="prompt-textarea" contenteditable="true" tabindex="0"></div><button aria-haspopup="menu">6Pro</button></form>');
+  assert.equal(adapter.prepareComposer().currentModel,'GPT-6 Pro');
+  assert.equal(adapter.insert('검증 메시지').status,'inserted');
+  assert.equal(w.document.querySelector('textarea').value,'');
+  assert.equal(w.document.getElementById('prompt-textarea').textContent,'검증 메시지');
+});
+
+test('opens the performance picker with pointer events and confirms actual Pro text, not effort', () => {
+  const {w,adapter}=setup('<form><div id="prompt-textarea"></div><button type="button" id="effort" aria-haspopup="menu" aria-expanded="false">Extra High</button></form>'+
+    '<div role="menu" hidden><div data-testid="composer-intelligence-picker-content"><div role="menuitem" aria-label="모델 선택">Extra High</div>'+
+    '<div id="performance" role="menuitem" tabindex="0" aria-keyshortcuts="ArrowLeft ArrowRight"><div data-model-reasoning-effort-slider><span role="slider" aria-valuenow="3" aria-valuemax="4"></span></div></div></div></div>');
+  const button=w.document.getElementById('effort'),menu=w.document.querySelector('[role="menu"]'),slider=w.document.querySelector('[role="slider"]');
+  let opens=0,steps=0;
+  button.addEventListener('pointerdown',()=>{opens++;menu.hidden=false;button.setAttribute('aria-expanded','true');});
+  w.document.getElementById('performance').addEventListener('keydown',e=>{if(e.key==='ArrowRight')steps++;});
+  menu.addEventListener('keydown',e=>{if(e.key==='Escape'){menu.hidden=true;button.textContent='6Pro';button.setAttribute('aria-expanded','false');}});
+  assert.equal(adapter.prepareComposer().status,'available');
+  assert.equal(adapter.prepareComposer().currentModel,'');
+  assert.notEqual(adapter.confirmPro().status,'available');
+  assert.equal(adapter.openModelPicker().status,'opened');
+  assert.equal(adapter.openModelPicker().status,'opened');assert.equal(opens,1);
+  assert.equal(adapter.choosePro().status,'waiting');assert.equal(steps,1);
+  assert.equal(adapter.choosePro().status,'waiting');assert.equal(steps,1);
+  slider.setAttribute('aria-valuenow','4');
+  assert.equal(adapter.choosePro().reason,'gpt_6_pro_missing');
+  w.document.querySelector('[aria-label="모델 선택"]').textContent='6 Pro';
+  assert.equal(adapter.choosePro().status,'selected');
+  assert.equal(adapter.confirmPro().confirmedModel,'GPT-6 Pro');
+});
+
+test('never adjusts an unrelated slider or treats an inert Pro label as selected', () => {
+  const {adapter}=setup('<form><div id="prompt-textarea"></div><button aria-haspopup="menu">Extra High</button></form><div role="menu"><div role="slider" aria-valuenow="0" aria-valuemax="4"></div><div inert><button>GPT-6 Pro</button></div></div>');
+  assert.equal(adapter.choosePro().reason,'gpt_6_pro_missing');
+});
+
+test('does not accept a hidden project heading alone or a sidebar/chat mention as the visible title', () => {
+  const {w,adapter}=setup('<nav><div>mobile-codex-chat</div></nav><h1>mobile-codex-chat</h1><article data-message-author-role="user"><div>mobile-codex-chat</div></article><div id="prompt-textarea"></div>',
+    'https://chatgpt.com/g/g-p-existing/project');
+  w.document.querySelector('h1').getBoundingClientRect=()=>({width:0,height:0});
+  assert.equal(adapter.inspectProject('mobile-codex-chat').status,'waiting');
+});
