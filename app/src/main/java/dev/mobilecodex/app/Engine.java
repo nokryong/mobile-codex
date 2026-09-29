@@ -18,6 +18,8 @@ import static dev.mobilecodex.app.core.Json.*;
 
 /** Owns one local app-server process, outside Activity/WebView lifecycle. */
 public final class Engine {
+    /** State events are frequent and cross the WebView bridge, so only expose a bounded tail. */
+    private static final int SNAPSHOT_MESSAGE_LIMIT = 40;
     public interface Ui {
         void event(String name, JSONObject data);
         void approval(Approval approval);
@@ -181,11 +183,47 @@ public final class Engine {
             "authState", authState, "authError", t(authError),
             "accounts", accountProfiles.list(), "rateLimits", rateLimits, "models", models, "workspace", documents.workspace(), "projects", documents.projects(), "sessions", summaries,
             "threadId", threadId, "turnId", turnId, "proBusy", active != null && active.optJSONObject("proOperation") != null,
-            "turnDiff", active == null ? "" : active.optString("turnDiff"), "messages", active == null ? new JSONArray() : active.optJSONArray("messages"),
+            "turnDiff", active == null ? "" : active.optString("turnDiff"), "messages", snapshotMessages(),
+            "messageHistory", messageHistory(active == null ? null : active.optJSONArray("messages"), snapshotMessageStart()),
+            "fastMode", active != null && active.optBoolean("fastMode"),
             "pendingDeletionCount", pendingDeletionCount(), "devtools", devTools.status(), "linux", linux.status(),
             "phone", PhoneUseService.status(context), "phoneToolsAvailable", active == null || active.optInt("phoneToolsVersion") >= 1,
             "permissions", permissionMode, "approvalMode", approvalMode, "allFilesAccess", (Build.VERSION.SDK_INT >= 30 ? Environment.isExternalStorageManager() : context.checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE) == android.content.pm.PackageManager.PERMISSION_GRANTED),
             "directWorkspace", documents.directDirectory() != null, "cwd", projectDirectory().getAbsolutePath());
+    }
+    /** Return the most recent messages in their original chronological order. */
+    private JSONArray snapshotMessages() {
+        JSONArray messages = active == null ? null : active.optJSONArray("messages");
+        if (messages == null) return new JSONArray();
+        int start = Math.max(0, messages.length() - SNAPSHOT_MESSAGE_LIMIT);
+        JSONArray result = new JSONArray();
+        // MainActivity serializes events after crossing to the UI thread.
+        // Copy this bounded page so a later streaming delta cannot mutate an
+        // already-emitted state snapshot before WebView serialization.
+        for (int i = start; i < messages.length(); i++) result.put(uiJsonCopy(messages.opt(i)));
+        return result;
+    }
+    private static Object uiJsonCopy(Object value) {
+        try {
+            if (value instanceof JSONObject) return new JSONObject(value.toString());
+            if (value instanceof JSONArray) return new JSONArray(value.toString());
+        } catch (Exception ignored) { }
+        return value;
+    }
+    private int snapshotMessageStart() {
+        JSONArray messages = active == null ? null : active.optJSONArray("messages");
+        return messages == null ? 0 : Math.max(0, messages.length() - SNAPSHOT_MESSAGE_LIMIT);
+    }
+    /** Metadata points to the first returned item; history requests exclude that cursor item. */
+    private JSONObject messageHistory(JSONArray messages, int start) {
+        int total = messages == null ? 0 : messages.length();
+        start = Math.max(0, Math.min(total, start));
+        String beforeId = "";
+        if (start > 0) {
+            JSONObject first = messages.optJSONObject(start);
+            beforeId = first == null ? "" : first.optString("id");
+        }
+        return obj("hasMore", start > 0, "beforeId", beforeId, "total", total);
     }
     private void publish() { if (!suppressStatePublish) event("state", snapshot()); }
     private void persist() {
@@ -403,7 +441,9 @@ public final class Engine {
                     case "projects.rename" -> { ensureEngineIdle(); JSONObject renamed = documents.renameProject(args.getString("key"), args.getString("name")); publish(); reply.complete(renamed, null); }
                     case "documents.projects" -> reply.complete(obj("projects", documents.projects()), null);
                     case "chat.send" -> { requireChatScope(args); send(args.optString("text", ""), args.optString("model", ""), args.optString("effort", ""),
-                        args.optJSONArray("attachments"), args.optJSONArray("skills"), args.optJSONArray("mentions")); reply.complete(obj("ok", true), null); }
+                        args.optJSONArray("attachments"), args.optJSONArray("skills"), args.optJSONArray("mentions"),
+                        args.has("fastMode") ? args.getBoolean("fastMode") : null); reply.complete(obj("ok", true), null); }
+                    case "chat.history" -> reply.complete(history(args), null);
                     case "chat.pro.prepare" -> reply.complete(preparePro(args), null);
                     case "chat.pro.complete" -> reply.complete(completePro(args), null);
                     case "chat.pro.fail" -> reply.complete(failPro(args), null);
@@ -696,6 +736,31 @@ public final class Engine {
         }
         return "";
     }
+    /** Catalog-driven Fast selection. Do not infer support from a model id or display name. */
+    private String fastServiceTier(String model) throws IOException {
+        JSONObject selected = null;
+        for (int i = 0; i < models.length(); i++) {
+            JSONObject candidate = models.optJSONObject(i);
+            if (candidate != null && (model.equals(candidate.optString("model")) || model.equals(candidate.optString("id")))) {
+                selected = candidate; break;
+            }
+        }
+        if (selected != null) {
+            JSONArray tiers = selected.optJSONArray("serviceTiers");
+            for (String desired : new String[]{"fast", "priority"}) {
+                if (tiers != null) for (int i = 0; i < tiers.length(); i++) {
+                    JSONObject tier = tiers.optJSONObject(i);
+                    if (tier != null && desired.equals(tier.optString("id"))) return desired;
+                }
+            }
+            JSONArray legacy = selected.optJSONArray("additionalSpeedTiers");
+            for (String desired : new String[]{"fast", "priority"}) {
+                if (legacy != null) for (int i = 0; i < legacy.length(); i++)
+                    if (desired.equals(legacy.optString(i))) return desired;
+            }
+        }
+        throw new IOException(t("선택한 모델에서는 Fast 모드를 지원하지 않습니다."));
+    }
     private String workspaceInstructions(String model) {
         JSONObject workspace = documents.workspace();
         return ToolCatalog.INSTRUCTIONS + " Selected Android folder: " + workspace.optString("name", "none")
@@ -833,7 +898,7 @@ public final class Engine {
         return t("제목 없는 대화");
     }
     private JSONObject userMessage(String text, JSONArray attachmentIds, JSONArray skills, JSONArray mentions) throws Exception {
-        JSONObject message = obj("role", "user", "text", text, "id", UUID.randomUUID().toString());
+        JSONObject message = obj("role", "user", "text", text, "id", UUID.randomUUID().toString(), "createdAt", System.currentTimeMillis());
         if (skills != null && skills.length() > 0) message.put("skills", new JSONArray(skills.toString()));
         if (mentions != null && mentions.length() > 0) message.put("mentions", new JSONArray(mentions.toString()));
         if (attachmentIds != null && attachmentIds.length() > 0) {
@@ -853,6 +918,40 @@ public final class Engine {
     private void requireChatScope(JSONObject args) throws IOException {
         if (args.has("expectedThreadId") && !args.optString("expectedThreadId").equals(threadId)) throw new IOException(t("대화가 바뀌었습니다. 현재 대화에서 다시 보내 주세요."));
         if (args.has("workspaceKey")) requireScope(args);
+    }
+    /** Fetch older local display history without exposing another thread or an overlapping cursor item. */
+    private JSONObject history(JSONObject args) throws IOException {
+        // JSONObject#getString throws checked JSONException. Validate the wire
+        // shape explicitly so malformed/stale requests take the normal RPC
+        // error path and this helper remains an IOException-only boundary.
+        Object rawThread = args.opt("threadId");
+        Object rawBeforeId = args.opt("beforeId");
+        if (!(rawThread instanceof String) || !(rawBeforeId instanceof String))
+            throw new IOException(t("이전 메시지 위치가 오래되었습니다. 대화를 다시 열어 주세요."));
+        String requestedThread = (String) rawThread;
+        String beforeId = (String) rawBeforeId;
+        if (requestedThread.isBlank() || beforeId.isBlank() || active == null || !requestedThread.equals(threadId)
+                || !requestedThread.equals(active.optString("id")))
+            throw new IOException(t("대화가 바뀌었습니다. 현재 대화를 다시 열어 주세요."));
+        JSONObject stored = session(requestedThread);
+        if (stored == null || stored.optBoolean("deletionPending")) throw new IOException(t("대화를 찾을 수 없습니다."));
+        JSONArray messages = stored.optJSONArray("messages");
+        if (messages == null) messages = new JSONArray();
+        int cursor = -1;
+        for (int i = 0; i < messages.length(); i++) {
+            JSONObject message = messages.optJSONObject(i);
+            if (message != null && beforeId.equals(message.optString("id"))) {
+                if (cursor >= 0) throw new IOException(t("이전 메시지 위치가 오래되었습니다. 대화를 다시 열어 주세요."));
+                cursor = i;
+            }
+        }
+        if (cursor < 0) throw new IOException(t("이전 메시지 위치가 오래되었습니다. 대화를 다시 열어 주세요."));
+        int requestedLimit = args.has("limit") ? args.optInt("limit", SNAPSHOT_MESSAGE_LIMIT) : SNAPSHOT_MESSAGE_LIMIT;
+        int limit = Math.max(1, Math.min(SNAPSHOT_MESSAGE_LIMIT, requestedLimit));
+        int start = Math.max(0, cursor - limit);
+        JSONArray page = new JSONArray();
+        for (int i = start; i < cursor; i++) page.put(uiJsonCopy(messages.opt(i)));
+        return obj("threadId", requestedThread, "messages", page, "messageHistory", messageHistory(messages, start));
     }
     private void steer(JSONObject args) throws Exception {
         requireChatScope(args);
@@ -907,7 +1006,7 @@ public final class Engine {
         if (target == null) {
             target = obj("id", localId, "sessionVersion", 2, "title", titleFor(text, args.optJSONArray("attachments")),
                 "workspace", documents.workspace().optString("name"), "workspaceKey", documents.key(),
-                "messages", new JSONArray(), "imageHistoryVersion", 1, "phoneToolsVersion", 1);
+                "messages", new JSONArray(), "imageHistoryVersion", 1, "phoneToolsVersion", 1, "fastMode", false);
             replacement.put(target);
         }
         JSONObject message = userMessage(text, args.optJSONArray("attachments"), null, args.optJSONArray("mentions"));
@@ -1034,7 +1133,7 @@ public final class Engine {
         else if (projectPath != null && projectPath.matches("/projects/[A-Za-z0-9_-]+")) scoped = projectPath + "/c/" + conversationId;
         return normalized.equals(scoped) ? normalized : "";
     }
-    private void send(String text, String model, String effort, JSONArray attachmentIds, JSONArray skills, JSONArray mentions) throws Exception {
+    private void send(String text, String model, String effort, JSONArray attachmentIds, JSONArray skills, JSONArray mentions, Boolean fastMode) throws Exception {
         if (ProContextBuilder.MODEL_ID.equals(model)) throw new IOException(t("GPT-6-Pro 웹 모델은 전용 전송 경로를 사용해야 합니다."));
         if (text.length() > 50000) throw new IOException(t("메시지는 최대 50,000자까지 입력할 수 있습니다."));
         documents.requireWorkspaceAvailable();
@@ -1043,6 +1142,9 @@ public final class Engine {
         start();
         if (account.length() == 0) throw new IOException(t("ChatGPT 계정으로 로그인해 주세요."));
         String actualModel = resolvedModel(model);
+        // A supplied value applies to this new turn only. Omission deliberately
+        // preserves legacy inheritance and does not alter a session preference.
+        String serviceTierForTurn = fastMode == null ? null : (fastMode ? fastServiceTier(actualModel) : "default");
         JSONObject candidate = null;
         String candidateRemoteId = "", candidateLocalId = "";
         if (active == null) {
@@ -1052,7 +1154,7 @@ public final class Engine {
             candidateLocalId = "local-" + UUID.randomUUID();
             candidate = obj("id", candidateLocalId, "sessionVersion", 2, "codexThreadId", candidateRemoteId,
                 "title", titleFor(text, attachmentIds), "workspace", documents.workspace().optString("name"), "workspaceKey", documents.key(), "model", actualModel,
-                "messages", new JSONArray(), "imageHistoryVersion", 1, "phoneToolsVersion", 1);
+                "messages", new JSONArray(), "imageHistoryVersion", 1, "phoneToolsVersion", 1, "fastMode", false);
         } else {
             if (!active.optString("workspaceKey").equals(documents.key())) throw new IOException(t("이 대화의 원래 작업 폴더를 다시 연결해 주세요."));
             if (activeCodexThreadId().isBlank()) {
@@ -1067,12 +1169,14 @@ public final class Engine {
             JSONObject params = obj("threadId", targetRemote, "input", input, "cwd", projectDirectory().getAbsolutePath(), "approvalPolicy", approvalPolicy(), "approvalsReviewer", approvalsReviewer());
             if (!actualModel.isEmpty()) params.put("model", actualModel);
             if (!effort.isEmpty()) params.put("effort", effort);
+            if (serviceTierForTurn != null) params.put("serviceTierForTurn", serviceTierForTurn);
             JSONObject turn = call("turn/start", params).optJSONObject("turn");
             if (candidate != null) { active = candidate; threadId = candidateLocalId; serverThreadId = candidateRemoteId; sessions.put(active); }
             else {
                 active.put("model", actualModel);
                 if (activeCodexThreadId().isBlank()) { active.put("codexThreadId", targetRemote); serverThreadId = targetRemote; }
             }
+            if (fastMode != null) active.put("fastMode", fastMode);
             active.getJSONArray("messages").put(userMessage(text, attachmentIds, skills, mentions));
             if (turn != null) {
                 String startedTurn = turn.optString("id", "");

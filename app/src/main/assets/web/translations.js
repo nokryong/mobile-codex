@@ -1,5 +1,16 @@
 /* UI messages only; user/model/file content is never translated. */
 window.MobileCodexEnglish = {
+  "Fast 모드": "Fast mode",
+  "선택한 모델에서는 Fast 모드를 지원하지 않습니다.": "The selected model does not support Fast mode.",
+  "이전 메시지 위치가 오래되었습니다. 대화를 다시 열어 주세요.": "The message cursor is no longer valid. Reopen the conversation.",
+  "대화가 바뀌었습니다. 현재 대화를 다시 열어 주세요.": "The conversation changed. Reopen the current conversation.",
+  "GPT-6-Pro 웹에서는 Fast 모드를 사용할 수 없습니다.": "Fast mode is unavailable for ChatGPT Pro web.",
+  "선택한 모델은 Fast 모드를 지원하지 않습니다.": "The selected model does not support Fast mode.",
+  "Fast 모드는 다음 요청부터 변경할 수 있습니다.": "Fast mode can be changed for the next request.",
+  "Fast 모드 켜짐 · 사용량·요금이 더 높을 수 있습니다.": "Fast mode on · Usage and costs may be higher.",
+  "Fast 모드 켜기 · 사용량·요금이 더 높을 수 있습니다.": "Enable Fast mode · Usage and costs may be higher.",
+  "이전 대화 불러오는 중…": "Loading earlier messages…",
+  "이전 대화를 불러오지 못했습니다. 위로 올려 다시 시도해 주세요.": "Could not load earlier messages. Scroll up to try again.",
   "Pro 답변 중": "Pro is responding",
   "계정 설정": "Account settings",
   "계정 정보를 불러오지 못했습니다. 다시 시도해 주세요.": "Could not load account details. Please try again.",

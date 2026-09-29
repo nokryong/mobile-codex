@@ -7,6 +7,7 @@
   const pending = new Map(), requestQueue = new Map();
   const dialogs = [], frame = fn => (window.requestAnimationFrame || (cb => setTimeout(cb, 0)))(fn);
   let following = true, draftScope = '', sending = null, configOriginal = '', sidebarFocus = null, openedImage = null;
+  let historyView = {threadId:'', hasMore:false, beforeId:'', total:0, loading:false, loaded:false, top:0};
   const imageReads = new Map();
   let viewerImages = [], viewerIndex = 0, viewerGroup = null;
   let seq = 0, state = {messages: [], sessions: [], projects: [], models: [], accounts: [], account: {}, authState:'unknown', rateLimits: {}, workspace: {}}, folder = '', openedFile = null, login = null, inputResolve = null, toastTimer, fileSeq = 0, modelKey = '', modelRefreshGeneration = 0, displayedRequest = null, projectMenuFocus = null, projectMenuActionClosing = false;
@@ -190,8 +191,8 @@
   }
   function contextScope(scope = draftScope) { return scope ? scope + ':context' : ''; }
   function optionsScope(scope = draftScope) { return scope ? scope + ':options' : ''; }
-  function restoreOptions(scope) { try { const value = JSON.parse(localStorage.getItem(optionsScope(scope)) || '{}'); return {model:value.model || '', effort:value.effort || ''}; } catch { return {model:'', effort:''}; } }
-  function saveOptions() { if (!draftScope) return; draftOptions = {model:$('model').value, effort:$('effort').value}; try { if (draftOptions.model || draftOptions.effort) localStorage.setItem(optionsScope(), JSON.stringify(draftOptions)); else localStorage.removeItem(optionsScope()); } catch {} }
+  function restoreOptions(scope) { try { const value = JSON.parse(localStorage.getItem(optionsScope(scope)) || '{}'); return {model:value.model || '', effort:value.effort || '', fastMode:typeof value.fastMode === 'boolean' ? value.fastMode : undefined}; } catch { return {model:'', effort:''}; } }
+  function saveOptions() { if (!draftScope) return; draftOptions = {model:$('model').value, effort:$('effort').value, fastMode:draftOptions.fastMode === true}; try { localStorage.setItem(optionsScope(), JSON.stringify(draftOptions)); } catch {} }
   function saveDraft() {
     if (!draftScope) return;
     try {
@@ -232,13 +233,31 @@
     if (createdBySend) { sending.scopes.add(scope); saveDraft(); saveOptions(); }
     else { try { $('prompt').value = localStorage.getItem(scope) || ''; } catch { $('prompt').value = ''; } draftContext = restoreContext(scope); renderDraftContext(); }
     if (!createdBySend) draftOptions = restoreOptions(scope);
+    if (draftOptions.fastMode === undefined) draftOptions.fastMode = next.fastMode === true;
     if ([...$('model').options].some(o => o.value === draftOptions.model)) $('model').value = draftOptions.model;
     efforts(); if ([...$('effort').options].some(o => o.value === draftOptions.effort)) $('effort').value = draftOptions.effort;
     sizeComposer();
   }
   const proSelected = () => $('model')?.value === PRO_MODEL;
-  function updateSend() { const pro = proSelected(), occupied = !!state.proBusy || (pro && !!state.busy); $('voice-input').disabled = !draftScope || voiceStarting || voiceActive || !!sending; $('voice-input').setAttribute('aria-busy', String(voiceStarting || voiceActive)); $('send').disabled = ((!$('prompt').value.trim() && !(draftContext.attachments || []).length) || !!sending || voiceStarting || voiceActive || occupied); const steering = state.busy && !pro; $('send').setAttribute('aria-label', pro ? t('GPT-6-Pro에 보내기') : steering ? t('진행 중인 작업에 추가 지시') : t('메시지 보내기')); $('send').title = pro ? t('GPT-6-Pro에 보내기') : steering ? t('추가 지시') : t('보내기'); }
-  function scrollLatest() { following = true; $('chat-scroll').scrollTop = $('chat-scroll').scrollHeight; $('jump-latest').hidden = true; }
+  function fastTier() {
+    if (proSelected()) return '';
+    const selected = $('model').value;
+    const model = selected ? state.models.find(m => (m.model || m.id) === selected) : state.models.find(m => m.isDefault);
+    const tiers = model?.serviceTiers?.length ? model.serviceTiers : (model?.additionalSpeedTiers || []);
+    return tiers.map(tier => typeof tier === 'string' ? tier : tier.id).find(id => id === 'fast' || id === 'priority') || '';
+  }
+  function updateFastButton() {
+    const supported = !!fastTier(), enabled = supported && draftOptions.fastMode === true, control = $('fast-mode');
+    control.disabled = !supported || !!state.busy || !!state.proBusy || !!sending;
+    control.setAttribute('aria-pressed', String(enabled));
+    const title = proSelected() ? t('GPT-6-Pro 웹에서는 Fast 모드를 사용할 수 없습니다.')
+      : !supported ? t('선택한 모델은 Fast 모드를 지원하지 않습니다.')
+      : state.busy || state.proBusy ? t('Fast 모드는 다음 요청부터 변경할 수 있습니다.')
+      : enabled ? t('Fast 모드 켜짐 · 사용량·요금이 더 높을 수 있습니다.') : t('Fast 모드 켜기 · 사용량·요금이 더 높을 수 있습니다.');
+    control.title = title; control.setAttribute('aria-label', title);
+  }
+  function updateSend() { const pro = proSelected(), occupied = !!state.proBusy || (pro && !!state.busy); $('voice-input').disabled = !draftScope || voiceStarting || voiceActive || !!sending; $('voice-input').setAttribute('aria-busy', String(voiceStarting || voiceActive)); $('send').disabled = ((!$('prompt').value.trim() && !(draftContext.attachments || []).length) || !!sending || voiceStarting || voiceActive || occupied); const steering = state.busy && !pro; $('send').setAttribute('aria-label', pro ? t('GPT-6-Pro에 보내기') : steering ? t('진행 중인 작업에 추가 지시') : t('메시지 보내기')); $('send').title = pro ? t('GPT-6-Pro에 보내기') : steering ? t('추가 지시') : t('보내기'); updateFastButton(); }
+  function scrollLatest() { following = true; $('chat-scroll').scrollTop = $('chat-scroll').scrollHeight; historyView.top = $('chat-scroll').scrollTop; $('jump-latest').hidden = true; }
   function sizeComposer() {
     const field = $('prompt'), cap = Math.max(60, Math.min(160, window.innerHeight * .24));
     field.style.height = '0px';
@@ -259,6 +278,7 @@
     } else $('sidebar').inert = !document.body.classList.contains('sidebar-open');
   }
   function optionsSummary() {
+    updateFastButton();
     if (proSelected()) {
       $('model-summary').textContent = PRO_LABEL + ' · ' + t('읽기 전용');
       $('composer-options').setAttribute('aria-label', t('작업 설정: ') + PRO_LABEL + t(', 읽기 전용'));
@@ -761,21 +781,95 @@
     try { localStorage.setItem('chat-icons', chatIconsEnabled ? 'on' : 'off'); } catch { toast(t('아이콘 설정을 저장하지 못했습니다.')); }
     drawStatusIcons(); drawMessages();
   }
+  function historyStatus(message = '') {
+    let status = $('history-status');
+    if (!status) { status = node('p', '', 'history-status'); status.id = 'history-status'; status.setAttribute('role','status'); $('messages').before(status); }
+    status.textContent = message; status.hidden = !message;
+  }
+  function historySnapshot(next, changedThread) {
+    const incoming = next.messages || [], meta = next.messageHistory;
+    const total = Number(meta?.total) || incoming.length;
+    const overlap = incoming.length ? (state.messages || []).findIndex(m => m.id === incoming[0].id) : -1;
+    const retain = !changedThread && meta && historyView.loaded && total >= historyView.total && overlap >= 0;
+    if (retain) {
+      const ids = new Set(incoming.map(m => m.id));
+      next = {...next, messages:[...(state.messages || []).slice(0,overlap).filter(m => !ids.has(m.id)), ...incoming]};
+      historyView.total = total;
+    } else {
+      historyView = {threadId:next.threadId || '', hasMore:meta?.hasMore === true, beforeId:meta?.beforeId || '', total,
+        loading:false, loaded:false, top:changedThread ? 0 : $('chat-scroll').scrollTop};
+      historyStatus();
+    }
+    return next;
+  }
+  function visibleMessageAnchor() {
+    const area = $('chat-scroll'), top = area.getBoundingClientRect().top;
+    const element = [...$('messages').children].find(el => el.getBoundingClientRect().bottom > top);
+    return {id:element?.dataset.id, offset:element ? element.getBoundingClientRect().top - top : 0,
+      scrollTop:area.scrollTop, height:area.scrollHeight};
+  }
+  async function loadEarlierMessages() {
+    const view = historyView;
+    if (view.loading || !view.hasMore || !view.beforeId || !state.threadId) return;
+    const hadHistory = view.loaded;
+    view.loading = true; view.loaded = true;
+    historyStatus(t('이전 대화 불러오는 중…'));
+    try {
+      const result = await call('chat.history', {threadId:state.threadId, beforeId:view.beforeId, limit:40});
+      if (view !== historyView || view.threadId !== state.threadId) return;
+      if (result.threadId !== state.threadId || !Array.isArray(result.messages) || !result.messageHistory)
+        throw new Error(t('이전 대화를 불러오지 못했습니다. 위로 올려 다시 시도해 주세요.'));
+      // Capture at response time so scrolling while the request is pending is respected.
+      const anchor = visibleMessageAnchor(), preservePosition = !following;
+      const ids = new Set(state.messages.map(m => m.id)), older = [];
+      for (const message of result.messages) if (message.id && !ids.has(message.id)) { ids.add(message.id); older.push(message); }
+      state.messages = [...older,...state.messages];
+      view.beforeId = result.messageHistory.beforeId || '';
+      view.hasMore = result.messageHistory.hasMore === true;
+      view.total = Math.max(Number(result.messageHistory.total) || 0, view.total);
+      historyStatus(); drawMessages();
+      if (preservePosition) {
+        const area = $('chat-scroll'), element = [...$('messages').children].find(el => el.dataset.id === anchor.id);
+        const adjustment = element ? element.getBoundingClientRect().top - area.getBoundingClientRect().top - anchor.offset : area.scrollHeight - anchor.height;
+        const behavior = area.style.scrollBehavior; area.style.scrollBehavior = 'auto';
+        area.scrollTop = anchor.scrollTop + adjustment; area.style.scrollBehavior = behavior;
+        view.top = area.scrollTop;
+      }
+    } catch (_) {
+      if (view !== historyView || view.threadId !== state.threadId) return;
+      view.loaded = hadHistory;
+      historyStatus(t('이전 대화를 불러오지 못했습니다. 위로 올려 다시 시도해 주세요.'));
+    } finally { if (view === historyView) view.loading = false; }
+  }
+  function messageDate(value) {
+    if (value === undefined || value === null || value === '') return null;
+    const date = new Date(value);
+    if (!Number.isFinite(date.getTime()) || date.getTime() <= 0) return null;
+    const pad = value => String(value).padStart(2,'0');
+    const time = node('time', `${pad(date.getMonth()+1)}.${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`, 'message-time');
+    time.dateTime = date.toISOString(); time.title = date.toLocaleString(L.language());
+    time.setAttribute('aria-label', time.title); return time;
+  }
   function drawMessages() {
     const messages = state.messages || [];
     const elements = new Map(Array.from($('messages').children).map(n => [n.dataset.id, n]));
     const keep = new Set();
+    let previous = null;
     C.groupImageMessages(messages).forEach(m => {
       keep.add(m.id); let el = elements.get(m.id);
-      if (!el) { el = node('article', null, 'message ' + (m.role === 'user' ? 'user' : 'assistant')); el.dataset.id = m.id; $('messages').append(el); }
+      if (!el) { el = node('article', null, 'message ' + (m.role === 'user' ? 'user' : 'assistant')); el.dataset.id = m.id; }
+      const position = previous ? previous.nextSibling : $('messages').firstChild;
+      if (el !== position) $('messages').insertBefore(el, position);
+      previous = el;
       const iconName = m.imageStatus === 'generating' ? 'working' : state.busy && m.id === messages[messages.length - 1]?.id ? 'thinking' : C.messageIcon(m);
-      const signature = JSON.stringify([m.text, m.status, m.source, m.backend, m.displayModel, m.error, m.images, m.attachments, m.imageStatus, m.imageError, L.language(), chatIconsEnabled, iconName, characterVisualKey()]);
+      const signature = JSON.stringify([m.text, m.createdAt, m.status, m.source, m.backend, m.displayModel, m.error, m.images, m.attachments, m.imageStatus, m.imageError, L.language(), chatIconsEnabled, iconName, characterVisualKey()]);
       if (el.dataset.signature !== signature) {
         el.dataset.signature = signature;
         if (m.role === 'user') {
           const text = m.text || '';
           const body = node('div', text, 'user-message-text');
           el.replaceChildren(body);
+          const date = messageDate(m.createdAt); el.classList.toggle('has-date', !!date); if (date) el.append(date);
           if (m.attachments?.length) el.append(sentAttachments(m.attachments));
           if (m.source === 'ChatGPT Pro' || m.backend === 'chatgpt-web') el.prepend(node('span', m.displayModel || PRO_LABEL, 'message-source-badge'));
           if (['not_sent','uncertain','failed'].includes(m.status)) el.append(node('p', m.status === 'uncertain' ? t('전송 상태를 확인해야 합니다. 같은 메시지를 다시 보내기 전에 ChatGPT 웹 대화를 확인하세요.') : (m.error || t('보내지 못했습니다.')), 'message-transport-status'));
@@ -1065,7 +1159,7 @@
     const previousAccountScope = accountScope(state.account), nextAccountScope = accountScope(next.account);
     if (previousAccountScope !== nextAccountScope) { usageGeneration++; resetCredits = null; resetCreditBusy = false; resetCreditIdempotencyKey = ''; resetCreditSelectedId = ''; resetCreditScope = nextAccountScope; }
     const changedThread = state.threadId !== next.threadId;
-    setDraftScope(next); state = next;
+    setDraftScope(next); state = historySnapshot(next, changedThread);
     state.models ||= []; state.messages ||= []; state.projects ||= []; state.accounts ||= []; state.workspace ||= {}; state.account ||= {}; state.rateLimits ||= {}; setCharacterState(state.characters);
     const logged = C.isLoggedIn(state.account), selected = state.workspace.selected;
     const name = selected ? state.workspace.name : t('일반 대화');
@@ -1702,7 +1796,9 @@
     const submitted = {value, context:JSON.parse(JSON.stringify(draftContext)), scopes:new Set([draftScope])}; sending = submitted;
     saveDraft(); updateSend(); scrollLatest();
     try {
-      await call(pro ? 'chat.pro.send' : steer ? 'chat.steer' : 'chat.send', {text, expectedTurnId, expectedThreadId, workspaceKey, model:$('model').value, effort:pro ? '' : $('effort').value, attachments:submitted.context.attachments.map(x => x.id), skills:submitted.context.skills, mentions:submitted.context.mentions});
+      await call(pro ? 'chat.pro.send' : steer ? 'chat.steer' : 'chat.send', {text, expectedTurnId, expectedThreadId, workspaceKey, model:$('model').value, effort:pro ? '' : $('effort').value,
+        ...(!pro && !steer ? {fastMode:!!fastTier() && draftOptions.fastMode === true} : {}),
+        attachments:submitted.context.attachments.map(x => x.id), skills:submitted.context.skills, mentions:submitted.context.mentions});
       // Keep text typed during the request, or drafts from a different conversation.
       if (submitted.scopes.has(draftScope) && $('prompt').value === value) {
         $('prompt').value = '';
@@ -1736,9 +1832,13 @@
   $('composer').addEventListener('click', e => { if (! $('composer').classList.contains('composer-expanded') && e.target === $('composer')) $('prompt').focus(); });
   $('prompt').addEventListener('click', () => queryAutocomplete());
   $('chat-scroll').addEventListener('scroll', () => {
-    const area = $('chat-scroll'); following = area.scrollHeight - area.scrollTop - area.clientHeight < 80;
+    const area = $('chat-scroll'), upward = area.scrollTop < historyView.top;
+    historyView.top = area.scrollTop; following = area.scrollHeight - area.scrollTop - area.clientHeight < 80;
     $('jump-latest').hidden = following || !state.messages.length;
+    if (upward && area.scrollTop <= 160) loadEarlierMessages();
   }, {passive:true});
+  $('chat-scroll').addEventListener('wheel', e => { if (e.deltaY < 0 && $('chat-scroll').scrollTop <= 160) { following = false; loadEarlierMessages(); } }, {passive:true});
+  on('fast-mode', () => { if ($('fast-mode').disabled) return; draftOptions.fastMode = draftOptions.fastMode !== true; saveOptions(); updateFastButton(); });
   on('voice-input', startVoiceInput);
   on('dictation-done', () => call('voice.stop'));
   on('dictation-cancel', () => call('voice.cancel'));

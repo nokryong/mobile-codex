@@ -7,6 +7,9 @@ const root = 'app/src/main/assets/web/';
 const opened = [];
 afterEach(() => { for (const dom of opened.splice(0)) dom.window.close(); });
 const tick = () => new Promise(r => setTimeout(r, 10));
+const fastModel = {id:'fast-model',model:'fast-model',displayName:'Fast-capable model',isDefault:true,serviceTiers:[{id:'priority',name:'Fast'}]};
+const historyMessages = (from, to) => Array.from({length:to-from+1}, (_,i)=>({id:'m'+(from+i),role:(from+i)%2?'user':'assistant',text:'Message '+(from+i)}));
+const historyMeta = (before, total=100) => ({beforeId:before?'m'+before:'',hasMore:!!before,total});
 const resetCredit = (id, expiresAt) => ({id, expiresAt, grantedAt:1900000000, status:'available', resetType:'codexRateLimits'});
 function setup(overrides = {}, options = {}) {
   const dom = new JSDOM(fs.readFileSync(root+'index.html','utf8'), {url: 'https://appassets.androidplatform.net/index.html', runScripts: 'outside-only'}); opened.push(dom);
@@ -29,6 +32,100 @@ function setup(overrides = {}, options = {}) {
   w.eval(fs.readFileSync(root+'ui-core.js','utf8')); w.eval(fs.readFileSync(root+'app.js','utf8'));
   return {w,calls,responses,snapshot};
 }
+test('Fast is an explicit per-draft lightning toggle first in the bottom row',async()=>{
+ const {w,calls,snapshot}=setup();await tick();const d=w.document;
+ w.mobileCodexEvent('state',{...snapshot,models:[fastModel]});
+ const toggle=d.getElementById('fast-mode');
+ assert.equal(d.querySelector('.composer-actions').firstElementChild,toggle);
+ assert.equal(toggle.querySelector('use').getAttribute('href'),'#i-bolt');
+ assert.equal(toggle.disabled,false);assert.equal(toggle.getAttribute('aria-pressed'),'false');
+ toggle.click();await tick();assert.equal(toggle.getAttribute('aria-pressed'),'true');
+ assert.equal(calls.some(c=>c.action==='chat.send'),false,'toggling never sends a paid request');
+ d.getElementById('prompt').value='test';d.getElementById('composer').dispatchEvent(new w.Event('submit',{cancelable:true}));await tick();
+ assert.equal(calls.find(c=>c.action==='chat.send').args.fastMode,true);
+ toggle.click();await tick();d.getElementById('prompt').value='normal';d.getElementById('composer').dispatchEvent(new w.Event('submit',{cancelable:true}));await tick();
+ assert.equal(calls.filter(c=>c.action==='chat.send').at(-1).args.fastMode,false);
+ assert.equal(calls.some(c=>c.action==='config.write'||c.action==='permissions.set'),false);
+});
+test('Fast stays unavailable for unsupported models and Pro, and cannot change a running turn',async()=>{
+ const {w,calls,snapshot}=setup();await tick();const d=w.document,toggle=d.getElementById('fast-mode');
+ assert.equal(toggle.disabled,true);
+ w.mobileCodexEvent('state',{...snapshot,models:[fastModel],busy:true});assert.equal(toggle.disabled,true);
+ w.mobileCodexEvent('state',{...snapshot,models:[fastModel]});assert.equal(toggle.disabled,false);
+ d.querySelector('#model-list input[value="chatgpt-web:gpt-6-pro"]').click();await tick();
+ assert.equal(toggle.disabled,true);assert.equal(toggle.getAttribute('aria-pressed'),'false');
+ d.getElementById('prompt').value='Pro test';d.getElementById('composer').dispatchEvent(new w.Event('submit',{cancelable:true}));await tick();
+ assert.equal(Object.hasOwn(calls.find(c=>c.action==='chat.pro.send').args,'fastMode'),false);
+});
+test('Fast choices are isolated between conversation drafts',async()=>{
+ const {w,snapshot}=setup();await tick();const toggle=w.document.getElementById('fast-mode');
+ const first={...snapshot,models:[fastModel]};w.mobileCodexEvent('state',first);
+ toggle.click();await tick();assert.equal(toggle.getAttribute('aria-pressed'),'true');
+ w.mobileCodexEvent('state',{...first,threadId:'second',fastMode:false});assert.equal(toggle.getAttribute('aria-pressed'),'false');
+ w.mobileCodexEvent('state',first);assert.equal(toggle.getAttribute('aria-pressed'),'true');
+});
+test('user bubbles show small dates only when a real timestamp exists',async()=>{
+ const {w,snapshot}=setup();await tick();const now=Date.UTC(2026,8,29,12,34);
+ w.mobileCodexEvent('state',{...snapshot,messages:[
+  {id:'dated',role:'user',text:'hello',createdAt:now},
+  {id:'assistant',role:'assistant',text:'answer',createdAt:now},
+  {id:'legacy',role:'user',text:'old'},
+  {id:'invalid',role:'user',text:'invalid',createdAt:'bad date'},
+  {id:'zero',role:'user',text:'unknown',createdAt:0}
+ ]});
+ const dates=w.document.querySelectorAll('#messages time');assert.equal(dates.length,1);
+ assert.equal(dates[0].dateTime,new Date(now).toISOString());assert.match(dates[0].textContent,/09\.29 \d{2}:\d{2}/);
+ assert.equal(dates[0].closest('article').dataset.id,'dated');assert.ok(dates[0].title);
+});
+test('history lazy-loads in the existing scroller and keeps order, nodes and reading position',async()=>{
+ let resolveHistory;
+ const {w,calls,snapshot}=setup({'chat.history':()=>new Promise(resolve=>{resolveHistory=resolve;})});await tick();
+ const d=w.document,area=d.getElementById('chat-scroll'),list=d.getElementById('messages');
+ Object.defineProperty(area,'scrollHeight',{get:()=>list.children.length*100});Object.defineProperty(area,'clientHeight',{value:300});
+ const recent={...snapshot,messages:historyMessages(61,100),messageHistory:historyMeta(61)};
+ w.mobileCodexEvent('state',recent);await tick();assert.equal(list.children.length,40);
+ assert.equal(calls.filter(c=>c.action==='chat.history').length,0);
+ const original=d.querySelector('[data-id="m61"]');area.scrollTop=100;area.dispatchEvent(new w.Event('scroll'));await tick();
+ area.dispatchEvent(new w.Event('wheel'));await tick();
+ assert.equal(calls.filter(c=>c.action==='chat.history').length,1);
+ assert.deepEqual(calls.find(c=>c.action==='chat.history').args,{threadId:'t',beforeId:'m61',limit:40});
+ resolveHistory({threadId:'t',messages:historyMessages(21,61),messageHistory:historyMeta(21)});await tick();
+ assert.equal(list.children.length,80);assert.equal(list.firstElementChild.dataset.id,'m21');assert.equal(list.lastElementChild.dataset.id,'m100');
+ assert.equal(d.querySelector('[data-id="m61"]'),original);assert.equal(area.scrollTop,4100);
+ assert.equal(d.querySelectorAll('#chat-scroll').length,1);assert.equal(d.querySelector('#history-status button'),null);
+ w.mobileCodexEvent('state',{...recent,messages:historyMessages(62,101),messageHistory:historyMeta(62,101)});
+ assert.equal(list.children.length,81);assert.equal(list.firstElementChild.dataset.id,'m21');assert.equal(list.lastElementChild.dataset.id,'m101');
+ assert.equal(d.querySelector('[data-id="m61"]'),original);
+});
+test('history never expands the recent window without upward navigation',async()=>{
+ const {w,calls,snapshot}=setup();await tick();const list=w.document.getElementById('messages');
+ w.mobileCodexEvent('state',{...snapshot,messages:historyMessages(61,100),messageHistory:historyMeta(61)});
+ w.mobileCodexEvent('state',{...snapshot,messages:historyMessages(62,101),messageHistory:historyMeta(62,101)});
+ assert.equal(list.children.length,40);assert.equal(list.firstElementChild.dataset.id,'m62');
+ assert.equal(calls.some(c=>c.action==='chat.history'),false);
+});
+test('history discards an in-flight page after switching conversations',async()=>{
+ let resolveHistory;
+ const {w,snapshot}=setup({'chat.history':()=>new Promise(resolve=>{resolveHistory=resolve;})});await tick();
+ w.mobileCodexEvent('state',{...snapshot,messages:historyMessages(61,100),messageHistory:historyMeta(61)});
+ w.document.getElementById('chat-scroll').dispatchEvent(new w.WheelEvent('wheel',{deltaY:-20}));await tick();
+ w.mobileCodexEvent('state',{...snapshot,threadId:'second',messages:[{id:'other',role:'user',text:'Other conversation'}],messageHistory:historyMeta(0,1)});
+ resolveHistory({threadId:'t',messages:historyMessages(21,60),messageHistory:historyMeta(21)});await tick();
+ assert.equal(w.document.getElementById('messages').children.length,1);assert.equal(w.document.querySelector('#messages article').dataset.id,'other');
+});
+test('history preserves the live tail while a page is pending and errors retry only on upward navigation',async()=>{
+ let resolveHistory,attempt=0;
+ const {w,calls,snapshot}=setup({'chat.history':()=>{if(++attempt===1)throw new Error('offline');return new Promise(resolve=>{resolveHistory=resolve;});}});await tick();
+ const area=w.document.getElementById('chat-scroll'),list=w.document.getElementById('messages');
+ const recent={...snapshot,messages:historyMessages(61,100),messageHistory:historyMeta(61)};w.mobileCodexEvent('state',recent);
+ area.dispatchEvent(new w.WheelEvent('wheel',{deltaY:-20}));await tick();assert.equal(list.children.length,40);
+ assert.match(w.document.getElementById('history-status').textContent,/다시 시도/);await tick();assert.equal(attempt,1);
+ area.dispatchEvent(new w.WheelEvent('wheel',{deltaY:-20}));await tick();
+ w.mobileCodexEvent('state',{...recent,messages:historyMessages(62,101),messageHistory:historyMeta(62,101)});
+ resolveHistory({threadId:'t',messages:historyMessages(21,60),messageHistory:historyMeta(21,100)});await tick();
+ assert.equal(list.children.length,81);assert.equal(list.firstElementChild.dataset.id,'m21');assert.equal(list.lastElementChild.dataset.id,'m101');
+ assert.equal(calls.filter(c=>c.action==='chat.history').length,2);assert.equal(w.document.getElementById('history-status').hidden,true);
+});
 test('cold startup keeps the normal screen while the account is restored silently',async()=>{
  let resolveState;
  const {w}=setup({state:()=>new Promise(resolve=>{resolveState=resolve;})});

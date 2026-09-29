@@ -648,6 +648,132 @@ public class EngineOfflineSessionTest {
         assertEquals(0, handle(restarted, "state", new JSONObject()).getInt("pendingDeletionCount"));
         restarted.io.shutdownNow();
     }
+    @Test public void snapshotIsBoundedAndHistoryPagesChronologicallyWithoutChangingStoredMessages() throws Exception {
+        JSONArray messages = new JSONArray();
+        for (int i = 0; i < 85; i++) messages.put(obj("id", "m" + i, "role", "user", "text", "message " + i));
+        dev.mobilecodex.app.core.Utf8Files.write(new File(context.getFilesDir(), "sessions.json").toPath(),
+            array(obj("id", "s1", "title", "Long", "workspace", "", "workspaceKey", "", "messages", messages)).toString());
+        Engine engine = new Engine(context);
+        JSONObject snapshot = handle(engine, "chat.resume", obj("id", "s1"));
+        assertEquals(40, snapshot.getJSONArray("messages").length());
+        assertEquals("m45", snapshot.getJSONArray("messages").getJSONObject(0).getString("id"));
+        assertEquals("m84", snapshot.getJSONArray("messages").getJSONObject(39).getString("id"));
+        JSONObject firstCursor = snapshot.getJSONObject("messageHistory");
+        assertTrue(firstCursor.getBoolean("hasMore")); assertEquals("m45", firstCursor.getString("beforeId")); assertEquals(85, firstCursor.getInt("total"));
+        ((JSONArray) field(engine, "sessions")).getJSONObject(0).getJSONArray("messages").getJSONObject(84).put("text", "streamed later");
+        assertEquals("message 84", snapshot.getJSONArray("messages").getJSONObject(39).getString("text"));
+
+        JSONObject second = handle(engine, "chat.history", obj("threadId", "s1", "beforeId", "m45", "limit", 10_000));
+        assertEquals(40, second.getJSONArray("messages").length());
+        assertEquals("m5", second.getJSONArray("messages").getJSONObject(0).getString("id"));
+        assertEquals("m44", second.getJSONArray("messages").getJSONObject(39).getString("id"));
+        assertEquals("m5", second.getJSONObject("messageHistory").getString("beforeId"));
+        JSONObject finalPage = handle(engine, "chat.history", obj("threadId", "s1", "beforeId", "m5", "limit", 40));
+        assertEquals(5, finalPage.getJSONArray("messages").length());
+        assertEquals("m0", finalPage.getJSONArray("messages").getJSONObject(0).getString("id"));
+        assertFalse(finalPage.getJSONObject("messageHistory").getBoolean("hasMore"));
+        assertEquals("", finalPage.getJSONObject("messageHistory").getString("beforeId"));
+        assertEquals(85, new JSONArray(dev.mobilecodex.app.core.Utf8Files.read(new File(context.getFilesDir(), "sessions.json").toPath()))
+            .getJSONObject(0).getJSONArray("messages").length());
+        engine.io.shutdownNow();
+    }
+    @Test public void historyRejectsStaleCrossThreadAndDeletedRequests() throws Exception {
+        JSONArray longMessages = new JSONArray();
+        for (int i = 0; i < 41; i++) longMessages.put(obj("id", "m" + i, "role", "user", "text", "x"));
+        longMessages.getJSONObject(1).put("id", "duplicate");
+        longMessages.getJSONObject(2).put("id", "duplicate");
+        dev.mobilecodex.app.core.Utf8Files.write(new File(context.getFilesDir(), "sessions.json").toPath(), array(
+            obj("id", "s1", "title", "One", "workspace", "", "workspaceKey", "", "messages", longMessages),
+            obj("id", "s2", "title", "Two", "workspace", "", "workspaceKey", "", "messages", new JSONArray())).toString());
+        Engine engine = new Engine(context); handle(engine, "chat.resume", obj("id", "s1"));
+        try { handle(engine, "chat.history", obj("threadId", "s1", "beforeId", "gone")); fail("stale cursor must fail"); }
+        catch (ExecutionException expected) { assertTrue(expected.getCause().getMessage().contains("오래")); }
+        try { handle(engine, "chat.history", obj("threadId", "s1", "beforeId", 123)); fail("malformed cursor must fail as a normal request error"); }
+        catch (ExecutionException expected) { assertTrue(expected.getCause() instanceof java.io.IOException); }
+        try { handle(engine, "chat.history", obj("threadId", "s1", "beforeId", "duplicate")); fail("ambiguous cursor must fail"); }
+        catch (ExecutionException expected) { assertTrue(expected.getCause().getMessage().contains("오래")); }
+        try { handle(engine, "chat.history", obj("threadId", "unknown", "beforeId", "m1")); fail("unknown thread must fail"); }
+        catch (ExecutionException expected) { assertTrue(expected.getCause().getMessage().contains("대화")); }
+        handle(engine, "chat.resume", obj("id", "s2"));
+        try { handle(engine, "chat.history", obj("threadId", "s1", "beforeId", "m1")); fail("cross-thread cursor must fail"); }
+        catch (ExecutionException expected) { assertTrue(expected.getCause().getMessage().contains("대화")); }
+        engine.io.shutdownNow();
+
+        Engine deleted = new Engine(context); handle(deleted, "chat.resume", obj("id", "s1")); handle(deleted, "chat.delete", obj("id", "s1"));
+        try { handle(deleted, "chat.history", obj("threadId", "s1", "beforeId", "m1")); fail("deleted thread cursor must fail"); }
+        catch (ExecutionException expected) { assertTrue(expected.getCause().getMessage().contains("대화")); }
+        deleted.io.shutdownNow();
+    }
+    @Test public void newUserMessagesReceiveTimestampsWithoutChangingLegacyMessages() throws Exception {
+        Engine engine = new Engine(context);
+        Method userMessage = Engine.class.getDeclaredMethod("userMessage", String.class, JSONArray.class, JSONArray.class, JSONArray.class);
+        userMessage.setAccessible(true);
+        JSONObject fresh = (JSONObject) userMessage.invoke(engine, "new", null, null, null);
+        assertTrue(fresh.has("createdAt")); assertTrue(fresh.getLong("createdAt") > 0);
+        engine.io.shutdownNow();
+
+        dev.mobilecodex.app.core.Utf8Files.write(new File(context.getFilesDir(), "sessions.json").toPath(), array(
+            obj("id", "legacy", "title", "Legacy", "workspace", "", "workspaceKey", "", "messages", array(obj("id", "old", "role", "user", "text", "old")))).toString());
+        Engine legacy = new Engine(context); JSONObject state = handle(legacy, "chat.resume", obj("id", "legacy"));
+        assertFalse(state.getJSONArray("messages").getJSONObject(0).has("createdAt"));
+        legacy.io.shutdownNow();
+    }
+    @Test public void fastModeUsesCatalogTierAndPersistsOnlyWhenSupplied() throws Exception {
+        Engine engine = new Engine(context); loggedIn(engine);
+        setField(engine, "models", array(obj("id", "test-model", "model", "test-model", "serviceTiers", array(
+            obj("id", "priority", "name", "Fast", "description", "faster")))));
+        java.util.ArrayList<JSONObject> calls = new java.util.ArrayList<>();
+        engine.setTestTransport((method, params) -> {
+            calls.add(obj("method", method, "params", new JSONObject(params.toString())));
+            if (method.equals("thread/start")) return obj("thread", obj("id", "remote-fast"));
+            if (method.equals("turn/start")) return obj("turn", obj("id", "turn-fast"));
+            throw new AssertionError(method);
+        });
+        handle(engine, "chat.send", obj("text", "fast", "model", "test-model", "fastMode", true));
+        JSONObject turn = calls.stream().filter(value -> value.optString("method").equals("turn/start")).findFirst().orElseThrow().getJSONObject("params");
+        assertEquals("priority", turn.getString("serviceTierForTurn"));
+        JSONObject state = handle(engine, "state", new JSONObject()); assertTrue(state.getBoolean("fastMode"));
+        assertTrue(state.getJSONArray("messages").getJSONObject(0).has("createdAt"));
+        assertTrue(new JSONArray(dev.mobilecodex.app.core.Utf8Files.read(new File(context.getFilesDir(), "sessions.json").toPath()))
+            .getJSONObject(0).getBoolean("fastMode"));
+        engine.io.shutdownNow();
+    }
+    @Test public void fastModeOffAndOmittedRespectTurnTierContractAndUnsupportedFailsBeforeRpc() throws Exception {
+        Engine off = new Engine(context); loggedIn(off);
+        setField(off, "models", array(obj("id", "test-model", "model", "test-model", "serviceTiers", array(obj("id", "fast", "name", "Fast", "description", "faster")))));
+        java.util.ArrayList<JSONObject> offCalls = new java.util.ArrayList<>();
+        off.setTestTransport((method, params) -> {
+            offCalls.add(obj("method", method, "params", new JSONObject(params.toString())));
+            if (method.equals("thread/start")) return obj("thread", obj("id", "remote-off"));
+            if (method.equals("turn/start")) return obj("turn", obj("id", "turn-off"));
+            throw new AssertionError(method);
+        });
+        handle(off, "chat.send", obj("text", "standard", "model", "test-model", "fastMode", false));
+        JSONObject offTurn = offCalls.stream().filter(value -> value.optString("method").equals("turn/start")).findFirst().orElseThrow().getJSONObject("params");
+        assertEquals("default", offTurn.getString("serviceTierForTurn")); assertFalse(handle(off, "state", new JSONObject()).getBoolean("fastMode"));
+        off.io.shutdownNow();
+
+        before();
+        Engine legacy = new Engine(context); loggedIn(legacy); setField(legacy, "models", array(obj("id", "test-model", "model", "test-model")));
+        java.util.ArrayList<JSONObject> legacyCalls = new java.util.ArrayList<>();
+        legacy.setTestTransport((method, params) -> {
+            legacyCalls.add(obj("method", method, "params", new JSONObject(params.toString())));
+            if (method.equals("thread/start")) return obj("thread", obj("id", "remote-legacy"));
+            if (method.equals("turn/start")) return obj("turn", obj("id", "turn-legacy"));
+            throw new AssertionError(method);
+        });
+        handle(legacy, "chat.send", obj("text", "legacy", "model", "test-model"));
+        JSONObject legacyTurn = legacyCalls.stream().filter(value -> value.optString("method").equals("turn/start")).findFirst().orElseThrow().getJSONObject("params");
+        assertFalse(legacyTurn.has("serviceTierForTurn")); assertFalse(handle(legacy, "state", new JSONObject()).getBoolean("fastMode"));
+        legacy.io.shutdownNow();
+
+        before();
+        Engine unsupported = new Engine(context); loggedIn(unsupported); setField(unsupported, "models", array(obj("id", "test-model", "model", "test-model")));
+        unsupported.setTestTransport((method, params) -> { throw new AssertionError("Fast rejection must happen before an RPC: " + method); });
+        try { handle(unsupported, "chat.send", obj("text", "no fast", "model", "test-model", "fastMode", true)); fail("unsupported Fast must fail"); }
+        catch (ExecutionException expected) { assertTrue(expected.getCause().getMessage().contains("Fast")); }
+        unsupported.io.shutdownNow();
+    }
     private JSONObject session(JSONArray sessions, String id) {
         for (int i = 0; i < sessions.length(); i++) {
             JSONObject value = sessions.optJSONObject(i);

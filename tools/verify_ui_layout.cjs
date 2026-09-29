@@ -16,8 +16,8 @@ const snapshot = {
  workspace:{selected:true,key:'demo-project',name:'Very long project display name that keeps its menu visible'},projects:[{key:'demo-project',name:'Very long project display name that keeps its menu visible',available:true}],
  account:{type:'chatgpt',email:'demo@example.test'},
  sessions:[{id:'demo',workspaceKey:'demo-project',title:'A very long conversation title that must keep its action button visible'}],
- models:[{id:'gpt-example',model:'gpt-example',displayName:'Default model',isDefault:true,supportedReasoningEfforts:[{reasoningEffort:'medium',description:'Medium'}]}],
- messages:[{id:'u',role:'user',text:'Help me organize this project.'},{id:'a',role:'assistant',text:'I reviewed the project files. Here is a clear place to start.\n\n- Keep the source files in `src/`.\n- Put setup instructions in `README.md`.\n- Review the changes before running the app.\n\n```js\nconst greeting = "Hello, mobile";\nconsole.log(greeting);\n```\n\nWhat would you like to work on first?'}]
+ models:[{id:'gpt-example',model:'gpt-example',displayName:'Default model',isDefault:true,serviceTiers:[{id:'priority',name:'Fast'}],supportedReasoningEfforts:[{reasoningEffort:'medium',description:'Medium'}]}],
+ messages:[{id:'u',role:'user',text:'Help me organize this project.',createdAt:1790670840000},{id:'a',role:'assistant',text:'I reviewed the project files. Here is a clear place to start.\n\n- Keep the source files in `src/`.\n- Put setup instructions in `README.md`.\n- Review the changes before running the app.\n\n```js\nconst greeting = "Hello, mobile";\nconsole.log(greeting);\n```\n\nWhat would you like to work on first?'}]
 };
 async function open(browser, width, height, theme='light', language='en', extra={}, initialSnapshot=snapshot) {
  const context = await browser.newContext({viewport:{width,height},deviceScaleFactor:1,colorScheme:theme,...extra});
@@ -32,13 +32,19 @@ async function open(browser, width, height, theme='light', language='en', extra=
  });
  await page.addInitScript(({snapshot,theme,language})=>{
   localStorage.setItem('chat-icons','off');localStorage.setItem('theme',theme);
+  window.fixtureCalls=[];
   window.Native={locale:()=>JSON.stringify({choice:language,systemLanguage:language}),postMessage(raw){
    const m=JSON.parse(raw);let result={};
+   window.fixtureCalls.push(m);
    if(m.action==='state') result=snapshot;
    if(m.action==='updates.state') result={versionName:'0.1.13-alpha',versionCode:14,repository:'nokryong/mobile-codex',prereleases:true};
    if(m.action==='instructions.read') result={content:'Read the relevant files before editing.',activePath:'/private/AGENTS.md'};
    if(m.action==='files.list') result={entries:[]};
    if(m.action==='linux.status') result=snapshot.linux;
+   if(m.action==='chat.history') {
+    const all=snapshot.historyFixture||[],cursor=all.findIndex(item=>item.id===m.args.beforeId),start=Math.max(0,cursor-40);
+    result={threadId:snapshot.threadId,messages:all.slice(start,cursor),messageHistory:{beforeId:start?all[start].id:'',hasMore:start>0,total:all.length}};
+   }
    setTimeout(()=>window.mobileCodexEvent('response',{id:m.id,result}),0);
   }};
  }, {snapshot:initialSnapshot,theme,language});
@@ -52,7 +58,7 @@ async function checkComposer(page) {
  await page.locator('#prompt').focus();
  await page.waitForFunction(()=>document.getElementById('composer')?.classList.contains('composer-expanded'));
  const result=await page.evaluate(()=>{
-  const ids=['add-attachment','composer-folder','composer-options','voice-input','send'];
+  const ids=['add-attachment','composer-folder','fast-mode','approval-mode','composer-options','voice-input','send'];
   const bounds=id=>{const r=document.getElementById(id).getBoundingClientRect();return {id,x:r.x,y:r.y,right:r.right,bottom:r.bottom,width:r.width,height:r.height};};
   return {width:innerWidth,height:innerHeight,scrollWidth:document.documentElement.scrollWidth,controls:ids.map(bounds),composer:bounds('composer'),header:bounds('header-project'),chat:bounds('chat-scroll')};
  });
@@ -68,7 +74,39 @@ async function checkComposer(page) {
   const previous=result.controls[i-1], current=result.controls[i];
   if(previous.bottom>current.y+1 && current.bottom>previous.y+1) assert.ok(previous.right<=current.x+1,'Composer buttons overlap');
  }
+ const fast=result.controls.find(control=>control.id==='fast-mode'),options=result.controls.find(control=>control.id==='composer-options');
+ assert.equal(fast.y,options.y,'Fast belongs to the lowest composer row');
+ assert.ok(fast.x<options.x,'Fast is leftmost in the lowest row');
+ const date=await page.locator('.message-time').first().boundingBox();
+ if(date) {
+  const bubble=await page.locator('.message.user.has-date').first().boundingBox();
+  assert.ok(date.x>=0&&date.x+date.width<=bubble.x+1,'User date fits beside its bubble');
+ }
  return result;
+}
+async function checkLazyHistory(browser) {
+ const all=Array.from({length:120},(_,i)=>({id:'history-'+i,role:i%2?'assistant':'user',text:'History message '+i+'\nSecond line of message.',...(i%2?{}:{createdAt:1790670840000+i*60000})}));
+ const initial={...snapshot,messages:all.slice(-40),messageHistory:{beforeId:'history-80',hasMore:true,total:120},historyFixture:all};
+ const {context,page,errors}=await open(browser,393,852,'light','ko',{},initial);
+ try {
+  assert.equal(await page.locator('#messages article').count(),40);
+  assert.equal(await page.evaluate(()=>fixtureCalls.filter(call=>call.action==='chat.history').length),0);
+  await page.evaluate(()=>{
+   const area=document.getElementById('chat-scroll');area.style.scrollBehavior='auto';area.scrollTop=100;
+   window.fixtureAnchor={id:'history-81',top:document.querySelector('[data-id="history-81"]').getBoundingClientRect().top};
+  });
+  await page.waitForFunction(()=>document.querySelectorAll('#messages article').length===80);
+  const delta=await page.evaluate(()=>document.querySelector('[data-id="'+fixtureAnchor.id+'"]').getBoundingClientRect().top-fixtureAnchor.top);
+  assert.ok(Math.abs(delta)<2,'Prepending older messages preserves the exact visible position: '+delta);
+  assert.equal(await page.locator('#messages article').first().getAttribute('data-id'),'history-40');
+  await page.evaluate(()=>{document.getElementById('chat-scroll').scrollTop=0;});
+  await page.waitForFunction(()=>document.querySelectorAll('#messages article').length===120);
+  assert.equal(await page.locator('#messages article').first().getAttribute('data-id'),'history-0');
+  await page.evaluate(()=>{document.getElementById('chat-scroll').scrollTop=0;});await page.waitForTimeout(100);
+  assert.equal(await page.evaluate(()=>fixtureCalls.filter(call=>call.action==='chat.history').length),2);
+  assert.deepEqual(errors,[],'Lazy history browser errors');
+  await page.screenshot({path:path.join(output,'lazy-history-393-ko.png')});
+ } finally {await context.close();}
 }
 async function checkCompactComposer(page) {
  const draft=await page.locator('#prompt').inputValue();
@@ -171,10 +209,14 @@ async function checkLinuxSettings(page,width,theme,language) {
  const browser=await chromium.launch({headless:true,executablePath:process.env.MOBILE_CODEX_BROWSER_EXECUTABLE||undefined,args:['--no-sandbox','--disable-dev-shm-usage']});
  const results=[];
  try {
+  await checkLazyHistory(browser);
   for(const [width,height,theme,language] of [[320,720,'light','en'],[393,852,'light','ko'],[393,852,'dark','en'],[800,1100,'light','en'],[1280,900,'dark','en']]){
    const {context,page,errors}=await open(browser,width,height,theme,language);
    await checkCompactComposer(page);
    const layout=await checkComposer(page);const sidebar=width<=393?await checkSidebar(page,width):null;
+   await page.locator('#prompt').focus();await page.locator('#fast-mode').click();
+   assert.equal(await page.locator('#fast-mode').getAttribute('aria-pressed'),'true');
+   assert.equal(await page.evaluate(()=>fixtureCalls.some(call=>call.action==='chat.send')),false,'Fast toggle never sends a request by itself');
    results.push({width,height,theme,language,layout,sidebar});
    await page.screenshot({path:path.join(output,`chat-${width}-${theme}-${language}.png`)});
    await page.locator('#files-toggle').click();

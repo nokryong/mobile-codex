@@ -18,6 +18,7 @@
     <symbol id="i-panel" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/></symbol>
     <symbol id="i-menu" viewBox="0 0 24 24"><path d="M5 8h14M5 16h14"/></symbol>
     <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-bolt" viewBox="0 0 24 24"><path d="m13 2-8 12h6l-1 8 9-13h-6l1-7Z"/></symbol>
     <symbol id="i-edit" viewBox="0 0 24 24"><path d="m15 4 5 5M4 20l5-1L21 7a2 2 0 0 0-5-5L4 14v6Z"/></symbol>
     <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></symbol>
     <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9ZM14 3v6h6M8 13h8M8 17h5"/></symbol>
@@ -84,6 +85,7 @@
               <button id="add-attachment" type="button" class="icon-button composer-attach" aria-label="파일 또는 이미지 첨부"><svg><use href="#i-plus"/></svg></button>
               <button id="composer-folder" type="button" class="context-button" aria-label="작업 폴더 선택"><svg><use href="#i-folder"/></svg><span id="context-folder">폴더 선택</span></button>
               <div class="composer-actions">
+                <button id="fast-mode" type="button" class="icon-button fast-mode-button" aria-label="Fast 모드" aria-pressed="false" title="Fast 모드" disabled><svg><use href="#i-bolt"/></svg></button>
                 <label class="approval-mode-picker"><span class="sr-only">승인 방식</span><select id="approval-mode" aria-label="승인 방식"><option value="ask">승인 받기</option><option value="auto-review" selected>자동 검토</option><option value="allow-all">모두 허용</option></select></label>
                 <button id="composer-options" type="button" class="context-button options-button" aria-haspopup="dialog" aria-controls="options-dialog"><svg><use href="#i-settings"/></svg><span id="model-summary">기본 모델</span><svg><use href="#i-down"/></svg></button>
                 <button id="voice-input" type="button" class="icon-button voice-button" aria-label="음성으로 초안 입력" title="음성 입력 · 확인 후 보내기"><svg><use href="#i-mic"/></svg></button>
