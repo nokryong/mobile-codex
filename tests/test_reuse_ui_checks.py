@@ -15,6 +15,13 @@ class ReuseUiChecksTests(unittest.TestCase):
                 self.assertNotEqual(reuse.fingerprint(base), reuse.fingerprint(base + b'100644 blob bbb\t' + path.encode() + b'\0'))
         self.assertNotEqual(reuse.fingerprint(base), reuse.fingerprint(base.replace(b'aaa', b'bbb')))
 
+    def test_native_source_fix_reuses_browser_only(self):
+        base = b'100644 blob aaa\tapp/src/main/assets/web/app.js\0'
+        changed = base + b'100644 blob bbb\tapp/src/main/java/MainActivity.java\0'
+        self.assertNotEqual(reuse.fingerprint(base), reuse.fingerprint(changed))
+        self.assertEqual(reuse.fingerprint(base, browser=True), reuse.fingerprint(changed, browser=True))
+        self.assertNotEqual(reuse.fingerprint(base, browser=True), reuse.fingerprint(base.replace(b'aaa', b'bbb'), browser=True))
+
     def test_skipped_or_missing_validation_is_not_success(self):
         steps = [{'name': name, 'conclusion': 'success'} for name in ['Test UI logic', 'Test packaging and release logic', 'Check responsive browser layouts']]
         job = {'name': 'Fast UI and source checks', 'conclusion': 'success', 'steps': steps}

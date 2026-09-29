@@ -49,7 +49,7 @@ public final class MainActivity extends Activity implements Engine.Ui {
     static WebResourceResponse packagedUiResponse(AssetManager assets, Uri uri) {
         String path = uri.getPath();
         if (!"https".equals(uri.getScheme()) || !HOST.equals(uri.getHost()) || path == null
-                || !(path.equals("/index.html") || path.equals("/app.css") || path.equals("/visual-system.css")
+                || !(path.equals("/index.html") || path.equals("/app.css") || path.equals("/visual-system.css") || path.equals("/spacing.css")
                 || path.equals("/app.js") || path.equals("/ui-core.js") || path.equals("/translations.js") || path.equals("/locale.js"))) {
             return deniedResponse();
         }

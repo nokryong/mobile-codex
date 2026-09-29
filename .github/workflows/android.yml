@@ -48,7 +48,7 @@ jobs:
         if: steps.reuse.outputs.reused != 'true'
         run: python3 -m unittest discover -s tests -p 'test_*.py'
       - name: Check responsive browser layouts
-        if: steps.reuse.outputs.reused != 'true'
+        if: steps.reuse.outputs.browser_reused != 'true'
         run: |
           npx playwright install --with-deps chromium
           sudo apt-get install -y fonts-noto-cjk

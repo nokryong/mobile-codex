@@ -14,7 +14,7 @@ ROUTING_FILES = {'.github/workflows/android.yml', 'tools/reuse_ui_checks.py',
 def git(*args):
     return subprocess.check_output(['git', *args])
 
-def fingerprint(tree):
+def fingerprint(tree, browser=False):
     records = []
     for entry in tree.split(b'\0'):
         if not entry:
@@ -23,6 +23,8 @@ def fingerprint(tree):
         name = path.decode('utf-8')
         # Android test changes are checked by Gradle, not by the UI job.
         if name.startswith('app/src/test/java/') or name in ROUTING_FILES:
+            continue
+        if browser and name.startswith('app/src/main/java/'):
             continue
         records.append(entry)
     return hashlib.sha256(b'\0'.join(sorted(records))).hexdigest()
@@ -34,6 +36,7 @@ def check_contract(workflow):
     body = re.sub(r'^      # UI_REUSE_START\n.*?^      # UI_REUSE_END\n', '', job[1], flags=re.M | re.S)
     body = body.replace("        if: steps.reuse.outputs.reused != 'true'\n", '')
     body = body.replace("if: always() && steps.reuse.outputs.reused != 'true'", 'if: always()')
+    body = body.replace("        if: steps.reuse.outputs.browser_reused != 'true'\n", '')
     return body
 
 def passed(jobs):
@@ -51,7 +54,8 @@ def api(path):
 def find_reusable():
     if os.environ.get('GITHUB_REF') != 'refs/heads/main' or os.environ.get('GITHUB_EVENT_NAME') not in {'push', 'workflow_dispatch'}:
         return None
-    current = fingerprint(git('ls-tree', '-r', '-z', 'HEAD'))
+    tree = git('ls-tree', '-r', '-z', 'HEAD')
+    current, current_browser = fingerprint(tree), fingerprint(tree, browser=True)
     contract = check_contract(Path('.github/workflows/android.yml').read_text())
     runs = api('/actions/workflows/android.yml/runs?branch=main&per_page=20')['workflow_runs']
     for run in runs:
@@ -63,23 +67,26 @@ def find_reusable():
         if not re.fullmatch('[a-f0-9]{40}', sha):
             continue
         subprocess.run(['git', 'fetch', '--no-tags', '--depth=1', 'origin', sha], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        if fingerprint(git('ls-tree', '-r', '-z', sha)) != current:
+        previous_tree = git('ls-tree', '-r', '-z', sha)
+        if fingerprint(previous_tree, browser=True) != current_browser:
             continue
         if check_contract(git('show', sha + ':.github/workflows/android.yml').decode()) != contract:
             continue
         jobs = api('/actions/runs/' + str(run['id']) + '/jobs?filter=latest&per_page=100')['jobs']
         if passed(jobs):
-            return run
+            return run, fingerprint(previous_tree) == current
     return None
 
 def main():
-    run = find_reusable()
+    match = find_reusable()
+    run, all_checks = match if match else (None, False)
     with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
-        output.write('reused=' + ('true' if run else 'false') + '\n')
+        output.write('reused=' + ('true' if all_checks else 'false') + '\n')
+        output.write('browser_reused=' + ('true' if run else 'false') + '\n')
     if run:
-        print('Reusing successful UI/source checks with identical inputs: ' + run['html_url'])
+        print('Reusing successful ' + ('UI/source' if all_checks else 'browser') + ' checks with identical inputs: ' + run['html_url'])
         with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
-            summary.write('UI/source inputs and check commands unchanged. Reused successful checks: ' + run['html_url'] + '\n\nAndroid build, unit tests, lint, signing and release verification still run.\n')
+            summary.write(('UI/source' if all_checks else 'Browser') + ' inputs and check commands unchanged. Reused successful checks: ' + run['html_url'] + '\n\nAndroid build, unit tests, lint, signing and release verification still run. Native source changes still run JS/source and Python checks.\n')
     else:
         print('No matching successful UI checks; running the full checks job.')
 

@@ -36,3 +36,9 @@ reuse gate and its regression tests run every time; their routing files and this
 CI document are excluded from the UI input fingerprint. A reused job cannot be
 used as evidence for another reuse: the original successful validation steps
 must still be present.
+
+Native Java source changes retain the browser result only: browser fixtures mock
+the native bridge, so their input fingerprint excludes Java sources. JS/source
+and Python checks still run for native source changes, and Android validation
+checks the actual packaged asset route. Any web asset or browser harness change
+invalidates browser reuse.
