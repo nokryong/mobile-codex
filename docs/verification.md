@@ -1,6 +1,6 @@
 # Verification — current scope
 
-The current app metadata is `0.1.25-alpha` (`versionCode 26`, ARM64, Android 10+). The automated records below are historical entries for the versions named in their headings; they are not evidence of current physical-device behavior. Current release availability is tracked in the public [Releases](https://github.com/nokryong/mobile-codex/releases) page and current workflow results in [Actions](https://github.com/nokryong/mobile-codex/actions/workflows/android.yml).
+The current app metadata is `0.2.5` stable (`versionCode 50`, ARM64, Android 10+). The automated records below are historical entries for the versions named in their headings; they are not evidence of current physical-device behavior. Current release availability is tracked in the public [Releases](https://github.com/nokryong/mobile-codex/releases) page and current workflow results in [Actions](https://github.com/nokryong/mobile-codex/actions/workflows/android.yml). See the [0.2.5 release notes](releases/0.2.5.md) for feature scope, including manual project sync and its exclusions.
 
 Physical Android login, WebView behavior, SAF folder access, and device-specific performance remain outside this document's automated browser/build evidence unless an entry explicitly says otherwise. Do not treat an account-security or device-login prompt alone as a confirmed app defect; report the exact prompt and screen when opening an issue.
 

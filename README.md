@@ -26,11 +26,20 @@ The APK-opening app may separately require **Allow from this source**. Menu name
 
 Mobile Codex is an independent Android client built around the Codex app-server. It bundles an Android port of Codex, Python, Node.js, and Git, so you do not need to install Termux or keep a separate PC server running.
 
-**0.2.0** · **ARM64 / Android 10+** · Created by [nokryong](https://github.com/nokryong)
+**0.2.5 stable** · **ARM64 / Android 10+** · Created by [nokryong](https://github.com/nokryong)
 
 [Download APK](https://github.com/nokryong/mobile-codex/releases) · [Builds](https://github.com/nokryong/mobile-codex/actions/workflows/android.yml) · [Report an issue](https://github.com/nokryong/mobile-codex/issues)
 
 > This is not an official OpenAI app. Model inference requires an internet connection and an account with Codex access. The Codex process and file/command tools run on your Android device.
+
+## Highlights in 0.2.5
+
+- **Cross-device project sync:** Share project IDs, names, and merge history between Android devices and the PC companion through your private GitHub repository or JSON files. Preview changes before applying them and connect local folders separately on each device.
+- **GitHub connectivity:** Sign in with a browser-approved device code. Login and sync requests now reach Android correctly, with concise errors and browser retry support.
+- **Independent chat management:** Delete or rename unrelated chats and projects while another chat runs, keeping the active task connected.
+- **Pro and Fast:** Use read-only GPT-6-Pro through your ChatGPT web session, or opt into Fast on supported Codex models.
+
+Project sync is manual; chat history, running tasks, source files, and credentials stay on each device. See the [0.2.5 release notes](docs/releases/0.2.5.md) for details.
 
 ## Chat and Codex
 
@@ -46,7 +55,7 @@ The Codex composer also offers **GPT-6-Pro**, a separate read-only route through
 | --- | --- |
 | Projects and chats | Per-project chats and general chats using the default Codex folder; saved history, streaming, interruption, and additional instructions during a task |
 | Pro and Fast | Read-only ChatGPT Pro in the same local conversation; an opt-in Fast button for supported Codex models |
-| Project exchange | Manually exchange project identities/names through files or a private GitHub repository; local paths, chats, and credentials stay on each device |
+| Cross-device project sync | Share project IDs, names, and merge history between Android devices and the PC companion through a private GitHub repository or JSON files; bind local folders separately |
 | Files | Browse, search, read, create, edit, move, rename, and delete files; confirm changes and keep recovery copies |
 | Attachments and images | Attach multiple files, preview images, browse generated image galleries, zoom, swipe, and save originals |
 | Developer tools | Bundled Python/pip, Node.js/npm/npx, and Git; optional Linux development environment; enter commands and stream output |
@@ -66,19 +75,19 @@ You need an **ARM64 device running Android 10 or later**, an up-to-date Android 
 
 ### Download the APK
 
-Open [Releases](https://github.com/nokryong/mobile-codex/releases) and download **`mobile-codex-0.2.0-arm64.apk`** from the release assets. Open the APK and follow Android’s installation prompts. If requested, allow installation from the app you used to download/open it.
+Open the [0.2.5 release](https://github.com/nokryong/mobile-codex/releases/tag/v0.2.5) and download **`mobile-codex-0.2.5-arm64.apk`** from the release assets. Open the APK and follow Android’s installation prompts. If requested, allow installation from the app you used to download/open it.
 
 New app versions are published automatically after the `main` workflow passes its tests, builds, and original-key signature verification. Alpha versions are marked as prereleases. A published version is never silently replaced; maintainers must increment both `versionName` and `versionCode` for the next release.
 
-You can also open a successful [Actions run](https://github.com/nokryong/mobile-codex/actions/workflows/android.yml) and scroll to **Artifacts**:
+Normal builds publish installation files to Releases. [Actions runs](https://github.com/nokryong/mobile-codex/actions/workflows/android.yml) retain these diagnostic artifacts; an APK artifact is available only for an explicit `apk_only` test run:
 
 | Artifact | Contents |
 | --- | --- |
-| **`mobile-codex-update-assets`** | **The small installation bundle.** Extract the ZIP to get the `.apk`, checksum, and update manifest. |
-| `mobile-codex-arm64-debug` | A larger bundle with the APK, runtime metadata, and corresponding developer-tool sources. |
-| `check-reports` | Test and lint reports, browser layout checks, and UI screenshots; no APK. |
+| `mobile-codex-test-apk` | APK and verification files from an explicit test run; extract the ZIP to install. This run does not publish a release. |
+| `ui-check-reports` | JavaScript/Python and browser check reports and screenshots; no APK. |
+| `android-check-reports` | Android test and lint reports; no APK. |
 
-Actions artifact downloads require GitHub sign-in and expire after 14 days. Public release assets remain available without that artifact sign-in requirement. An unsuccessful build does not publish a new release.
+Actions artifact downloads require GitHub sign-in and expire after 7 days. Public release assets remain available without that artifact sign-in requirement. An unsuccessful build does not publish a new release.
 
 ### First launch
 
@@ -92,7 +101,7 @@ The lower-left quota ring opens **Settings → Account**. From there you can add
 
 Saved chats can be opened without signing in or starting the runtime. Removing or unlinking a project moves its chats into general chats without deleting the folder or its files. General chats use the existing app-private workspace, displayed as **Codex**, without needing a project. Temporary loss of folder access does not move chats; reconnect the folder in that case.
 
-The sidebar's top controls and bottom tools/settings/usage controls stay fixed while the project/chat list scrolls. Long conversations load older messages when you scroll upward; recorded user messages show a small date. See the [0.2.0 release notes](docs/releases/0.2.0.md) and [project exchange guide](docs/project-transfer.ko.md).
+Unrelated chats and projects can be deleted or renamed while another chat is running. Deleting the running chat or its project remains blocked until that task stops.
 
 ### Update an existing installation
 
@@ -103,6 +112,14 @@ Use **Settings → Updates** to check public releases. The app verifies the APK 
 Since 0.1.7 the application ID is `dev.mobilecodex.app`. Older builds with a different ID install as a separate app. See [updates and releases](docs/app-updates.md).
 
 ## Using the app
+
+### Cross-device project sync
+
+1. Open **Settings → Sync**, choose GitHub sign-in, and approve the displayed code in your browser. You do not need to register an OAuth app or enter a Client ID.
+2. Choose an existing private repository you can write to, then select the projects to upload.
+3. Preview incoming projects and name conflicts, then apply. Connect the same repository on another Android device or through the PC companion, and bind each project's local folder there.
+
+Only project IDs, names, and explicit merge history are shared. Sync is manual and does not copy source files, chats, credentials, or running tasks. JSON export/import is available as an alternative. The repository's [PC companion](packages/desktop-companion) requires Node.js 20+ and uses `gh` sign-in for GitHub; it does not integrate with official Codex Desktop conversations. See the [Android and PC sync guide (Korean)](docs/project-transfer.ko.md).
 
 ### Plugins, skills, and MCP
 
@@ -138,7 +155,7 @@ Recognition uses the device’s configured speech service, which may use externa
 
 ## Android limitations
 
-This is alpha software. Core workflows have user reports of successful use on physical devices, but new behavior still needs device testing. See [verification](docs/verification.md) and the [device checklist](docs/device-validation.md).
+0.2.5 is a stable release. Device-specific behavior still depends on Android, WebView, and permissions. Automated checks and physical-device results are distinguished in [verification](docs/verification.md) and the [device checklist](docs/device-validation.md).
 
 - **File access:** Android permissions apply. Full file access is not root and cannot access other apps’ private data or protected system areas. Cloud document providers use document tools rather than ordinary shell paths.
 - **Approvals:** Choose **Ask**, **Auto review**, or **Allow all** beside the model in the chat composer. Auto review routes approval requests to Codex's risk reviewer; task file access remains a separate setting.
