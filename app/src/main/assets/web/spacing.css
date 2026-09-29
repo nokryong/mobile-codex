@@ -124,7 +124,7 @@ dialog>p { margin:var(--space-2) 0 var(--space-3); }
 /* Every settings section uses the same stack/row contract. */
 .settings-layout { grid-template-columns:144px minmax(0,1fr); min-height:0; }
 .settings-nav { padding:var(--space-3) var(--space-3) var(--space-3) 0; gap:var(--space-1); }
-.settings-nav button { padding:var(--space-2) var(--space-3); min-height:44px; }
+.settings-nav button { padding:var(--space-2) var(--space-3); min-width:44px; min-height:44px; }
 .settings-content { padding-left:var(--space-4); }
 .settings-section,.settings-content .settings-section { padding:var(--space-3) 0; }
 .settings-section h3 { margin:0 0 var(--space-3); }
