@@ -71,6 +71,7 @@ public final class ChatWebActivity extends Activity {
         settings.setAllowFileAccess(false); settings.setAllowContentAccess(false);
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
         settings.setSupportMultipleWindows(false); settings.setJavaScriptCanOpenWindowsAutomatically(false);
+        applyTextSize();
         CookieManager.getInstance().setAcceptCookie(true); CookieManager.getInstance().setAcceptThirdPartyCookies(page, true);
         ChatIconStore iconStore = new ChatIconStore(this);
         page.setWebViewClient(new WebViewClient() {
@@ -146,7 +147,7 @@ public final class ChatWebActivity extends Activity {
         });
     }
     @Override public void onBackPressed() { back(); }
-    @Override protected void onResume() { super.onResume(); inject(); }
+    @Override protected void onResume() { super.onResume(); applyTextSize(); inject(); }
     @Override protected void onPause() { CookieManager.getInstance().flush(); super.onPause(); }
     @Override protected void onSaveInstanceState(Bundle state) { page.saveState(state); super.onSaveInstanceState(state); }
     @Override protected void onActivityResult(int request, int result, Intent data) {
@@ -165,6 +166,9 @@ public final class ChatWebActivity extends Activity {
         byte[] buffer = new byte[8192]; int size;
         while ((size = input.read(buffer)) != -1) out.write(buffer, 0, size);
         return new String(out.toByteArray(), StandardCharsets.UTF_8);
+    }
+    private void applyTextSize() {
+        if (page != null) AppTextSize.apply(this, page);
     }
     private int dp(int value) { return Math.round(value * getResources().getDisplayMetrics().density); }
 }

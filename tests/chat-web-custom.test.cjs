@@ -6,7 +6,22 @@ const script=fs.readFileSync('app/src/main/assets/chat-web-custom.js','utf8');
 const open=[];afterEach(()=>open.splice(0).forEach(d=>{d.window.__mcChatCustom?.dispose();d.window.close();}));
 const fixture='<aside id="stage-slideover-sidebar"><div class="row"><a href="/" aria-label="ChatGPT"><svg></svg></a><button aria-label="Search chats">Search</button><button aria-label="Close sidebar">Close</button></div><a href="/">New chat</a><p>History unchanged</p></aside><main><textarea>draft unchanged</textarea></main>';
 const header='<header><div class="segmented"><button><span>Chat</span></button><button><span>Work</span></button></div><button>Share</button></header>';
-function setup(html=fixture,url='https://chatgpt.com/') { const d=new JSDOM(html,{url,runScripts:'outside-only',pretendToBeVisual:true});open.push(d);d.window.eval(script);return d.window; }
+function installGeometry(w) {
+ const hidden=el=>{for(let node=el;node&&node.nodeType===1;node=node.parentElement){const style=w.getComputedStyle(node);if(node.hidden||node.getAttribute('aria-hidden')==='true'||style.display==='none'||style.visibility==='hidden')return true;}return false;};
+ const rect=el=>{
+  if(hidden(el))return {left:0,top:0,width:0,height:0,right:0,bottom:0,x:0,y:0,toJSON(){return this;}};
+  const side=el.matches?.('aside,nav[aria-label],[role="navigation"],[id*="sidebar"]')||el.closest?.('aside,nav[aria-label],[role="navigation"],[id*="sidebar"]');
+  const head=el.matches?.('header,[role="banner"]')||el.closest?.('header,[role="banner"]');
+  const main=el.matches?.('main')||el.closest?.('main');const name=((el.getAttribute?.('aria-label')||'')+' '+(el.textContent||'')).trim();
+  let left=side?0:head?260:main?420:0,top=side?0:head?0:main?180:0,width=side?260:head?540:main?340:800,height=side?800:head?56:main?120:900;
+  if(side&&!el.matches?.('aside,nav[aria-label],[role="navigation"],[id*="sidebar"]')) {left=12;width=220;height=44;top=/new chat|새 채팅/i.test(name)?64:8;}
+  if(head&&!el.matches?.('header,[role="banner"]')) {left=268;width=44;height=44;top=6;}
+  const value={left,top,width,height,right:left+width,bottom:top+height,x:left,y:top,toJSON(){return this;}};return value;
+ };
+ w.HTMLElement.prototype.getBoundingClientRect=function(){return rect(this);};
+ w.HTMLElement.prototype.getClientRects=function(){const value=rect(this);return value.width&&value.height?[value]:[];};
+}
+function setup(html=fixture,url='https://chatgpt.com/') { const d=new JSDOM(html,{url,runScripts:'outside-only',pretendToBeVisual:true});open.push(d);installGeometry(d.window);d.window.eval(script);return d.window; }
 const tick=()=>new Promise(resolve=>setTimeout(resolve,180));
 test('adds only a mode switch beside sidebar logo and preserves web content',()=>{
  const w=setup(),d=w.document,group=d.getElementById('mc-chat-mode-switch');
@@ -37,11 +52,11 @@ test('keeps the official Chat/Work pair visible and leaves its selection alone',
 test('uses the same compact switch spacing and label size as Codex',()=>{
  const w=setup(),group=w.document.getElementById('mc-chat-mode-switch');
  const groupStyle=w.getComputedStyle(group),buttonStyle=w.getComputedStyle(group.querySelector('button'));
- assert.equal(groupStyle.width,'112px');
+ assert.equal(groupStyle.width,'max-content');assert.equal(groupStyle.minWidth,'112px');
  assert.equal(groupStyle.paddingTop,'1px');
  assert.equal(groupStyle.borderTopWidth,'0px');
  assert.equal(groupStyle.fontSize,'13px');
- assert.equal(buttonStyle.minHeight,'40px');
+ assert.equal(buttonStyle.minHeight,'44px');
  assert.equal(buttonStyle.paddingTop,'0px');
 });
 test('does not change an active official Work tab',()=>{
@@ -64,7 +79,7 @@ test('does not inject into authentication or unrelated origins',()=>{
 });
 test('new text-title sidebar gets a switch above its New chat row, not in the icon rail',async()=>{
  const html='<div id="stage-sidebar"><nav><a id="rail-home" href="/"><svg></svg></a></nav><div><div><button id="chat-title">ChatGPT</button><button aria-label="검색">Search</button><button id="hide-sidebar" aria-label="사이드바 숨기기">Close</button></div><a id="new-chat" href="/">새 채팅</a></div></div><main><p>ChatGPT</p></main>';
- const dom=new JSDOM(html,{url:'https://chatgpt.com/c/test',runScripts:'outside-only',pretendToBeVisual:true});open.push(dom);
+ const dom=new JSDOM(html,{url:'https://chatgpt.com/c/test',runScripts:'outside-only',pretendToBeVisual:true});open.push(dom);installGeometry(dom.window);
  const d=dom.window.document;
  for(const [id,top,left,width] of [['rail-home',70,8,40],['chat-title',10,100,110],['new-chat',65,100,240]]){
   const element=d.getElementById(id);element.getClientRects=()=>[{}];element.getBoundingClientRect=()=>({top,left,width,height:40,bottom:top+40,right:left+width});
@@ -79,6 +94,37 @@ test('new text-title sidebar gets a switch above its New chat row, not in the ic
  assert.equal(dom.window.__mcChatCustom.closeSidebar(),true);assert.equal(clicks,1);
  group.remove();await tick();group=d.getElementById('mc-chat-mode-switch');
  assert.ok(group);assert.equal(group.nextElementSibling.id,'new-chat');
+});
+
+test('uses a wide header fallback for a collapsed rail and returns to a static ChatGPT wordmark after rotation',()=>{
+ const html='<aside id="rail"><a href="/"><svg></svg></a><div id="offscreen-title">ChatGPT</div><button id="offscreen-new">New chat</button></aside><header id="wide-header"><button id="sidebar-toggle" aria-label="Open sidebar">Menu</button><span>Conversation</span></header>';
+ const w=setup(html),d=w.document;
+ const box=(id,left,top,width,height)=>{const el=d.getElementById(id),rect={left,top,width,height,right:left+width,bottom:top+height};el.getClientRects=()=>[rect];el.getBoundingClientRect=()=>rect;};
+ box('rail',0,0,56,800);box('offscreen-title',-220,8,100,32);box('offscreen-new',-220,56,160,44);box('wide-header',56,0,744,56);box('sidebar-toggle',64,6,44,44);
+ w.__mcChatCustom.refresh();let group=d.getElementById('mc-chat-mode-switch');
+ assert.ok(group);assert.equal(group.parentElement.id,'wide-header');assert.equal(d.querySelector('#rail #mc-chat-mode-switch'),null);
+ assert.equal(group.querySelector('a').href,'mobilecodex://mode/codex');assert.equal(w.getComputedStyle(group.querySelector('button')).minHeight,'44px');
+ d.getElementById('rail').innerHTML='<div id="static-title">ChatGPT</div><button id="static-new">New chat</button>';
+ box('rail',0,0,260,800);box('static-title',12,10,120,36);box('static-new',12,62,220,44);
+ w.__mcChatCustom.refresh();group=d.getElementById('mc-chat-mode-switch');assert.equal(group.nextElementSibling.id,'static-new');assert.equal(group.parentElement.id,'rail');
+ // A narrow, offscreen rail must never reclaim the 112px switch after rotation.
+ d.getElementById('rail').innerHTML='<a href="/"><svg></svg></a>';box('rail',-56,0,56,800);w.__mcChatCustom.refresh();group=d.getElementById('mc-chat-mode-switch');assert.equal(group.parentElement.id,'wide-header');
+});
+
+test('rejects hidden ancestors and class-only collapse moves a static title out of a narrow rail',async()=>{
+ const w=setup('<aside id="stage-sidebar"><div hidden><div>ChatGPT</div><button>New chat</button></div><div id="title">ChatGPT</div><button id="new">New chat</button></aside><header id="fallback"><span id="clip"><button aria-label="Open sidebar">Menu</button></span></header>'),d=w.document;
+ const rect=(left,top,width,height)=>({left,top,width,height,right:left+width,bottom:top+height});let narrow=false;
+ const side=d.getElementById('stage-sidebar'),title=d.getElementById('title'),next=d.getElementById('new'),head=d.getElementById('fallback'),clip=d.getElementById('clip'),toggle=clip.querySelector('button');
+ side.getBoundingClientRect=()=>rect(0,0,narrow?56:260,800);side.getClientRects=()=>[side.getBoundingClientRect()];
+ for(const [element,value] of [[title,rect(12,8,120,36)],[next,rect(12,60,220,44)],[head,rect(56,0,700,56)],[clip,rect(64,6,44,44)],[toggle,rect(64,6,44,44)]]) {element.getBoundingClientRect=()=>value;element.getClientRects=()=>[value];}
+ w.__mcChatCustom.refresh();let group=d.getElementById('mc-chat-mode-switch');assert.equal(group.nextElementSibling.id,'new');assert.equal(d.querySelector('[hidden] #mc-chat-mode-switch'),null);
+ narrow=true;side.classList.add('collapsed');await tick();group=d.getElementById('mc-chat-mode-switch');assert.equal(group.parentElement.id,'fallback');assert.equal(group.previousElementSibling.id,'clip');
+});
+
+test('uses visible children as the bounds of a display-contents sidebar',()=>{
+ const w=setup('<nav id="contents-nav" aria-label="Home" style="display:contents"><div id="contents-header" class="@container/navigation-header">ChatGPT</div><div data-app-action-sidebar-scroll>History</div></nav>'),d=w.document,rect=(left,top,width,height)=>({left,top,width,height,right:left+width,bottom:top+height});
+ const nav=d.getElementById('contents-nav'),head=d.getElementById('contents-header');nav.getBoundingClientRect=()=>rect(0,0,0,0);nav.getClientRects=()=>[];head.getBoundingClientRect=()=>rect(0,0,260,44);head.getClientRects=()=>[head.getBoundingClientRect()];
+ w.__mcChatCustom.refresh();assert.equal(d.getElementById('mc-chat-mode-switch').previousElementSibling.id,'contents-header');
 });
 
 test('observed navigation wordmark mounts the switch without a clickable title or localized New chat label',async()=>{
@@ -102,14 +148,14 @@ test('observed navigation wordmark mounts the switch without a clickable title o
 });
 
 test('uses the visible navigation when mobile and hidden desktop copies coexist, including Settings',async()=>{
- const hidden='<nav aria-label="Home"><div class="@container/navigation-header">ChatGPT</div></nav>';
+ const hidden='<nav aria-label="Home" hidden><div class="@container/navigation-header">ChatGPT</div></nav>';
  const w=setup(hidden),d=w.document;
  const visible=d.createElement('nav');visible.setAttribute('aria-label','Settings');
  visible.innerHTML='<div class="@container/navigation-header">Settings</div>';
  visible.getClientRects=()=>[{}];d.body.append(visible);await tick();
  assert.equal(d.querySelectorAll('#mc-chat-mode-switch').length,1);
  assert.ok(visible.querySelector('#mc-chat-mode-switch'));
- visible.remove();await tick();
+ visible.remove();d.querySelector('nav[aria-label="Home"]').hidden=false;await tick();
  assert.ok(d.querySelector('nav[aria-label="Home"] #mc-chat-mode-switch'));
 });
 

@@ -78,7 +78,8 @@ async function checkComposer(page) {
  const fast=result.controls.find(control=>control.id==='fast-mode'),options=result.controls.find(control=>control.id==='composer-options');
  assert.equal(fast.y,options.y,'Fast belongs to the lowest composer row');
  assert.ok(fast.x<options.x,'Fast is leftmost in the lowest row');
- const date=await page.locator('.message-time').first().boundingBox();
+ const dateElement=page.locator('.message-time').first();
+ const date=await dateElement.count()?await dateElement.boundingBox():null;
  if(date) {
   const bubble=await page.locator('.message.user.has-date').first().boundingBox();
   assert.ok(date.x>=0&&date.x+date.width<=bubble.x+1,'User date fits beside its bubble');
@@ -99,7 +100,7 @@ async function checkFirstMessageBelowHeader(page,label) {
 }
 async function checkLongMessageClearance(page,width,height) {
  await page.evaluate(()=>{
-  const messages=Array.from({length:100},(_,index)=>({id:'long-header-'+index,role:index%2?'assistant':'user',text:'Long conversation message '+index}));
+  const messages=Array.from({length:100},(_,index)=>({id:'long-header-'+index,role:index%2?'assistant':'user',text:'Long conversation message '+index,...(index%2?{}:{createdAt:1790670840000+index*60000})}));
   window.fixtureSnapshot={...window.fixtureSnapshot,messages,messageHistory:{beforeId:'',hasMore:false,total:messages.length}};
   window.mobileCodexEvent('state',window.fixtureSnapshot);
  });
@@ -222,6 +223,7 @@ async function checkFixedSidebar(page,width,height) {
  }
  await page.locator('#show-tools').click();await page.locator('#tool-menu-dialog').waitFor({state:'visible'});
  await page.locator('#tool-menu-dialog [data-close]').first().click();await page.locator('#tool-menu-dialog').waitFor({state:'hidden'});
+ await ensureSidebarOpen(page);
  await page.locator('#settings').click();await page.locator('#settings-dialog').waitFor({state:'visible'});
  await page.locator('#settings-dialog [data-close]').first().click();await page.locator('#settings-dialog').waitFor({state:'hidden'});
  await ensureSidebarOpen(page);
@@ -340,6 +342,8 @@ async function checkLinuxSettings(page,width,theme,language) {
     await checkComposer(page);
     result.keyboardHeader=await checkFirstMessageBelowHeader(page,`keyboard conversation ${width}×430`);
     result.keyboardSidebar=await checkFixedSidebar(page,width,430);
+    await page.locator('#prompt').focus();
+    await page.waitForFunction(()=>document.getElementById('composer').classList.contains('composer-expanded'));
     const keyboardControls=await page.evaluate(()=>({folder:document.getElementById('composer-folder').getBoundingClientRect().toJSON(),folderText:document.getElementById('context-folder').textContent,options:document.getElementById('composer-options').getBoundingClientRect().toJSON()}));
     assert.ok(keyboardControls.folder.width>=120,'Keyboard composer folder label has no meaningful space');
     assert.ok(keyboardControls.options.width>=100,'Keyboard composer model control is too narrow');

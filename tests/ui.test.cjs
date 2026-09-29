@@ -29,10 +29,34 @@ function setup(overrides = {}, options = {}) {
     } catch(error) { w.mobileCodexEvent('response',{id:m.id,error:error.message}); }
   });}};
   w.Native.locale = () => JSON.stringify({choice:options.language || 'ko',systemLanguage:options.systemLanguage || 'ko'});
+  w.Native.textSize = () => JSON.stringify({percent:options.textSize ?? 100});
   w.eval(fs.readFileSync(root+'translations.js','utf8')); w.eval(fs.readFileSync(root+'locale.js','utf8'));
   w.eval(fs.readFileSync(root+'ui-core.js','utf8')); w.eval(fs.readFileSync(root+'app.js','utf8'));
   return {w,calls,responses,snapshot,frames};
 }
+test('text size restores natively, saves explicitly and preserves the conversation and draft',async()=>{
+ let saved=130;
+ const {w,calls,snapshot}=setup({'ui.textSize':m=>({percent:saved=m.args.percent})},{textSize:saved});await tick();
+ const d=w.document,select=d.getElementById('text-size');
+ assert.equal(select.value,'130');assert.equal(d.documentElement.dataset.textSize,'130');
+ assert.equal(calls.some(c=>c.action==='ui.textSize'),false,'startup does not overwrite saved preference');
+ w.mobileCodexEvent('state',{...snapshot,messages:[{id:'keep',role:'user',text:'keep me'}]});
+ d.getElementById('prompt').value='unsent draft';
+ for(const size of [150,115,100]) {
+  select.value=String(size);select.dispatchEvent(new w.Event('change'));await tick();
+  assert.equal(saved,size);assert.equal(d.documentElement.dataset.textSize,String(size));assert.equal(select.disabled,false);
+ }
+ assert.equal(d.getElementById('prompt').value,'unsent draft');assert.equal(d.querySelector('[data-id="keep"]').textContent,'keep me');
+ assert.equal(calls.some(c=>c.action==='chat.send'||c.action==='config.save'||c.action==='projects.select'),false);
+ const reopened=setup({}, {textSize:saved});await tick();assert.equal(reopened.w.document.getElementById('text-size').value,String(saved));
+});
+test('text size rolls back failed saves and rejects an invalid native value',async()=>{
+ const {w}=setup({'ui.textSize':()=>{throw Error('storage failed');}},{textSize:130});await tick();
+ const select=w.document.getElementById('text-size');select.value='150';select.dispatchEvent(new w.Event('change'));await tick();
+ assert.equal(select.value,'130');assert.equal(select.disabled,false);assert.equal(w.document.documentElement.dataset.textSize,'130');
+ assert.match(w.document.getElementById('toast').textContent,/storage failed/);
+ const invalid=setup({}, {textSize:999});await tick();assert.equal(invalid.w.document.getElementById('text-size').value,'100');
+});
 test('Fast is an explicit per-draft lightning toggle first in the bottom row',async()=>{
  const {w,calls,snapshot}=setup();await tick();const d=w.document;
  w.mobileCodexEvent('state',{...snapshot,models:[fastModel]});

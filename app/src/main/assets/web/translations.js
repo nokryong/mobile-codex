@@ -1,5 +1,9 @@
 /* UI messages only; user/model/file content is never translated. */
 window.MobileCodexEnglish = {
+  "글자 크기": "Text size",
+  "폰과 태블릿의 Codex·Chat 화면에 함께 적용됩니다.": "Applies to Codex and Chat on phones and tablets.",
+  "기본 · 100%": "Default · 100%",
+  "글자 크기를 저장하지 못했습니다.": "Could not save text size.",
   "Fast 모드": "Fast mode",
   "선택한 모델에서는 Fast 모드를 지원하지 않습니다.": "The selected model does not support Fast mode.",
   "이전 메시지 위치가 오래되었습니다. 대화를 다시 열어 주세요.": "The message cursor is no longer valid. Reopen the conversation.",

@@ -119,6 +119,7 @@ public final class MainActivity extends Activity implements Engine.Ui {
         s.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
         s.setJavaScriptCanOpenWindowsAutomatically(false);
         s.setSupportMultipleWindows(false);
+        applyTextSize();
         web.addJavascriptInterface(new Bridge(), "Native");
         web.setWebViewClient(new WebViewClient() {
             @Override public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
@@ -187,7 +188,7 @@ public final class MainActivity extends Activity implements Engine.Ui {
         return new WebResourceResponse("text/plain", "UTF-8", 403, "Forbidden", Map.of(), new ByteArrayInputStream(new byte[0]));
     }
     @Override protected void onStart() { super.onStart(); if (loaded) engine.attach(this); }
-    @Override protected void onResume() { super.onResume(); AppLanguage.configure(this); foreground = true; getSharedPreferences("notifications", 0).edit().putBoolean("foreground", true).commit(); requestNotificationPermissionIfNeeded(); event("notifications.changed", obj()); event("updates.changed", updates.snapshot()); if (loaded) { engine.attach(this); engine.restoreAccount(); } event("voice.changed", obj()); }
+    @Override protected void onResume() { super.onResume(); AppLanguage.configure(this); applyTextSize(); foreground = true; getSharedPreferences("notifications", 0).edit().putBoolean("foreground", true).commit(); requestNotificationPermissionIfNeeded(); event("notifications.changed", obj()); event("updates.changed", updates.snapshot()); if (loaded) { engine.attach(this); engine.restoreAccount(); } event("voice.changed", obj()); }
     @Override protected void onPause() { foreground = false; getSharedPreferences("notifications", 0).edit().putBoolean("foreground", false).commit(); if (dictation != null && !dictation.waitingPermission()) dictation.cancel(); super.onPause(); }
     @Override protected void onNewIntent(Intent intent) { super.onNewIntent(intent); setIntent(intent); handleNotificationIntent(intent); }
     private void handleNotificationIntent(Intent intent) {
@@ -250,6 +251,9 @@ public final class MainActivity extends Activity implements Engine.Ui {
         controller.setAppearanceLightStatusBars(!dark);
         controller.setAppearanceLightNavigationBars(!dark);
         event("theme", obj("theme", dark ? "dark" : "light"));
+    }
+    private void applyTextSize() {
+        if (web != null) AppTextSize.apply(this, web);
     }
     @Override public void onConfigurationChanged(android.content.res.Configuration configuration) {
         super.onConfigurationChanged(configuration); applyTheme(theme);
@@ -650,6 +654,7 @@ public final class MainActivity extends Activity implements Engine.Ui {
     }
     private final class Bridge {
         @JavascriptInterface public String locale() { return AppLanguage.snapshot(MainActivity.this).toString(); }
+        @JavascriptInterface public String textSize() { return AppTextSize.snapshot(MainActivity.this).toString(); }
         @JavascriptInterface public void postMessage(String raw) {
             if (raw == null || raw.length() > 2 * 1024 * 1024) return;
             String requestId = null;
@@ -787,6 +792,14 @@ public final class MainActivity extends Activity implements Engine.Ui {
                 }
                 if (action.equals("ui.locale")) {
                     AppLanguage.set(MainActivity.this, args.optString("language", "system")); event("updates.changed", updates.snapshot()); respond(id, AppLanguage.snapshot(MainActivity.this), null); return;
+                }
+                if (action.equals("ui.textSize")) {
+                    if (!args.has("percent")) { respond(id, AppTextSize.snapshot(MainActivity.this), null); return; }
+                    int percent = AppTextSize.requireSupportedNumber(args.get("percent"));
+                    runOnUiThread(() -> {
+                        try { AppTextSize.set(MainActivity.this, percent); applyTextSize(); respond(id, AppTextSize.snapshot(MainActivity.this), null); }
+                        catch (Exception error) { respond(id, null, error); }
+                    }); return;
                 }
                 if (action.equals("ui.theme")) {
                     String choice = args.optString("theme", "system");

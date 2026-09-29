@@ -22,6 +22,7 @@
   const toolCache = [null, null, null];
   let updateState = {}, updateSourceDirty = false, updateRequestPending = false;
   let linuxStatusError = '', linuxRequestPending = false;
+  let textSizePercent = 100;
   function call(action, args = {}) {
     return new Promise((resolve, reject) => {
       if (!window.Native) return reject(new Error(t('Android 앱에서 실행해 주세요.')));
@@ -188,6 +189,38 @@
     try { localStorage.setItem('theme', choice); } catch {}
     document.documentElement.dataset.theme = choice === 'system' ? (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : choice;
     call('ui.theme', {theme:choice}).catch(() => {});
+  }
+  function applyTextSize(value) {
+    const percent = Number(value);
+    if (![100,115,130,150].includes(percent)) return false;
+    textSizePercent = percent;
+    document.documentElement.dataset.textSize = String(percent);
+    // Native text zoom scales glyphs. This factor only reserves layout space;
+    // applying it to font-size as well would enlarge every glyph twice.
+    document.documentElement.style.setProperty('--text-size-factor', String(percent / 100));
+    if ($('text-size')) $('text-size').value = String(percent);
+    return true;
+  }
+  function ensureTextSizeSettings() {
+    const themeRow = $('theme').closest('.settings-row');
+    const row = node('div', null, 'settings-row text-size-row'), label = node('label');
+    label.htmlFor = 'text-size'; label.append(node('strong', t('글자 크기')), node('small', t('폰과 태블릿의 Codex·Chat 화면에 함께 적용됩니다.')));
+    const select = node('select'); select.id = 'text-size'; select.setAttribute('aria-label', t('글자 크기'));
+    for (const value of [100,115,130,150]) select.append(new Option(value === 100 ? t('기본 · 100%') : value + '%', String(value)));
+    row.append(label, select); themeRow.after(row);
+    try { applyTextSize(JSON.parse(window.Native?.textSize?.() || '{}').percent); } catch {}
+    applyTextSize(textSizePercent);
+    select.addEventListener('change', async () => {
+      const requested = Number(select.value), previous = textSizePercent;
+      if (![100,115,130,150].includes(requested)) { select.value = String(previous); return; }
+      select.disabled = true;
+      try {
+        const result = await call('ui.textSize', {percent:requested});
+        if (result.percent !== requested) throw new Error(t('글자 크기를 저장하지 못했습니다.'));
+        applyTextSize(result.percent); viewportChanged();
+      } catch (error) { applyTextSize(previous); toast(error.message); }
+      finally { select.disabled = false; }
+    });
   }
   function contextScope(scope = draftScope) { return scope ? scope + ':context' : ''; }
   function optionsScope(scope = draftScope) { return scope ? scope + ':options' : ''; }
@@ -2016,11 +2049,17 @@
   ['check','download','cancel','clear','permission','install'].forEach(action => on('update-' + action, () => updateAction(action)));
   $('update-repository').addEventListener('input', () => { updateSourceDirty = true; drawUpdates(updateState); });
   $('update-prereleases').addEventListener('change', () => { updateSourceDirty = true; drawUpdates(updateState); });
+  ensureTextSizeSettings();
   $('language').value = L.choice();
   on('language', async () => {
     const choice = $('language').value;
     try { await call('ui.locale', {language:choice}); } catch (error) { $('language').value = L.choice(); throw error; }
-    saveDraft(); saveOptions(); L.set(choice); modelKey = ''; render(await call('state')); renderDraftContext(); drawDictation(dictationState); await loadUpdates();
+    saveDraft(); saveOptions(); L.set(choice);
+    const sizeRow = $('text-size').closest('.text-size-row');
+    sizeRow.querySelector('strong').textContent = t('글자 크기');
+    sizeRow.querySelector('small').textContent = t('폰과 태블릿의 Codex·Chat 화면에 함께 적용됩니다.');
+    $('text-size').setAttribute('aria-label', t('글자 크기')); $('text-size').options[0].textContent = t('기본 · 100%');
+    modelKey = ''; render(await call('state')); renderDraftContext(); drawDictation(dictationState); await loadUpdates();
     if (!$('file-panel').hidden) await listFiles();
     if ($('tools-dialog').open) await loadTools(false);
   }, 'change');

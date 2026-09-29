@@ -183,3 +183,25 @@ html[data-theme=dark] .fast-mode-button[aria-pressed=true] { color:#ffd46b; back
 .topbar { position:relative; inset:auto; flex:none; }
 .chat-scroll { scroll-padding-top:12px; }
 .file-panel { padding-top:0; }
+
+/* Text zoom changes glyph size, not the viewport or touch-target geometry. */
+:root { --text-size-factor:1; }
+.text-size-row { flex-wrap:wrap; }
+.text-size-row>label { display:grid; gap:4px; flex:1 1 170px; min-width:0; }
+.text-size-row select { flex:0 0 auto; max-width:100%; }
+.composer:not(.composer-expanded) { min-height:calc(24px * var(--text-size-factor) + 34px); }
+.composer:not(.composer-expanded) #prompt { height:calc(24px * var(--text-size-factor) + 16px)!important; min-height:calc(24px * var(--text-size-factor) + 16px); }
+.message.user.has-date { max-width:min(86%,calc(100% - 78px * var(--text-size-factor))); }
+.settings-row { flex-wrap:wrap; }
+.settings-row>span:first-child { flex:1 1 150px; }
+.settings-row select { max-width:100%; }
+.settings-nav button { white-space:normal; overflow-wrap:anywhere; }
+.mode-switch { width:calc(112px * var(--text-size-factor)); max-width:100%; }
+.mode-switch button { min-height:44px; padding:4px 6px; }
+.sidebar-top { flex-wrap:wrap; height:auto; min-height:44px; }
+
+/* Mid-width tablets need useful conversation width with their file pane open. */
+@media(min-width:761px) and (max-width:1100px) {
+  .file-panel { position:absolute; inset:0 0 0 auto; width:min(360px,60vw); z-index:15; box-shadow:-8px 0 24px #0001; }
+  .chat-scroll { padding-left:20px; padding-right:20px; }
+}

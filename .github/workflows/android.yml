@@ -51,6 +51,7 @@ jobs:
           restore-keys: |
             runtime-inputs-${{ runner.os }}-
       - name: Prepare pinned Android runtimes
+        id: runtime
         run: |
           python3 tools/prepare_runtime.py
           python3 tools/build_native.py --ndk "$ANDROID_HOME/ndk/28.2.13676358"
@@ -68,10 +69,11 @@ jobs:
           sudo apt-get install -y fonts-noto-cjk
           npm run test:layout
       - name: Build and check Android app
-        if: ${{ !inputs.apk_only }}
+        id: android
+        if: ${{ !cancelled() && !inputs.apk_only && steps.runtime.conclusion == 'success' }}
         run: ./gradlew --no-daemon assembleDebug testDebugUnitTest lintDebug assembleDebugAndroidTest
       - name: Verify Android and desktop project transfer interoperability
-        if: ${{ !inputs.apk_only }}
+        if: ${{ !cancelled() && !inputs.apk_only && steps.android.conclusion == 'success' }}
         run: |
           JSON_JAR="$(find "${GRADLE_USER_HOME:-$HOME/.gradle}/caches/modules-2/files-2.1/org.json/json" -name 'json-*.jar' -type f -print -quit)"
           test -n "$JSON_JAR"
@@ -127,4 +129,7 @@ jobs:
             app/build/reports/lint-results-debug.*
             artifacts/ui-preview/
             artifacts/project-identity-preview/
+            artifacts/chat-switch-preview/
+            artifacts/text-size-preview/
+            artifacts/character-pack/
           retention-days: 14
