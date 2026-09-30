@@ -1,8 +1,33 @@
 # Verification — current scope
 
-The current app metadata is `0.2.5` stable (`versionCode 50`, ARM64, Android 10+). The automated records below are historical entries for the versions named in their headings; they are not evidence of current physical-device behavior. Current release availability is tracked in the public [Releases](https://github.com/nokryong/mobile-codex/releases) page and current workflow results in [Actions](https://github.com/nokryong/mobile-codex/actions/workflows/android.yml). See the [0.2.5 release notes](releases/0.2.5.md) for feature scope, including manual project sync and its exclusions.
+This branch's app metadata is `0.2.6` (`versionCode 55`, ARM64, Android 10+). See the [release notes](releases/0.2.6.md) for changes. The automated records below are historical entries for the versions named in their headings; they are not evidence of current physical-device behavior. Current release checks, Android tests, lint, build and signing results are recorded in the public [Android APK workflow](https://github.com/nokryong/mobile-codex/actions/workflows/android.yml). Published release availability is tracked in the public [Releases](https://github.com/nokryong/mobile-codex/releases) page. Manual project sync and its exclusions remain described in the [0.2.5 release notes](releases/0.2.5.md).
 
 Physical Android login, WebView behavior, SAF folder access, and device-specific performance remain outside this document's automated browser/build evidence unless an entry explicitly says otherwise. Do not treat an account-security or device-login prompt alone as a confirmed app defect; report the exact prompt and screen when opening an issue.
+
+## 0.2.6-alpha.2 private Pro consultation
+
+The composer offers Attach files and Ask Pro in its `+` menu. Ask Pro arms a removable draft flag; sending still uses the user's selected Codex model and settings. Codex prepares a focused question, invokes the Pro consultation tool once, and receives the reply as a tool result within its ongoing turn. The app also displays the review in the original local conversation. Selecting the menu item alone does not contact Pro.
+
+Native request grants enforce one consultation per explicit UI request. Pending operations stay bound to their original account, workspace, local conversation and Codex turn. Success, failure, cancellation and timeout resolve the waiting tool call once; no fresh Codex turn is started to inject the response. Existing Codex threads retain their remote IDs and history. New threads use the native dynamic tool; existing threads use an app-owned MCP bridge because the pinned runtime cannot add dynamic tools through `thread/resume`.
+
+The consultation payload is the exact prompt authored by Codex. The app does not collect AGENTS, project trees, Git diffs or local history for it, and adds no prohibition on ChatGPT-side connected tools. There is no automatic Pro file-query loop or automatic resend after an uncertain send. Consultations use dedicated web conversation metadata, so the first consultation starts fresh instead of inheriting the AGENTS and capability bans previously sent to direct Pro chats. Previously stored direct Pro messages and their web metadata remain readable and unchanged.
+
+Full checks, Android unit tests, lint, signing and build run on the private PR through [GitHub Actions](https://github.com/SeeUSoon93/mobile-codex/actions/workflows/android.yml). A successful trusted private PR build publishes a private prerelease with a raw APK and separate corresponding-source assets. The job summary links the release. Public publication remains a separate action after device approval. Real authenticated Android WebView behavior and installation require the [device checks](releases/0.2.6-alpha.2.md).
+
+Local verification on 2026-09-30: 275 JavaScript tests passed; 80 Python tests ran with 78 passing and two prepared-runtime checks skipped; all 268 Android unit tests in the initial full run passed, followed by nine MCP launcher/transport tests after the final environment fix and nine Engine consultation tests after separating legacy Pro web conversations. All six responsive browser suites passed, including actual compact-composer menu taps, keyboard dismissal, draft consumption, consultation status and the existing layout surfaces. The local Android lint task could not resolve uncached instrumentation dependencies in offline mode; the private workflow runs the complete lint and runtime packaging checks.
+
+A disposable real app-server session with a local mock Responses backend also verified that adding the MCP configuration preserves an existing remote thread ID and saved history and exposes the consultation tool to the next model request. That supplementary test used host app-server `0.154.0-alpha.3` with no real model calls; the implementation's protocol support was checked against official pinned `rust-v0.155.1` source. The MCP launch explicitly inherits only the bundled Python/runtime bootstrap variables needed on Android; it does not change the user's saved MCP configuration.
+
+## 0.2.6-alpha private candidate
+
+Local source checks for this candidate:
+
+- JavaScript/DOM and workflow checks: 258 passed (`npm test`).
+- Python packaging, signing and workflow checks: 64 tests, 62 passed and 2 conditional checks skipped because the prepared Android runtime is not present locally.
+- All six responsive browser suites passed, covering chat switching, text sizes, UI layout, character packs, project identity and spacing. The UI layout suite also checks Codex and Pro cancellation when focus leaves the composer.
+- Added Android unit regressions for stale file requests, project changes during file approval, provider-normalized rename/move paths, and completed/failed/interrupted turn notifications. Android build, unit and lint results are provided by the private PR workflow; these are separate from local mock-bridge checks.
+
+The private PR test APK is an artifact, not a published release. Installation, keyboard behavior, file-provider behavior and notification delivery still require the physical-device checklist in the [test notes](releases/0.2.6-alpha.md).
 
 # Verification — 0.1.13 alpha
 

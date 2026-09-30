@@ -8,14 +8,34 @@ function job(name) {
  assert.ok(match,'missing workflow job '+name);
  return match[1];
 }
-test('UI and source checks gate all Android work without failure overrides',()=>{
+test('required checks gate Android work; only trusted private artifact uploads tolerate quota failures',()=>{
  const checks=job('checks'),build=job('build');
  assert.match(checks,/npm test/);
  assert.match(checks,/npm run test:layout/);
  assert.match(checks,/unittest discover/);
  assert.doesNotMatch(checks,/setup-android|gradlew|prepare_runtime|sdkmanager/);
  assert.match(build,/^    needs: checks$/m);
- assert.doesNotMatch(workflow,/!cancelled\(\)|continue-on-error: true|--continue/);
+ assert.doesNotMatch(workflow,/!cancelled\(\)|--continue/);
+ const optionalUploads=new Map([
+  ['ui-check-reports', /continue-on-error: \$\{\{ github\.repository == 'SeeUSoon93\/mobile-codex' && github\.event\.repository\.private == true && github\.event_name == 'pull_request' && github\.event\.pull_request\.head\.repo\.full_name == github\.repository \}\}/],
+  ['mobile-codex-private-pr-test-apk', /if: env\.PRIVATE_TEST_PR == 'true'\n        continue-on-error: true/],
+  ['mobile-codex-private-pr-tool-sources', /if: env\.PRIVATE_TEST_PR == 'true'\n        continue-on-error: true/],
+  ['android-check-reports', /continue-on-error: \$\{\{ env\.PRIVATE_TEST_PR == 'true' \}\}/],
+ ]);
+ let optionalCount=0;
+ for(const source of [checks,build]) {
+  assert.doesNotMatch(source,/^    continue-on-error:/m,'jobs must never tolerate required check failures');
+  const steps=source.match(/^      - [\s\S]*?(?=^      - |$(?![\s\S]))/gm)||[];
+  for(const step of steps) {
+   if(!/^        continue-on-error:/m.test(step)) continue;
+   assert.match(step,/uses: actions\/upload-artifact@/,'only artifact uploads may tolerate failures');
+   const artifact=step.match(/^          name: (.+)$/m)?.[1];
+   assert.ok(optionalUploads.has(artifact),'unexpected optional upload '+artifact);
+   assert.match(step,optionalUploads.get(artifact),'upload override must be limited to trusted private PRs');
+   optionalCount++;
+  }
+ }
+ assert.equal(optionalCount,optionalUploads.size,'all expected private quota fallbacks are present');
  const androidStep=build.slice(build.indexOf('- name: Build and check Android app'),build.indexOf('- name: Verify Android'));
  assert.doesNotMatch(androidStep,/always\(|failure\(/);
 });

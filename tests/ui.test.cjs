@@ -86,15 +86,16 @@ test('Fast is an explicit per-draft lightning toggle first in the bottom row',as
  assert.equal(calls.filter(c=>c.action==='chat.send').at(-1).args.fastMode,false);
  assert.equal(calls.some(c=>c.action==='config.write'||c.action==='permissions.set'),false);
 });
-test('Fast stays unavailable for unsupported models and Pro, and cannot change a running turn',async()=>{
+test('Fast stays unavailable for unsupported models and preserves its choice with Pro consultation',async()=>{
  const {w,calls,snapshot}=setup();await tick();const d=w.document,toggle=d.getElementById('fast-mode');
  assert.equal(toggle.disabled,true);
  w.mobileCodexEvent('state',{...snapshot,models:[fastModel],busy:true});assert.equal(toggle.disabled,true);
  w.mobileCodexEvent('state',{...snapshot,models:[fastModel]});assert.equal(toggle.disabled,false);
- d.querySelector('#model-list input[value="chatgpt-web:gpt-6-pro"]').click();await tick();
- assert.equal(toggle.disabled,true);assert.equal(toggle.getAttribute('aria-pressed'),'false');
+ d.getElementById('add-attachment').click();d.getElementById('composer-consult-pro').click();await tick();
+ assert.equal(toggle.disabled,false);toggle.click();await tick();assert.equal(toggle.getAttribute('aria-pressed'),'true');
  d.getElementById('prompt').value='Pro test';d.getElementById('composer').dispatchEvent(new w.Event('submit',{cancelable:true}));await tick();
- assert.equal(Object.hasOwn(calls.find(c=>c.action==='chat.pro.send').args,'fastMode'),false);
+ const sent=calls.find(c=>c.action==='chat.send');assert.equal(sent.args.fastMode,true);assert.equal(sent.args.consultPro,true);
+ assert.equal(calls.some(c=>c.action==='chat.pro.send'),false);
 });
 test('Fast choices are isolated between conversation drafts',async()=>{
  const {w,snapshot}=setup();await tick();const toggle=w.document.getElementById('fast-mode');
@@ -341,7 +342,7 @@ test('GPT-6-Pro uses an isolated transport without a remote Android bridge or cr
  const adapter=fs.readFileSync('app/src/main/assets/pro-web-transport.js','utf8');
  assert.equal(fs.existsSync('app/src/main/java/dev/mobilecodex/app/ChatWebTransport.java'),false);
  assert.match(main,/chat\.pro\.send|ProWebTransport/);
- assert.match(app,/chat\.pro\.send|chatgpt-web:gpt-6-pro/);
+ assert.match(app,/consultPro/);assert.doesNotMatch(app,/chat\.pro\.send/);
  assert.doesNotMatch(app,/chat\.web\.|chat-web-messages|chat-web-draft/);
  assert.doesNotMatch(web,/addJavascriptInterface|backend-api\/f\/conversation/);
  assert.doesNotMatch(transport,/addJavascriptInterface|getCookie|accessToken|Authorization|backend-api/);
@@ -352,20 +353,20 @@ test('GPT-6-Pro uses an isolated transport without a remote Android bridge or cr
    assert.doesNotMatch(script,/window\.fetch\s*=|XMLHttpRequest|backend-api\/f\/conversation/);
  }
 });
-test('GPT-6-Pro is synthetic, read-only, and sends through its dedicated action',async()=>{
+test('Pro consultation uses the selected Codex request without changing its permissions',async()=>{
  const {w,calls,snapshot}=setup();await tick();const d=w.document;
  w.mobileCodexEvent('state',{...snapshot,permissions:'danger-full-access',approvalMode:'allow-all'});
- const pro=d.querySelector('#model-list input[value="chatgpt-web:gpt-6-pro"]');assert.ok(pro);pro.click();await tick();
- assert.equal(d.getElementById('model-summary').textContent,'GPT-6-Pro · 읽기 전용');
- assert.equal(d.getElementById('effort').disabled,true);assert.equal(d.getElementById('effort').selectedOptions[0].textContent,'Pro에서 자동 결정');
- assert.equal(d.getElementById('permissions').value,'read-only');assert.equal(d.getElementById('permissions').disabled,true);
- assert.equal(d.getElementById('approval-mode').disabled,true);assert.equal(d.getElementById('approval-mode').selectedOptions[0].textContent,'승인 사용 안 함');
+ assert.equal(d.querySelector('#model-list input[value="chatgpt-web:gpt-6-pro"]'),null);
+ d.getElementById('add-attachment').click();d.getElementById('composer-consult-pro').click();await tick();
+ assert.equal(d.getElementById('model-summary').textContent,'기본 모델');assert.equal(d.getElementById('effort').disabled,false);
+ assert.equal(d.getElementById('permissions').value,'danger-full-access');assert.equal(d.getElementById('permissions').disabled,false);
+ assert.equal(d.getElementById('approval-mode').value,'allow-all');assert.equal(d.getElementById('approval-mode').disabled,false);
  assert.equal(calls.some(call=>call.action==='permissions.set'||call.action==='approvals.set'),false);
  d.getElementById('prompt').value='이 변경을 검토해줘';d.getElementById('composer').dispatchEvent(new w.Event('submit',{cancelable:true}));await tick();
- const sent=calls.find(call=>call.action==='chat.pro.send');assert.ok(sent);assert.equal(sent.args.model,'chatgpt-web:gpt-6-pro');
- assert.equal(calls.some(call=>call.action==='chat.send'||call.action==='chat.steer'),false);
- w.mobileCodexEvent('state',{...snapshot,proBusy:true});assert.equal(d.getElementById('activity-text').textContent,'Pro 답변 중');d.getElementById('stop').click();await tick();
- assert.equal(calls.at(-1).action,'chat.pro.cancel');
+ const sent=calls.find(call=>call.action==='chat.send');assert.ok(sent);assert.equal(sent.args.consultPro,true);assert.equal(sent.args.model,'');
+ assert.equal(calls.some(call=>call.action==='chat.pro.send'),false);
+ w.mobileCodexEvent('state',{...snapshot,busy:true,proBusy:true,pendingProConsultation:{operationId:'pro'}});assert.equal(d.getElementById('activity-text').textContent,'Pro 답변 중');d.getElementById('stop').click();await tick();
+ assert.equal(calls.at(-1).action,'chat.stop');
 });
 test('ChatGPT Pro message metadata is visible and uncertain sends warn against retry',async()=>{
  const {w,snapshot}=setup();await tick();
@@ -433,6 +434,20 @@ test('tool refresh keeps a prior category list when one protocol request fails',
  w.document.getElementById('refresh-tools').click();await tick();await tick();
  assert.match(w.document.getElementById('tools-list').textContent,/이전 목록을 표시합니다/);
  assert.match(w.document.getElementById('tools-list').textContent,/Keep me/);
+});
+test('plugins, skills and MCP servers have separate tabs with counts and search',async()=>{
+ const {w}=setup({'rpc':m=>{
+   if(m.args.method==='plugin/list') return {marketplaces:[{name:'local',plugins:[{name:'Alpha plugin',id:'a'},{name:'Beta plugin',id:'b'}]}]};
+   if(m.args.method==='skills/list') return {data:[{skills:[{name:'writer',description:'Drafts docs',path:'/s/writer',enabled:true}]}]};
+   return {data:[{name:'github',tools:{a:{},b:{}}},{name:'linear',tools:{}},{name:'figma',tools:{}}]};
+ }});await tick();w.document.getElementById('show-tools').click();await tick();w.document.getElementById('show-tools-panel').click();await tick();await tick();
+ const d=w.document,tabs=[...d.querySelectorAll('.tools-tab')],panels=[...d.querySelectorAll('.tools-panel')];
+ assert.deepEqual(tabs.map(t=>t.querySelector('.tools-count').textContent),['2','1','3']);
+ assert.deepEqual(panels.map(p=>p.hidden),[false,true,true]);
+ tabs[2].click();assert.deepEqual(panels.map(p=>p.hidden),[true,true,false]);assert.equal(tabs[2].getAttribute('aria-selected'),'true');
+ const search=d.querySelector('.tools-search');search.value='lin';search.dispatchEvent(new w.Event('input'));
+ assert.deepEqual([...panels[2].querySelectorAll('.tool-card')].filter(c=>!c.hidden).map(c=>c.querySelector('strong').textContent),['linear']);
+ search.value='nothing matches';search.dispatchEvent(new w.Event('input'));assert.equal(d.querySelector('.tools-no-match').hidden,false);
 });
 test('tool recovery action keeps protocol failures handled after menu relocation',async()=>{
  const {w}=setup({'recovery.list':()=>{throw new Error('recovery offline');}});let unhandled=0;
@@ -733,7 +748,7 @@ test('file management uses labelled actions and protects unsaved editor changes'
  d.getElementById('files-toggle').click();await tick();d.querySelector('.file-entry .icon-button').click();await tick();
  assert.deepEqual([...d.querySelectorAll('#file-actions button')].map(b=>b.textContent),['이름 변경','이동','삭제']);
  d.querySelector('#file-actions button').click();await tick();d.getElementById('input-value').value='new.md';d.getElementById('input-confirm').click();await tick();await tick();
- assert.deepEqual(calls.find(c=>c.action==='files.mutate').args,{operation:'mobile_rename',arguments:{path:'test.md',name:'new.md'}});
+ assert.deepEqual(calls.find(c=>c.action==='files.mutate').args,{operation:'mobile_rename',arguments:{path:'test.md',name:'new.md'},workspaceKey:''});
  d.querySelector('.file-row').click();await tick();d.getElementById('editor').value='unsaved';w.confirm=()=>false;w.mobileCodexBack();assert.equal(d.getElementById('editor-dialog').open,true);
 });
 test('generated images appear, open full-screen, export and survive a snapshot refresh',async()=>{
@@ -831,7 +846,7 @@ test('a removed project keeps its same-thread draft when the conversation become
 
 test('picker cancellation and partial errors preserve the draft while accepted attachments are sent',async()=>{
  const {w,calls}=setup({'attachments.pick':()=>({cancelled:false,attachments:[{id:'a1',name:'ok.txt'}],errors:['bad.bin을 읽지 못했습니다.']})});await tick();const d=w.document;
- d.getElementById('add-attachment').click();await tick();assert.match(d.getElementById('draft-context').textContent,/ok.txt/);
+ d.getElementById('add-attachment').click();d.getElementById('composer-attach').click();await tick();assert.match(d.getElementById('draft-context').textContent,/ok.txt/);
  d.getElementById('prompt').value='첨부 전송';d.getElementById('composer').dispatchEvent(new w.Event('submit',{cancelable:true}));await tick();
  assert.deepEqual(calls.find(c=>c.action==='chat.send').args.attachments,['a1']);
 });
@@ -879,7 +894,7 @@ test('clicking the prompt keeps the skill query filtered and selectable',async()
 
 test('picker result lands in its original workspace draft after the user switches projects',async()=>{
  let finish;const {w,snapshot}=setup({'attachments.pick':()=>new Promise(resolve=>finish=resolve)});await tick();
- w.mobileCodexEvent('state',{...snapshot,workspace:{selected:true,key:'one',name:'One'},threadId:'t'});w.document.getElementById('add-attachment').click();await tick();
+ w.mobileCodexEvent('state',{...snapshot,workspace:{selected:true,key:'one',name:'One'},threadId:'t'});w.document.getElementById('add-attachment').click();w.document.getElementById('composer-attach').click();await tick();
  w.mobileCodexEvent('state',{...snapshot,workspace:{selected:true,key:'two',name:'Two'},threadId:'t'});finish({receiptId:'switch',draftKey:C.draftKey('one','t'),attachments:[{id:'one-file',name:'one.txt'}],errors:[]});await tick();
  assert.equal(w.document.getElementById('draft-context').hidden,true);assert.match(w.localStorage.getItem('draft:'+C.draftKey('one','t')+':context'),/one.txt/);
 });

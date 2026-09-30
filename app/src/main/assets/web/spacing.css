@@ -84,6 +84,8 @@
 
   .file-search input, .text-input, .question input:not([type="checkbox"]), .question select, #sync-repository { font-size: 16px; }
   .toolbar button { flex: 1 1 auto; }
+  #tools-dialog .toolbar { margin-left: calc(var(--s-4) * -1); margin-right: calc(var(--s-4) * -1); padding: 0 var(--s-4); }
+  #tools-dialog .toolbar button { flex: none; }
   .terminal-form { flex-wrap: wrap; }
   .terminal-form .text-input { flex-basis: 100%; }
   .console { max-height: calc(var(--app-height, 100dvh) * .45); }

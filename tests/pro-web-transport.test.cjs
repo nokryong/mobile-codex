@@ -22,7 +22,7 @@ test('recognizes only the exact GPT-6 Pro option and confirms the composer model
   assert.equal(adapter.inspect().status,'available');
   assert.equal(adapter.choosePro().status,'selected');
   assert.equal(adapter.confirmPro().confirmedModel,'GPT-6 Pro');
-  assert.equal(adapter.exactPro('Pro'),false);assert.equal(adapter.exactPro('GPT-6 Pro'),true);
+  assert.equal(adapter.exactPro('Pro Legacy'),false);assert.equal(adapter.exactPro('GPT-6 Pro'),true);
 });
 
 test('fails closed when GPT-6 Pro is absent or ambiguous', () => {
@@ -220,8 +220,6 @@ test('opens the performance picker with pointer events and confirms actual Pro t
   assert.equal(adapter.choosePro().status,'waiting');assert.equal(steps,1);
   assert.equal(adapter.choosePro().status,'waiting');assert.equal(steps,1);
   slider.setAttribute('aria-valuenow','4');
-  assert.equal(adapter.choosePro().reason,'gpt_6_pro_missing');
-  w.document.querySelector('[aria-label="모델 선택"]').textContent='6 Pro';
   assert.equal(adapter.choosePro().status,'selected');
   assert.equal(adapter.confirmPro().confirmedModel,'GPT-6 Pro');
 });
@@ -236,4 +234,142 @@ test('does not accept a hidden project heading alone or a sidebar/chat mention a
     'https://chatgpt.com/g/g-p-existing/project');
   w.document.querySelector('h1').getBoundingClientRect=()=>({width:0,height:0});
   assert.equal(adapter.inspectProject('mobile-codex-chat').status,'waiting');
+});
+
+test('accepts any Pro tier regardless of version, and nothing else', () => {
+  const {adapter}=setup('<div id="prompt-textarea"></div>');
+  for (const name of ['GPT-6 Pro','GPT-6.1 Pro','gpt 6.1 pro','6.1 Pro','6Pro','GPT-7 Pro','Pro','모델: GPT-6.1 Pro']) assert.equal(adapter.exactPro(name),true,name);
+  for (const name of ['GPT-6.1','GPT-6.1 Thinking','Pro Legacy','GPT-6.1 Pro Legacy','Professional','Pro 체험판']) assert.equal(adapter.exactPro(name),false,name);
+});
+
+test('a renamed Pro model is reported with the labels the menu actually showed', () => {
+  const {w,adapter}=setup('<form><div id="prompt-textarea" contenteditable="true"></div><button id="model" aria-haspopup="menu">GPT-6.1</button></form>'+
+    '<div role="menu"><button role="menuitem">GPT-6.1 Pro</button><button role="menuitem">GPT-6.1 Thinking</button></div>');
+  w.document.querySelector('[role="menuitem"]').addEventListener('click',()=>{w.document.getElementById('model').textContent='GPT-6.1 Pro';});
+  assert.equal(adapter.choosePro().status,'selected');
+  assert.equal(adapter.confirmPro().confirmedModel,'GPT-6 Pro');
+  const missing=setup('<div id="prompt-textarea"></div><button aria-haspopup="menu">GPT-6.1</button><div role="menu"><button role="menuitem">Super Pro</button><button role="menuitem">GPT-6.1 Thinking</button></div>').adapter.choosePro();
+  assert.equal(missing.reason,'gpt_6_pro_missing');
+  assert.deepEqual([...missing.seen],['Super Pro','GPT-6.1 Thinking']);
+});
+
+test('reaching the last slider position is not enough when the button does not then read Pro', () => {
+  const {w,adapter}=setup('<form><div id="prompt-textarea"></div><button type="button" id="effort" aria-haspopup="menu" aria-expanded="false">추론 수준</button></form>'+
+    '<div role="menu" hidden><div data-testid="composer-intelligence-picker-content"><button type="button"><span>6</span> <span>Pro</span><svg></svg></button>'+
+    '<div id="performance" role="menuitem" tabindex="0" aria-keyshortcuts="ArrowLeft ArrowRight"><div data-model-reasoning-effort-slider><span role="slider" aria-valuenow="4" aria-valuemax="4"></span></div></div></div></div>');
+  const button=w.document.getElementById('effort'),menu=w.document.querySelector('[role="menu"]');
+  button.addEventListener('pointerdown',()=>{menu.hidden=false;button.setAttribute('aria-expanded','true');});
+  menu.addEventListener('keydown',e=>{if(e.key==='Escape'){menu.hidden=true;button.setAttribute('aria-expanded','false');}});
+  assert.equal(adapter.openModelPicker().status,'opened');
+  assert.equal(adapter.choosePro().status,'selected'); assert.equal(menu.hidden,true);
+  assert.equal(adapter.confirmPro().reason,'model_confirmation_failed');
+});
+
+test('a Pro heading does not count while the slider is below its maximum', () => {
+  const {w,adapter}=setup('<form><div id="prompt-textarea"></div><button type="button" aria-haspopup="menu" aria-expanded="true">추론 수준</button></form>'+
+    '<div role="menu"><div data-testid="composer-intelligence-picker-content"><button type="button">6 Pro</button>'+
+    '<div id="performance" role="menuitem" tabindex="0" aria-keyshortcuts="ArrowLeft ArrowRight"><div data-model-reasoning-effort-slider><span role="slider" aria-valuenow="2" aria-valuemax="4"></span></div></div></div></div>');
+  let steps=0; w.document.getElementById('performance').addEventListener('keydown',e=>{if(e.key==='ArrowRight')steps++;});
+  assert.equal(adapter.choosePro().status,'waiting'); assert.equal(steps,1);
+  assert.notEqual(adapter.confirmPro().status,'available');
+});
+
+test('a bare Pro badge outside the composer is not mistaken for the model button', () => {
+  const {adapter}=setup('<nav><button>Pro</button></nav><form><div id="prompt-textarea"></div><button aria-haspopup="menu">추론 수준</button></form>');
+  assert.equal(adapter.inspect().status,'available'); assert.equal(adapter.inspect().triggerCount,1);
+});
+
+test('steps from Instant to the last slider position and confirms from the Pro trigger label', () => {
+  const {w,adapter}=setup('<form><div id="prompt-textarea"></div><button type="button" id="effort" aria-haspopup="menu" aria-expanded="false">Instant</button></form>'+
+    '<div role="menu" hidden><div data-testid="composer-intelligence-picker-content"><button type="button">6 Pro</button>'+
+    '<div id="performance" role="menuitem" tabindex="0" aria-keyshortcuts="ArrowLeft ArrowRight"><div data-model-reasoning-effort-slider><span role="slider" aria-valuenow="0" aria-valuemax="3"></span></div></div></div></div>');
+  const button=w.document.getElementById('effort'),menu=w.document.querySelector('[role="menu"]'),slider=w.document.querySelector('[role="slider"]');
+  button.addEventListener('pointerdown',()=>{menu.hidden=false;button.textContent='추론 수준';button.setAttribute('aria-expanded','true');});
+  w.document.getElementById('performance').addEventListener('keydown',e=>{if(e.key==='ArrowRight')slider.setAttribute('aria-valuenow',String(Number(slider.getAttribute('aria-valuenow'))+1));});
+  menu.addEventListener('keydown',e=>{if(e.key==='Escape'){menu.hidden=true;button.textContent=slider.getAttribute('aria-valuenow')===slider.getAttribute('aria-valuemax')?'Pro':'Thinking';button.setAttribute('aria-expanded','false');}});
+  const state=adapter.prepareComposer(); assert.equal(state.status,'available'); assert.equal(state.currentModel,'');
+  assert.equal(adapter.openModelPicker().status,'opened');
+  for (let i=0;i<3;i++) assert.equal(adapter.choosePro().status,'waiting');
+  assert.equal(adapter.choosePro().status,'selected');
+  assert.equal(button.textContent,'Pro');
+  assert.equal(adapter.confirmPro().confirmedModel,'GPT-6 Pro');
+});
+
+test('does not touch the picker when the composer button already reads 6 Pro', () => {
+  const {w,adapter}=setup('<form><div id="prompt-textarea"></div><button type="button" id="effort" aria-haspopup="menu" aria-expanded="false">6 Pro</button></form>');
+  let presses=0; w.document.getElementById('effort').addEventListener('pointerdown',()=>presses++);
+  assert.equal(adapter.prepareComposer().currentModel,'GPT-6 Pro');
+  assert.equal(adapter.confirmPro().confirmedModel,'GPT-6 Pro'); assert.equal(presses,0);
+});
+
+const pickerDom = (trigger, slider) => '<form><div id="prompt-textarea"></div>'+trigger+'</form>'+
+  '<div role="menu"><div data-testid="composer-intelligence-picker-content"><button type="button">6 Pro</button>'+
+  '<div id="performance" role="menuitem" tabindex="0" aria-keyshortcuts="ArrowLeft ArrowRight"><div data-model-reasoning-effort-slider>'+slider+'</div></div></div></div>';
+
+test('a slider without value attributes is never treated as its last position', () => {
+  const {adapter}=setup(pickerDom('<button aria-haspopup="menu" aria-expanded="true">Instant</button>','<span role="slider"></span>'));
+  assert.notEqual(adapter.choosePro().status,'selected');
+  const partial=setup(pickerDom('<button aria-haspopup="menu" aria-expanded="true">Instant</button>','<span role="slider" aria-valuenow="0"></span>')).adapter;
+  assert.notEqual(partial.choosePro().status,'selected');
+});
+
+test('visible "6 Pro" confirms Pro even when the button has a generic accessible name', () => {
+  const {adapter}=setup('<form><div id="prompt-textarea"></div><button aria-haspopup="menu" aria-label="모델 선택기">6 Pro</button></form>');
+  assert.equal(adapter.confirmPro().confirmedModel,'GPT-6 Pro');
+  const byName=setup('<form><div id="prompt-textarea"></div><button aria-haspopup="menu" aria-label="6 Pro"><svg></svg></button></form>').adapter;
+  assert.equal(byName.confirmPro().confirmedModel,'GPT-6 Pro');
+});
+
+test('a failed confirmation reports what the button actually said', () => {
+  const {adapter}=setup('<form><div id="prompt-textarea"></div><button aria-haspopup="menu" aria-label="모델 선택기">Thinking</button></form>');
+  const failed=adapter.confirmPro();
+  assert.equal(failed.reason,'model_confirmation_failed');
+  assert.deepEqual({...failed.trigger},{text:'Thinking',ariaLabel:'모델 선택기'});
+});
+
+test('the send button is not pressed unless the composer still names Pro', () => {
+  const {w,adapter}=setup('<form><div id="prompt-textarea"></div><button id="model" aria-haspopup="menu">6 Pro</button><button id="composer-submit-button">send</button></form>');
+  let sends=0; w.document.getElementById('composer-submit-button').addEventListener('click',()=>sends++);
+  w.document.getElementById('model').textContent='Instant';
+  const blocked=adapter.clickSend(); assert.equal(blocked.status,'not_sent'); assert.equal(blocked.reason,'model_confirmation_failed'); assert.equal(sends,0);
+  w.document.getElementById('model').textContent='6 Pro';
+  assert.equal(adapter.clickSend().status,'clicked'); assert.equal(sends,1);
+});
+
+test('re-injecting the adapter keeps its state instead of registering a new copy', () => {
+  const {w,adapter}=setup('<div id="prompt-textarea"></div>');
+  w.eval(source);
+  assert.equal(w.MCProWeb,adapter);
+});
+
+const modeDom = (chatAttrs, workAttrs, trigger) => '<header><div role="tablist"><button role="tab" id="chat-mode" '+chatAttrs+'>Chat</button><button role="tab" id="work-mode" '+workAttrs+'>Work</button></div></header>'+
+  '<form><div id="prompt-textarea"></div><button id="effort" aria-haspopup="menu">'+trigger+'</button></form>';
+
+test('Work mode is switched to Chat before Pro is chosen', () => {
+  const {w,adapter}=setup(modeDom('aria-selected="false"','aria-selected="true"','Extra High'));
+  const chat=w.document.getElementById('chat-mode'),work=w.document.getElementById('work-mode'),effort=w.document.getElementById('effort');
+  let presses=0; chat.addEventListener('click',()=>{presses++;chat.setAttribute('aria-selected','true');work.setAttribute('aria-selected','false');effort.textContent='Instant';});
+  const first=adapter.prepareComposer(); assert.equal(first.status,'waiting'); assert.equal(first.reason,'chat_mode_switching'); assert.equal(presses,1);
+  const next=adapter.prepareComposer(); assert.equal(next.status,'available'); assert.equal(next.currentModel,''); assert.equal(presses,1);
+});
+
+test('the mode switch is pressed once while the page is still changing', () => {
+  const {w,adapter}=setup(modeDom('aria-selected="false"','aria-selected="true"','Extra High'));
+  let presses=0; w.document.getElementById('chat-mode').addEventListener('click',()=>presses++);
+  assert.equal(adapter.prepareComposer().reason,'chat_mode_switching');
+  assert.equal(adapter.prepareComposer().reason,'chat_mode_switching'); assert.equal(presses,1);
+});
+
+test('Chat mode and pages without the toggle are left alone', () => {
+  let {w,adapter}=setup(modeDom('aria-selected="true"','aria-selected="false"','Instant'));
+  let presses=0; w.document.getElementById('chat-mode').addEventListener('click',()=>presses++);
+  assert.equal(adapter.prepareComposer().status,'available'); assert.equal(presses,0);
+  ({w,adapter}=setup('<nav><button>Chat</button></nav><form><div id="prompt-textarea"></div><button aria-haspopup="menu">Extra High</button></form>'));
+  assert.equal(adapter.prepareComposer().status,'available');
+});
+
+test('a work tier switches to Chat even when the toggle exposes no selected state', () => {
+  const {w,adapter}=setup(modeDom('','','Extra High'));
+  let presses=0; w.document.getElementById('chat-mode').addEventListener('click',()=>presses++);
+  assert.equal(adapter.prepareComposer().reason,'chat_mode_switching'); assert.equal(presses,1);
 });

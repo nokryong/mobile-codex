@@ -69,6 +69,7 @@ public final class MainActivity extends Activity implements Engine.Ui {
     private static final int PICK_FOLDER = 31, EXPORT_RECOVERY = 32, IMPORT_SKILL = 33, EXPORT_IMAGE = 34, PICK_ATTACHMENTS = 35, EXPORT_ATTACHMENT = 36, INSTALL_UPDATE = 37, PICK_CHARACTERS = 38;
     private WebView web;
     private ProWebTransport proTransport;
+    private final ConsultationDispatch proConsultations = new ConsultationDispatch();
     private SafeWebViewLayout root;
     private boolean keyboardVisible;
     private String theme = "system";
@@ -86,6 +87,21 @@ public final class MainActivity extends Activity implements Engine.Ui {
     private String pendingImageId;
     private String reconnectProjectKey = "", pendingAttachmentRequest, attachmentDraftKey, exportAttachmentId;
     private final java.util.ArrayDeque<String> pendingUiEvents = new java.util.ArrayDeque<>();
+
+    /** Repeated native snapshots and callbacks refer to one web attempt. */
+    static final class ConsultationDispatch {
+        private final java.util.Set<String> seen = new java.util.HashSet<>();
+        private String active = "";
+        boolean begin(String operationId) {
+            if (operationId == null || operationId.isBlank() || !active.isBlank() || !seen.add(operationId)) return false;
+            active = operationId; return true;
+        }
+        boolean isActive(String operationId) { return !active.isBlank() && active.equals(operationId); }
+        boolean complete(String operationId) {
+            if (!isActive(operationId)) return false;
+            active = ""; return true;
+        }
+    }
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override public void onCreate(Bundle savedInstanceState) {
@@ -259,6 +275,13 @@ public final class MainActivity extends Activity implements Engine.Ui {
     @Override public void event(String name, JSONObject data) {
         runOnUiThread(() -> {
             if (isDestroyed()) return;
+            if ("pro.consult".equals(name)) startProConsultation(data);
+            if ("state".equals(name)) {
+                JSONObject consultation = data.optJSONObject("pendingProConsultation");
+                if (consultation != null) startProConsultation(consultation);
+            }
+            if ("pro.consult.resolved".equals(name) && proConsultations.complete(data.optString("operationId")))
+                proTransport.cancel((result, error) -> { });
             if ("state".equals(name)) getSharedPreferences("notifications", 0).edit().putString("visibleThread", data.optString("threadId", "")).commit();
             String script = "window.mobileCodexEvent(" + JSONObject.quote(name) + "," + data + ");";
             if (loaded) web.evaluateJavascript(script, null); else pendingUiEvents.addLast(script);
@@ -460,19 +483,28 @@ public final class MainActivity extends Activity implements Engine.Ui {
             }));
         } catch (Exception error) { respond(requestId, null, error); }
     }
-    private void sendPro(String requestId, JSONObject args) {
-        engine.handle("chat.pro.prepare", args, (prepared, prepareError) -> {
-            if (prepareError != null) { respond(requestId, null, prepareError); return; }
-            runOnUiThread(() -> {
-                try {
-                    Uri[] uploads = proUploadUris(prepared.optJSONArray("uploads"));
-                    proTransport.send(prepared, uploads, (result, transportError) ->
-                        finishPro(requestId, prepared, result, transportError));
-                } catch (Exception error) {
-                    finishPro(requestId, prepared, null, error);
-                }
-            });
-        });
+    private void startProConsultation(JSONObject event) {
+        String operationId = event.optString("operationId");
+        if (proTransport == null || !proConsultations.begin(operationId)) return;
+        // Recheck native ownership after queued events or Activity reattachment.
+        engine.handle("state", obj(), (state, error) -> runOnUiThread(() -> {
+            if (!proConsultations.isActive(operationId)) return;
+            JSONObject prepared = state == null ? null : state.optJSONObject("pendingProConsultation");
+            if (error == null && (prepared == null || !operationId.equals(prepared.optString("operationId")))) {
+                proConsultations.complete(operationId); return;
+            }
+            if (prepared == null) prepared = event;
+            JSONObject target = prepared;
+            if (error != null || isDestroyed() || isFinishing()) {
+                finishProConsultation(target, null, error == null ? new IllegalStateException(t("Pro 웹 화면이 닫혔습니다.")) : error); return;
+            }
+            try {
+                JSONObject interrupted = proTransport.interruptedOperation(operationId);
+                if (interrupted != null) { finishProConsultation(target, interrupted, null); return; }
+                Uri[] uploads = proUploadUris(target.optJSONArray("uploads"));
+                proTransport.send(target, uploads, (result, transportError) -> finishProConsultation(target, result, transportError));
+            } catch (Exception sendError) { finishProConsultation(target, null, sendError); }
+        }));
     }
     private Uri[] proUploadUris(JSONArray values) throws Exception {
         if (values == null || values.length() == 0) return new Uri[0];
@@ -487,31 +519,29 @@ public final class MainActivity extends Activity implements Engine.Ui {
         }
         return result;
     }
-    private void finishPro(String requestId, JSONObject prepared, JSONObject result, Throwable transportError) {
+    private void finishProConsultation(JSONObject prepared, JSONObject result, Throwable transportError) {
         String operationId = prepared.optString("operationId"), localThread = prepared.optString("threadId");
-        if (result != null && "completed".equals(result.optString("status")) && transportError == null) {
-            JSONObject complete = obj("threadId", localThread, "operationId", operationId,
-                "reply", result.optString("reply"), "remoteMessageId", result.optString("remoteMessageId"),
-                "chatConversationId", result.optString("chatConversationId"), "chatConversationPath", result.optString("chatConversationPath"),
-                "chatProjectPath", result.optString("chatProjectPath"));
-            engine.handle("chat.pro.complete", complete, (saved, saveError) -> {
-                if (saveError == null) proTransport.acknowledge(operationId);
-                respond(requestId, saved, saveError);
-            });
-            return;
-        }
+        if (!proConsultations.complete(operationId)) return;
         String webStatus = result == null ? "failed" : result.optString("status", "failed");
-        String localStatus = "uncertain".equals(webStatus) || (result != null && result.optBoolean("clicked")) ? "uncertain"
-            : Set.of("login_required", "unavailable", "web_changed", "not_sent").contains(webStatus) ? "not_sent" : "failed";
+        boolean success = "completed".equals(webStatus) && transportError == null;
         String reason = transportError == null ? (result == null ? t("GPT-6-Pro 웹 전송에 실패했습니다.") : result.optString("reason", t("GPT-6-Pro 웹 전송에 실패했습니다.")))
             : (transportError.getMessage() == null ? t("GPT-6-Pro 웹 전송에 실패했습니다.") : transportError.getMessage());
-        JSONObject failed = obj("threadId", localThread, "operationId", operationId, "status", localStatus, "reason", reason,
+        if (success && (result.optString("reply").isBlank() || result.optString("reply").length() > 200_000)) {
+            success = false; reason = t("Pro 답변 길이가 올바르지 않습니다. 자동으로 다시 문의하지 않습니다.");
+        }
+        JSONObject complete = obj("threadId", localThread, "operationId", operationId, "status", success ? "completed" : "failed",
+            "reply", success ? result.optString("reply") : "", "reason", success ? "" : reason,
+            "remoteMessageId", result == null ? "" : result.optString("remoteMessageId"),
             "chatConversationId", result == null ? "" : result.optString("chatConversationId"),
-            "chatConversationPath", result == null ? "" : result.optString("chatConversationPath"));
-        if (result != null) try { failed.put("chatProjectPath", result.optString("chatProjectPath")); } catch (Exception ignored) {}
-        engine.handle("chat.pro.fail", failed, (saved, saveError) -> {
-            if (saveError != null) respond(requestId, null, saveError);
-            else { proTransport.acknowledge(operationId); respond(requestId, null, new IllegalStateException(reason)); }
+            "chatConversationPath", result == null ? "" : result.optString("chatConversationPath"),
+            "chatProjectPath", result == null ? "" : result.optString("chatProjectPath"));
+        engine.handle("chat.pro.consult.complete", complete, (saved, saveError) -> {
+            if (saveError == null) proTransport.acknowledge(operationId);
+            else engine.handle("chat.pro.consult.complete", obj("threadId", localThread, "operationId", operationId,
+                "status", "failed", "reason", t("Pro 자문 결과를 전달하지 못했습니다.")), (failed, failError) -> {
+                    if (failError == null) proTransport.acknowledge(operationId);
+                });
+            // This result belongs to Codex's pending tool call, not a UI request.
         });
     }
     private final class Bridge {
@@ -526,7 +556,12 @@ public final class MainActivity extends Activity implements Engine.Ui {
                 requestId = id;
                 JSONObject args = message.optJSONObject("args"); if (args == null) args = new JSONObject();
                 JSONObject parameters = args;
-                if (action.equals("chat.pro.send")) { sendPro(id, args); return; }
+                if (action.equals("chat.pro.send") || action.equals("chat.pro.prepare") || action.equals("chat.pro.read")) {
+                    respond(id, null, new IllegalStateException(t("Pro는 Codex 작업 중 자문 도구로 사용합니다. Codex에게 자문을 요청해 주세요."))); return;
+                }
+                if (action.equals("chat.pro.consult.complete")) {
+                    respond(id, null, new IllegalStateException(t("Pro 자문 결과는 웹 작업에서만 전달할 수 있습니다."))); return;
+                }
                 if (action.equals("chat.pro.cancel")) {
                     runOnUiThread(() -> proTransport.cancel((result, error) -> respond(id, result, error))); return;
                 }

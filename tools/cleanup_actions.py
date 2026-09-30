@@ -1,23 +1,27 @@
 #!/usr/bin/env python3
-"""Remove obsolete main-branch failures, retaining live runs and UI reuse evidence."""
+"""Keep only the newest Actions run per workflow and branch; old runs and their artifacts only use quota.
+
+Kept: live runs, the newest completed run of each workflow on each branch (latest result or failure to
+diagnose), and protected runs such as the latest full browser evidence reused by the UI checks.
+"""
 import json
 import os
 import urllib.error
 import urllib.request
 
-FAILED = {'failure', 'cancelled', 'timed_out', 'startup_failure'}
+CLEANUP = 'Actions history cleanup'
 
 def candidates(runs, protected):
     ordered = sorted(runs, key=lambda r: r['id'], reverse=True)
-    builds = [r for r in ordered if r.get('name') == 'Android APK' and r.get('head_branch') == 'main']
-    keep = set(protected)
-    # Keep the current failure until a newer completed build supersedes it.
-    latest = next((r for r in builds if r.get('status') == 'completed'), None)
-    if latest and latest.get('conclusion') in FAILED:
-        keep.add(latest['id'])
-    return [r for r in ordered if r['id'] not in keep and r.get('status') == 'completed'
-            and ((r in builds and r.get('conclusion') in FAILED)
-                 or (r.get('name') == 'Actions history cleanup'))]
+    keep, newest = set(protected), set()
+    for run in ordered:
+        if run.get('status') != 'completed':
+            keep.add(run['id']); continue
+        key = (run.get('name'), run.get('head_branch'))
+        # Cleanup runs carry no evidence; keep none of their history.
+        if key not in newest and run.get('name') != CLEANUP:
+            newest.add(key); keep.add(run['id'])
+    return [r for r in ordered if r['id'] not in keep]
 
 def api(path, method='GET'):
     request = urllib.request.Request('https://api.github.com/repos/' + os.environ['GITHUB_REPOSITORY'] + path,
@@ -61,7 +65,7 @@ def main():
         deleted.append(run['id'])
         print('Deleted obsolete run:', run['id'])
     with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as output:
-        output.write('Removed ' + str(len(deleted)) + ' obsolete runs. Kept active runs, successful builds, latest failure and latest full browser evidence.\n')
+        output.write('Removed ' + str(len(deleted)) + ' old runs. Kept active runs, the newest run per workflow and branch, and the latest full browser evidence.\n')
 
 if __name__ == '__main__':
     main()

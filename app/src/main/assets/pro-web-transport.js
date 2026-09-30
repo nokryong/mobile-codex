@@ -1,10 +1,15 @@
 /* Isolated adapter for the official ChatGPT page. It never reads cookies, tokens, or storage. */
 (function (root) {
   'use strict';
-  if (root.MCProWeb?.version === 5) return;
+  const VERSION = 8;
+  if (root.MCProWeb?.version === VERSION) return;
   const d = root.document;
   const normalize = value => String(value || '').normalize('NFKC').replace(/\s+/g, ' ').trim();
-  const exactPro = value => /^(?:GPT[ -]?6[ -]?Pro|6[ -]?Pro)$/i.test(normalize(value).replace(/^(?:model|모델)\s*:?\s*/i, ''));
+  // Any Pro tier counts ("6 Pro", "GPT-7 Pro", "Pro"); other names such as "Pro Legacy" do not.
+  const exactPro = value => /^(?:(?:GPT[ -]?)?\d+(?:\.\d{1,2})?[ -]?)?Pro$/i.test(normalize(value).replace(/^(?:model|모델)\s*:?\s*/i, ''));
+  // Visible menu labels, reported when Pro is missing so a renamed model is diagnosable.
+  const seenModels = containers => [...new Set(containers.flatMap(container => [...container.querySelectorAll('[role="menuitem"],[role="menuitemradio"],[role="option"]')])
+    .filter(visible).map(element => normalize(label(element)).slice(0, 40)).filter(Boolean))].slice(0, 8);
   const visible = element => {
     if (!element || element.closest('[hidden],[inert],[aria-hidden="true"]')) return false;
     const style = root.getComputedStyle(element), box = element.getBoundingClientRect();
@@ -13,6 +18,10 @@
   const label = element => normalize(element?.getAttribute?.('aria-label'))
     || normalize((element?.getAttribute?.('aria-labelledby') || '').split(/\s+/).map(id => d.getElementById(id)?.textContent || '').join(' '))
     || normalize(element?.textContent);
+  // Pro may be named by visible text ("6 Pro") while aria-label stays generic ("모델 선택기"), or the reverse.
+  const namesPro = element => !!element && [normalize(element.textContent), normalize(element.getAttribute?.('aria-label')),
+    normalize((element.getAttribute?.('aria-labelledby') || '').split(/\s+/).map(id => d.getElementById(id)?.textContent || '').join(' '))].some(exactPro);
+  const describe = element => ({text:normalize(element?.textContent).slice(0, 60), ariaLabel:normalize(element?.getAttribute?.('aria-label')).slice(0, 60)});
   const prompt = () => {
     // querySelector with comma-separated selectors uses document order, not
     // selector priority. ChatGPT's hidden fallback textarea precedes ProseMirror.
@@ -27,13 +36,39 @@
       {bubbles:true,cancelable:true,button:0,pointerType:'mouse',pointerId:1,isPrimary:true}));
     element.click();
   };
-  const effortLabel = value => /^(?:Extra High|High|Medium|Low|Light|Standard|Extended|Heavy|Max|Maximum|추론 수준|Reasoning level|Reasoning effort|Intelligence|성능)$/i.test(normalize(value));
+  const effortLabel = value => /^(?:Instant|Thinking|Auto|Fast|Deep|Extra High|High|Medium|Low|Light|Standard|Extended|Heavy|Max|Maximum|추론 수준|Reasoning level|Reasoning effort|Intelligence|성능|즉시|생각|자동)$/i.test(normalize(value));
+  // Tiers only offered in ChatGPT's Work mode; Pro lives in Chat mode.
+  const workTier = value => /^(?:Extra[ -]?High|High|Medium|Low|Minimal)$/i.test(normalize(value));
+  const named = (element, pattern) => pattern.test(normalize(element.textContent)) || pattern.test(normalize(element.getAttribute('aria-label')));
+  const isOn = element => ['aria-selected','aria-pressed','aria-checked'].some(name => element.getAttribute(name) === 'true')
+    || ['active','on','checked'].includes(element.getAttribute('data-state')) || ['page','true'].includes(element.getAttribute('aria-current'));
+  // The page's own Chat/Work toggle, outside menus, dialogs, the composer and the app's injected switch.
+  function modeToggle() {
+    const controls = [...d.querySelectorAll('button,[role="tab"],[role="radio"],a')].filter(element => visible(element)
+      && !element.closest('#mc-chat-mode-switch,[role="menu"],[role="dialog"],[role="listbox"],form'));
+    const chat = controls.filter(element => named(element, /^(?:Chat|채팅)$/i)), work = controls.filter(element => named(element, /^(?:Work|작업)$/i));
+    if (chat.length !== 1 || work.length !== 1) return null;
+    // Both options must belong to one small group, not two unrelated buttons on the page.
+    let group = chat[0].parentElement;
+    for (let depth = 0; group && depth < 3 && !group.contains(work[0]); depth++) group = group.parentElement;
+    return group && group.contains(work[0]) ? {chat:chat[0], work:work[0]} : null;
+  }
+  const modePresses = new WeakMap();
+  function ensureChatMode(triggerText) {
+    const toggle = modeToggle();
+    if (!toggle || isOn(toggle.chat)) return null;
+    if (!isOn(toggle.work) && !workTier(triggerText)) return null;
+    const last = modePresses.get(toggle.chat) || 0;
+    if (Date.now() - last > 3000) { modePresses.set(toggle.chat, Date.now()); press(toggle.chat); }
+    return {status:'waiting', reason:'chat_mode_switching'};
+  }
   const modelTriggers = () => {
     const composer = prompt()?.closest('form') || prompt()?.parentElement;
     return [...d.querySelectorAll('button,[role="button"]')].filter(element => {
       if (!visible(element) || element.getAttribute('data-testid') === 'composer-plus-btn' || element.closest('[role="menu"],[role="dialog"],[role="listbox"]')) return false;
       const text = label(element), popup = element.getAttribute('aria-haspopup');
-      return exactPro(text) || ((popup === 'menu' || popup === 'listbox') && composer?.contains(element)
+      // A bare "Pro" badge elsewhere is not a model button; only menu triggers may be that short.
+      return (namesPro(element) && (!/^Pro$/i.test(normalize(element.textContent)) || popup === 'menu' || popup === 'listbox')) || ((popup === 'menu' || popup === 'listbox') && composer?.contains(element)
         && (/model|모델|gpt|pro|6/i.test(text) || effortLabel(text)));
     });
   };
@@ -192,13 +227,16 @@
     if (!editor) return {status:'web_changed', reason:'prompt_missing', triggerCount:triggers.length};
     if (!triggers.length) return {status:'web_changed', reason:'model_trigger_missing', triggerCount:0};
     if (triggers.length !== 1) return {status:'web_changed', reason:'model_trigger_ambiguous', triggerCount:triggers.length};
-    return {status:'available', currentModel:exactPro(label(triggers[0])) ? 'GPT-6 Pro' : '', triggerCount:1,
+    return {status:'available', currentModel:namesPro(triggers[0]) ? 'GPT-6 Pro' : '', triggerCount:1, trigger:describe(triggers[0]),
       menuOpen:triggers[0].getAttribute('aria-expanded') === 'true'};
   }
   function prepareComposer() {
     if (loginVisible()) return {status:'login_required'};
     const closing = dismissSidebar(); if (closing) return closing;
     const state = inspect();
+    // Work mode offers work tiers ("Extra High") without Pro: switch the page to Chat first.
+    const switching = ensureChatMode(state.trigger?.text || state.trigger?.ariaLabel || '');
+    if (switching) return switching;
     if (prompt() && !visible(prompt())) return {status:'waiting', reason:'composer_blocked'};
     if (state.reason === 'prompt_missing' || state.reason === 'model_trigger_missing')
       return {...state, status:'waiting'};
@@ -213,37 +251,38 @@
   const sliderSteps = new WeakMap();
   function chooseSliderPro(containers) {
     const pickers = [...new Set(containers.flatMap(container => [...container.querySelectorAll('[data-testid="composer-intelligence-picker-content"]')]))].filter(visible);
-    if (pickers.length !== 1) return {status:pickers.length ? 'web_changed' : 'unavailable', reason:pickers.length ? 'gpt_6_pro_ambiguous' : 'gpt_6_pro_missing'};
+    if (pickers.length !== 1) return {status:pickers.length ? 'web_changed' : 'unavailable', reason:pickers.length ? 'gpt_6_pro_ambiguous' : 'gpt_6_pro_missing', seen:seenModels(containers)};
     const picker = pickers[0];
     const control = [...picker.querySelectorAll('[role="menuitem"][aria-keyshortcuts]')].filter(element => visible(element)
       && /ArrowLeft/.test(element.getAttribute('aria-keyshortcuts')) && /ArrowRight/.test(element.getAttribute('aria-keyshortcuts'))
       && element.querySelector('[data-model-reasoning-effort-slider]'));
     if (control.length !== 1) return {status:'unavailable', reason:'pro_slider_unavailable'};
-    const modelLabel = [...picker.querySelectorAll('[role="menuitem"][aria-label]')].filter(element => visible(element)
-      && /^(?:모델 선택|Select model|Choose model)$/i.test(element.getAttribute('aria-label')));
-    if (modelLabel.length === 1 && exactPro(modelLabel[0].textContent)) {
-      const menu = picker.closest('[role="menu"]');
+    // Pro is the slider's last position. Move it there and close; the composer button must then read "Pro".
+    const slider = control[0].querySelector('[role="slider"]');
+    const now = slider?.getAttribute('aria-valuenow'), max = slider?.getAttribute('aria-valuemax');
+    // Missing values are not "at the end": Number(null) would make both 0.
+    if (slider && /^\d+$/.test(now || '') && /^\d+$/.test(max || '') && Number(max) > 0 && now === max) {
+      const menu = picker.closest('[role="menu"]') || picker;
       menu.dispatchEvent(new root.KeyboardEvent('keydown', {key:'Escape',code:'Escape',bubbles:true,cancelable:true}));
       return {status:'selected'};
     }
-    const slider = control[0].querySelector('[role="slider"]');
     if (!slider || slider.closest('[aria-disabled="true"],[data-locked="true"]')) return {status:'unavailable',reason:'gpt_6_pro_disabled'};
     const value = Number(slider.getAttribute('aria-valuenow')), maximum = Number(slider.getAttribute('aria-valuemax'));
     if (!Number.isInteger(value) || !Number.isInteger(maximum) || maximum > 10 || value >= maximum)
-      return {status:'unavailable',reason:'gpt_6_pro_missing'};
+      return {status:'unavailable',reason:'gpt_6_pro_missing',seen:seenModels([picker])};
     if (sliderSteps.get(slider) !== value) {
       sliderSteps.set(slider,value); control[0].focus();
       for (const type of ['keydown','keyup']) control[0].dispatchEvent(new root.KeyboardEvent(type,
         {key:'ArrowRight',code:'ArrowRight',bubbles:true,cancelable:true}));
     }
-    // Reinspect rendered model text after React updates. The slider endpoint
-    // itself is NEVER evidence of Pro; only the exact model label confirms it.
+    // Step once per render. Selection is confirmed only by the composer button reading "Pro".
     return {status:'waiting',reason:'model_selection_pending'};
   }
   function choosePro() {
     const containers = [...d.querySelectorAll('[role="menu"],[role="listbox"],[role="dialog"]')].filter(visible);
     const options = containers.flatMap(container => [...container.querySelectorAll('[role="menuitem"],[role="menuitemradio"],[role="option"],button')])
-      .filter(element => visible(element) && exactPro(label(element)));
+      // Inside the performance picker the "6 Pro >" heading opens a model submenu; the slider flow decides there.
+      .filter(element => visible(element) && exactPro(label(element)) && !element.closest('[data-testid="composer-intelligence-picker-content"]'));
     if (!containers.length) return {status:'waiting', reason:'model_picker_pending'};
     if (!options.length) return chooseSliderPro(containers);
     if (options.length !== 1) return {status:'web_changed', reason:'gpt_6_pro_ambiguous', optionCount:options.length};
@@ -254,7 +293,7 @@
     const state = inspect();
     if (state.status !== 'available') return state;
     return state.currentModel === 'GPT-6 Pro' ? {status:'available', confirmedModel:'GPT-6 Pro'}
-      : {status:'web_changed', reason:'model_confirmation_failed'};
+      : {status:'web_changed', reason:'model_confirmation_failed', trigger:state.trigger};
   }
   function requestFiles() {
     const input = [...d.querySelectorAll('input[type="file"]')].find(element => !element.disabled);
@@ -296,6 +335,9 @@
     const button = d.querySelector('#composer-submit-button,[data-testid="send-button"]');
     if (!button) return {status:'web_changed', reason:'send_button_missing'};
     if (button.disabled || button.getAttribute('aria-disabled') === 'true') return {status:'not_sent', reason:'send_button_disabled'};
+    // Last gate: never send unless the composer still names Pro.
+    const state = inspect();
+    if (state.currentModel !== 'GPT-6 Pro') return {status:'not_sent', reason:'model_confirmation_failed', trigger:state.trigger};
     button.click(); return {status:'clicked'};
   }
   function observe(baselineCount, baselineId) {
@@ -312,7 +354,7 @@
     if (button && visible(button)) { button.click(); return {status:'stop_requested'}; }
     return {status:'not_running'};
   }
-  root.MCProWeb = {version:5, inspectProject, openProject, startProjectCreation, finishProjectCreation, inspectProjectCreation,
+  root.MCProWeb = {version:VERSION, inspectProject, openProject, startProjectCreation, finishProjectCreation, inspectProjectCreation,
     inspect, prepareComposer, openModelPicker, choosePro, confirmPro, requestFiles, insert, clickSend, observe, stop, exactPro, projectPath, conversationLocation};
   if (typeof module !== 'undefined' && module.exports) module.exports = root.MCProWeb;
 })(typeof window === 'undefined' ? globalThis : window);
