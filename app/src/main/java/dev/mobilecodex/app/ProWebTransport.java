@@ -35,7 +35,7 @@ final class ProWebTransport {
     private String operationId = "", localThreadId = "", prompt = "", requestedConversationId = "", requestedConversationPath = "", requestedProjectPath = "", resolvedProjectPath = "";
     private Uri[] uploads = new Uri[0];
     private ValueCallback<Uri[]> fileCallback;
-    private boolean pageLoaded, clicked, destroyed, waitingForChooser, projectVerified;
+    private boolean pageLoaded, clicked, sendAttempted, destroyed, waitingForChooser, projectVerified;
     private int projectCreationStage;
     private int assistantCount, stablePolls;
     private String baselineAssistantId = "", lastReply = "", lastConversationId = "", lastConversationPath = "";
@@ -43,10 +43,16 @@ final class ProWebTransport {
 
     @SuppressLint("SetJavaScriptEnabled")
     ProWebTransport(Activity activity, FrameLayout root) {
+        this(activity, root, new WebView(activity));
+    }
+
+    /** Package-private page injection keeps actual click/cancel paths testable. */
+    @SuppressLint("SetJavaScriptEnabled")
+    ProWebTransport(Activity activity, FrameLayout root, WebView transportPage) {
         this.activity = activity;
         try (InputStream source = activity.getAssets().open("pro-web-transport.js")) { adapter = read(source); }
         catch (Exception error) { throw new IllegalStateException("GPT-6-Pro 웹 어댑터를 읽지 못했습니다.", error); }
-        page = new WebView(activity);
+        page = transportPage;
         WebSettings settings = page.getSettings();
         settings.setJavaScriptEnabled(true); settings.setDomStorageEnabled(true);
         settings.setAllowFileAccess(false); settings.setAllowContentAccess(true);
@@ -77,7 +83,7 @@ final class ProWebTransport {
                 pageLoaded = "chatgpt.com".equals(Uri.parse(url).getHost());
                 if (pending != null) {
                     long current = generation;
-                    page.postDelayed(() -> { if (clicked) poll(current); else ensureProject(current, 0); }, 350);
+                    page.postDelayed(() -> { if (clicked) poll(current); else if (!sendAttempted) ensureProject(current, 0); }, 350);
                 }
             }
         });
@@ -99,16 +105,17 @@ final class ProWebTransport {
         requestedProjectPath = safeProjectPath(prepared.optString("chatProjectPath"));
         requestedConversationPath = safeConversationPath(prepared.optString("chatConversationPath"), requestedConversationId, requestedProjectPath);
         uploads = allowedUploads == null ? new Uri[0] : allowedUploads;
-        clicked = false; waitingForChooser = false; assistantCount = 0; baselineAssistantId = ""; stablePolls = 0; lastReply = ""; lastConversationId = ""; lastConversationPath = "";
+        clicked = false; sendAttempted = false; waitingForChooser = false; assistantCount = 0; baselineAssistantId = ""; stablePolls = 0; lastReply = ""; lastConversationId = ""; lastConversationPath = "";
         projectVerified = false; projectCreationStage = 0; resolvedProjectPath = "";
         deadline = SystemClock.elapsedRealtime() + 10 * 60_000; long current = ++generation;
         journal();
+        page.postDelayed(() -> checkDeadline(current), 5000);
         if (pageLoaded) page.post(() -> ensureProject(current, 0));
         else if (page.getUrl() == null || !page.getUrl().startsWith("https://chatgpt.com")) page.loadUrl("https://chatgpt.com/");
     }
 
     private void ensureProject(long current, int attempt) {
-        if (!live(current) || clicked) return;
+        if (!live(current) || clicked || sendAttempted) return;
         if (expired()) { finish(status("web_changed", "ChatGPT 프로젝트를 확인하지 못했습니다.")); return; }
         if (!pageLoaded) { retry(() -> ensureProject(current, attempt + 1), attempt, 40, "login_required", "ChatGPT 로그인이 필요합니다."); return; }
         if (projectVerified) { openTarget(current); return; }
@@ -146,7 +153,7 @@ final class ProWebTransport {
     }
 
     private void finishProjectCreation(long current, int attempt) {
-        if (!live(current) || clicked || projectCreationStage != 1) return;
+        if (!live(current) || clicked || sendAttempted || projectCreationStage != 1) return;
         evaluate("finishProjectCreation(" + JSONObject.quote(PROJECT_NAME) + ")", created -> {
             if (!live(current) || projectCreationStage != 1) return;
             String state = created.optString("status");
@@ -163,7 +170,7 @@ final class ProWebTransport {
     }
 
     private void openTarget(long current) {
-        if (!live(current) || clicked) return;
+        if (!live(current) || clicked || sendAttempted) return;
         Uri currentUri = Uri.parse(page.getUrl() == null ? "" : page.getUrl());
         String currentPath = currentUri.getPath() == null ? "" : currentUri.getPath().replaceAll("/$", "");
         if (!requestedConversationId.isBlank() && !safeConversationPath(currentPath, requestedConversationId, resolvedProjectPath).isBlank()) {
@@ -176,7 +183,7 @@ final class ProWebTransport {
     }
 
     private void selectModel(long current, int attempt) {
-        if (!live(current) || clicked) return;
+        if (!live(current) || clicked || sendAttempted) return;
         if (expired()) { finish(status("web_changed", "ChatGPT 모델 선택기를 확인하지 못했습니다.")); return; }
         if (!pageLoaded) { retry(() -> selectModel(current, attempt + 1), attempt, 40, "login_required", "ChatGPT 로그인이 필요합니다."); return; }
         evaluate("prepareComposer()", state -> {
@@ -197,7 +204,7 @@ final class ProWebTransport {
     }
 
     private void chooseModel(long current, int attempt) {
-        if (!live(current) || clicked) return;
+        if (!live(current) || clicked || sendAttempted) return;
         evaluate("choosePro()", chosen -> {
             if (!live(current)) return;
             String status = chosen.optString("status");
@@ -210,14 +217,15 @@ final class ProWebTransport {
     }
 
     private void confirmModel(long current, int attempt) {
-        if (!live(current) || clicked) return;
+        if (!live(current) || clicked || sendAttempted) return;
         evaluate("confirmPro()", confirmed -> {
             if (!live(current)) return;
             if ("available".equals(confirmed.optString("status")) && "GPT-6 Pro".equals(confirmed.optString("confirmedModel"))) {
                 if (uploads.length == 0) insert(current); else requestFiles(current);
                 return;
             }
-            if (attempt < 12) page.postDelayed(() -> confirmModel(current, attempt + 1), 150);
+            // The composer button relabels after the picker closes; allow React up to ~6s to render it.
+            if (attempt < 40) page.postDelayed(() -> confirmModel(current, attempt + 1), 150);
             else finish(status(confirmed.optString("status", "web_changed"), reason(confirmed)));
         });
     }
@@ -235,7 +243,7 @@ final class ProWebTransport {
     }
 
     private void insert(long current) {
-        if (!live(current) || clicked) return;
+        if (!live(current) || clicked || sendAttempted) return;
         evaluate("insert(" + JSONObject.quote(prompt) + ")", result -> {
             if (!live(current)) return;
             if (!"inserted".equals(result.optString("status"))) { finish(status(result.optString("status", "web_changed"), reason(result))); return; }
@@ -245,12 +253,21 @@ final class ProWebTransport {
     }
 
     private void click(long current) {
-        if (!live(current) || clicked) return;
+        if (!live(current) || clicked || sendAttempted) return;
+        // Claim the click before evaluating JS. A page callback cannot resend
+        // while the response to this click is still in flight.
+        sendAttempted = true; journal();
         evaluate("clickSend()", result -> {
             if (!live(current)) return;
-            if (!"clicked".equals(result.optString("status"))) { finish(status(result.optString("status", "not_sent"), reason(result))); return; }
+            if (!"clicked".equals(result.optString("status"))) {
+                JSONObject failed = status(result.optString("status", "uncertain"), reason(result));
+                if ("not_sent".equals(result.optString("status"))) {
+                    try { failed.put("clicked", false); } catch (Exception ignored) { }
+                }
+                finish(failed); return;
+            }
             // This is the sole send click for this operation. No retry is allowed after this point.
-            clicked = true; page.postDelayed(() -> poll(current), 800);
+            clicked = true; journal(); page.postDelayed(() -> poll(current), 800);
         });
     }
 
@@ -285,7 +302,7 @@ final class ProWebTransport {
 
     void cancel(Done done) {
         if (pending == null) { done.complete(status("not_sent", "진행 중인 GPT-6-Pro 작업이 없습니다."), null); return; }
-        boolean wasClicked = clicked;
+        boolean wasClicked = clicked || sendAttempted;
         if (wasClicked && !destroyed) evaluate("stop()", ignored -> {});
         JSONObject result = status(wasClicked ? "uncertain" : "not_sent",
             wasClicked ? "중지를 요청했습니다. ChatGPT 웹 대화에서 전송 결과를 확인해 주세요." : "전송 전에 취소했습니다.");
@@ -320,6 +337,13 @@ final class ProWebTransport {
     }
     private boolean live(long current) { return !destroyed && pending != null && generation == current; }
     private boolean expired() { return SystemClock.elapsedRealtime() > deadline; }
+    private void checkDeadline(long current) {
+        if (!live(current)) return;
+        if (expired()) {
+            finish(status(clicked || sendAttempted ? "uncertain" : "not_sent",
+                "Pro 자문 응답 제한 시간을 넘겼습니다. 자동 재전송하지 않습니다."));
+        } else page.postDelayed(() -> checkDeadline(current), 5000);
+    }
     private static String reason(JSONObject value) {
         String reason = value.optString("reason");
         return switch (reason) {
@@ -336,7 +360,9 @@ final class ProWebTransport {
             case "model_trigger_ambiguous" -> "ChatGPT 모델 선택 버튼을 구분하지 못했습니다.";
             case "model_picker_pending", "model_selection_pending" -> "ChatGPT Pro 모델 선택이 완료되지 않았습니다.";
             case "pro_slider_unavailable" -> "ChatGPT 성능 메뉴의 Pro 선택 항목을 확인하지 못했습니다.";
-            case "gpt_6_pro_missing" -> "ChatGPT 모델 메뉴에서 GPT-6 Pro를 확인하지 못했습니다.";
+            case "chat_mode_switching" -> "ChatGPT를 Work 모드에서 Chat 모드로 바꾸지 못했습니다.";
+            case "model_confirmation_failed" -> "ChatGPT에서 Pro 선택을 확인하지 못해 질문을 보내지 않았습니다." + triggerText(value);
+            case "gpt_6_pro_missing" -> "ChatGPT 모델 메뉴에서 GPT-6 Pro를 확인하지 못했습니다." + seenModels(value);
             case "gpt_6_pro_disabled" -> "현재 ChatGPT 화면에서 GPT-6 Pro를 선택할 수 없습니다.";
             case "project_dialog_ambiguous" -> "프로젝트 생성창이 여러 개 열려 있습니다. ChatGPT 화면을 확인해 주세요.";
             case "project_name_input_ambiguous" -> "프로젝트 이름 입력란을 구분하지 못했습니다. ChatGPT 화면을 확인해 주세요.";
@@ -344,9 +370,25 @@ final class ProWebTransport {
             default -> reason.isBlank() ? "ChatGPT 웹 화면의 준비 상태를 확인하지 못했습니다. (" + value.optString("status", "unknown") + ")" : reason;
         };
     }
+    /** Shows what the composer button said, so a renamed or relabelled button is diagnosable. */
+    private static String triggerText(JSONObject value) {
+        JSONObject trigger = value.optJSONObject("trigger");
+        if (trigger == null) return "";
+        String text = trigger.optString("text").trim(), aria = trigger.optString("ariaLabel").trim();
+        if (text.isEmpty() && aria.isEmpty()) return "";
+        return " (버튼 글자: " + (text.isEmpty() ? "없음" : text) + (aria.isEmpty() ? "" : ", 접근성 이름: " + aria) + ")";
+    }
+    /** Names the models the menu did show, so a renamed Pro model can be recognised next time. */
+    private static String seenModels(JSONObject value) {
+        org.json.JSONArray seen = value.optJSONArray("seen");
+        if (seen == null || seen.length() == 0) return "";
+        StringBuilder names = new StringBuilder();
+        for (int i = 0; i < seen.length() && i < 8; i++) { String name = seen.optString(i).trim(); if (name.isEmpty()) continue; if (names.length() > 0) names.append(", "); names.append(name); }
+        return names.length() == 0 ? "" : " (메뉴에 보인 항목: " + names + ")";
+    }
     private JSONObject status(String value, String reason) {
         JSONObject result = new JSONObject();
-        try { result.put("status", value).put("operationId", operationId).put("reason", reason).put("clicked", clicked)
+        try { result.put("status", value).put("operationId", operationId).put("reason", reason).put("clicked", clicked || sendAttempted)
             .put("chatConversationId", lastConversationId).put("chatConversationPath", lastConversationPath).put("chatProjectPath", resolvedProjectPath); }
         catch (Exception ignored) {} return result;
     }
@@ -360,9 +402,24 @@ final class ProWebTransport {
                 activity.getSharedPreferences("pro-web-operation", 0).edit().remove("value").apply();
         } catch (Exception ignored) { }
     }
+    /** A recreated Activity must resolve the previous attempt instead of resending it. */
+    JSONObject interruptedOperation(String requestedOperationId) {
+        try {
+            String raw = activity.getSharedPreferences("pro-web-operation", 0).getString("value", "");
+            if (raw.isBlank()) return null;
+            JSONObject saved = new JSONObject(raw);
+            if (!requestedOperationId.equals(saved.optString("operationId"))) return null;
+            boolean attempted = saved.optBoolean("clicked") || saved.optBoolean("sendAttempted");
+            return saved.put("status", attempted ? "uncertain" : "not_sent").put("clicked", attempted)
+                .put("reason", "Pro 웹 작업이 중단되었습니다. 같은 자문 요청을 자동 재전송하지 않습니다.");
+        } catch (Exception error) {
+            return new JSONObject();
+        }
+    }
     private void journal() {
         try {
             JSONObject value = new JSONObject().put("operationId", operationId).put("threadId", localThreadId)
+                .put("clicked", clicked).put("sendAttempted", sendAttempted)
                 .put("chatConversationId", lastConversationId).put("chatConversationPath", lastConversationPath).put("chatProjectPath", resolvedProjectPath);
             activity.getSharedPreferences("pro-web-operation", 0).edit().putString("value", value.toString()).commit();
         } catch (Exception ignored) { }
@@ -370,11 +427,12 @@ final class ProWebTransport {
     private void clear() {
         if (fileCallback != null) { fileCallback.onReceiveValue(null); fileCallback = null; }
         waitingForChooser = false; uploads = new Uri[0]; operationId = ""; localThreadId = ""; prompt = ""; requestedConversationId = ""; requestedConversationPath = ""; requestedProjectPath = ""; resolvedProjectPath = "";
-        clicked = false; stablePolls = 0; lastReply = ""; lastConversationId = ""; lastConversationPath = "";
+        clicked = false; sendAttempted = false; stablePolls = 0; lastReply = ""; lastConversationId = ""; lastConversationPath = "";
     }
     void destroy() {
+        if (destroyed) return;
         if (pending != null) {
-            JSONObject result = status(clicked ? "uncertain" : "not_sent", "GPT-6-Pro 웹 화면이 닫혔습니다.");
+            JSONObject result = status(clicked || sendAttempted ? "uncertain" : "not_sent", "GPT-6-Pro 웹 화면이 닫혔습니다.");
             finish(result);
         }
         destroyed = true; page.stopLoading(); page.destroy();

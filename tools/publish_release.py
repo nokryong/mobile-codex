@@ -10,7 +10,11 @@ import tempfile
 
 
 def gh(*args):
-    return subprocess.run(['gh', *args], check=True, capture_output=True, text=True).stdout
+    result = subprocess.run(['gh', *args], capture_output=True, text=True)
+    if result.returncode != 0:
+        # Surface gh's own message; a bare CalledProcessError hides why a release failed.
+        raise RuntimeError(f"gh {' '.join(args[:3])} failed ({result.returncode}): {(result.stderr or result.stdout).strip()}")
+    return result.stdout
 
 
 def validate_assets(folder: Path) -> tuple[dict, list[Path]]:

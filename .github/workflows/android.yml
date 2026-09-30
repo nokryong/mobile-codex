@@ -18,6 +18,8 @@ concurrency:
 jobs:
   checks:
     name: Fast UI and source checks
+    outputs:
+      tested: ${{ steps.reuse.outputs.tested }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -28,6 +30,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # A main push whose code already passed a green main build (only version/docs changed) is not re-tested.
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            python3 -m unittest discover -s tests -p 'test_tested_before.py'
+            if python3 tools/tested_before.py; then exit 0; fi
+          fi
           python3 -m unittest discover -s tests -p 'test_reuse_ui_checks.py'
           python3 tools/reuse_ui_checks.py
       # UI_REUSE_END
@@ -52,8 +59,10 @@ jobs:
           npx playwright install --with-deps chromium
           sudo apt-get install -y fonts-noto-cjk
           npm run test:layout
+      # Diagnostic screenshots only when a check failed; successful runs must not spend artifact quota.
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        if: always() && steps.reuse.outputs.reused != 'true'
+        if: failure() && steps.reuse.outputs.reused != 'true'
+        continue-on-error: ${{ github.repository == 'SeeUSoon93/mobile-codex' && github.event.repository.private == true && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
         with:
           name: ui-check-reports
           path: |
@@ -71,17 +80,19 @@ jobs:
     timeout-minutes: 30
     env:
       GITHUB_OAUTH_CLIENT_ID: ${{ vars.MOBILE_CODEX_GITHUB_CLIENT_ID }}
+      # Only trusted branches in the private test repository may access signing.
+      PRIVATE_TEST_PR: ${{ github.repository == 'SeeUSoon93/mobile-codex' && github.event.repository.private == true && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Require the original signing key for update builds
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' || env.PRIVATE_TEST_PR == 'true'
         env:
           MOBILE_CODEX_SIGNING_JSON: ${{ secrets.MOBILE_CODEX_SIGNING_JSON }}
         run: python3 tools/sign_ci_apk.py --check-config
       - name: Report GitHub login availability
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' || env.PRIVATE_TEST_PR == 'true'
         run: |
           if [ -z "$GITHUB_OAUTH_CLIENT_ID" ]; then
             echo "::notice::GitHub sign-in is unavailable in this build until the public MOBILE_CODEX_GITHUB_CLIENT_ID repository variable is configured (Device Flow enabled)."
@@ -114,13 +125,13 @@ jobs:
           key: prepared-runtime-v1-${{ runner.os }}-ndk28.2.13676358-${{ hashFiles('tools/runtime-lock.json', 'tools/devtools-lock.json', 'tools/requirements-devtools.txt', 'tools/prepare_runtime.py', 'tools/prepare_devtools.py', 'tools/build_native.py', 'tools/native/**') }}
       - name: Restore corresponding tool sources
         id: sources
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' || env.PRIVATE_TEST_PR == 'true'
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: artifacts/devtools-corresponding-source.zip
           key: tool-sources-v1-${{ runner.os }}-${{ hashFiles('tools/devtools-lock.json', 'tools/requirements-devtools.txt', 'tools/prepare_devtools.py', 'tools/prepare_devtools_sources.py', 'tools/build_native.py', 'tools/native/**', 'LICENSE', 'THIRD_PARTY_NOTICES.md') }}
       - name: Restore hash-checked download cache
-        if: steps.prepared.outputs.cache-hit != 'true' || (github.event_name != 'pull_request' && steps.sources.outputs.cache-hit != 'true')
+        if: steps.prepared.outputs.cache-hit != 'true' || ((github.event_name != 'pull_request' || env.PRIVATE_TEST_PR == 'true') && steps.sources.outputs.cache-hit != 'true')
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: .runtime-cache
@@ -140,28 +151,107 @@ jobs:
           test -f app/src/main/assets/devtools/manifest.json
           PYTHONPATH=tests python3 -m unittest test_devtools.DevtoolsPackagingTests.test_real_prepared_runtime_contract
       - name: Build and check Android app
-        if: ${{ !inputs.apk_only }}
+        if: ${{ !inputs.apk_only && needs.checks.outputs.tested != 'true' }}
         run: ./gradlew --no-daemon --build-cache assembleDebug testDebugUnitTest lintDebug assembleDebugAndroidTest
       - name: Verify Android and desktop project transfer interoperability
-        if: ${{ !inputs.apk_only }}
+        if: ${{ !inputs.apk_only && needs.checks.outputs.tested != 'true' }}
         run: |
           JSON_JAR="$(find "${GRADLE_USER_HOME:-$HOME/.gradle}/caches/modules-2/files-2.1/org.json/json" -name 'json-*.jar' -type f -print -quit)"
           test -n "$JSON_JAR"
           JAVA_HOME="$JAVA_HOME" JSON_JAR="$JSON_JAR" npm run test:project-transfer
-      - name: Build test APK
-        if: ${{ inputs.apk_only }}
+      - name: Build APK without repeating tested checks
+        if: ${{ inputs.apk_only || needs.checks.outputs.tested == 'true' }}
         run: ./gradlew --no-daemon --build-cache assembleDebug
       - name: Sign APK with the original installation key
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' || env.PRIVATE_TEST_PR == 'true'
         env:
           MOBILE_CODEX_SIGNING_JSON: ${{ secrets.MOBILE_CODEX_SIGNING_JSON }}
         run: python3 tools/sign_ci_apk.py --build-tools "$ANDROID_HOME/build-tools/35.0.0"
       - name: Prepare verified update assets
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' || env.PRIVATE_TEST_PR == 'true'
         run: python3 tools/prepare_update_release.py --build-tools "$ANDROID_HOME/build-tools/35.0.0"
       - name: Collect corresponding tool sources on cache miss
-        if: github.event_name != 'pull_request' && steps.sources.outputs.cache-hit != 'true'
+        if: (github.event_name != 'pull_request' || env.PRIVATE_TEST_PR == 'true') && steps.sources.outputs.cache-hit != 'true'
         run: python3 tools/prepare_devtools_sources.py
+      - name: Publish private pull request test build
+        if: env.PRIVATE_TEST_PR == 'true' && !inputs.apk_only
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import subprocess
+          import sys
+          import tempfile
+
+          sys.path.insert(0, 'tools')
+          from publish_release import validate_assets
+
+          repo = os.environ.get('GITHUB_REPOSITORY', '')
+          event = json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text(encoding='utf-8'))
+          pr = event.get('pull_request') or {}
+          number = event.get('number')
+          if (repo != 'SeeUSoon93/mobile-codex'
+              or os.environ.get('GITHUB_EVENT_NAME') != 'pull_request'
+              or os.environ.get('PRIVATE_TEST_PR') != 'true'
+              or event.get('repository', {}).get('full_name') != repo
+              or event.get('repository', {}).get('private') is not True
+              or pr.get('head', {}).get('repo', {}).get('full_name') != repo
+              or pr.get('base', {}).get('repo', {}).get('full_name') != repo
+              or type(number) is not int or number < 1
+              or os.environ.get('GITHUB_REF') != f'refs/pull/{number}/merge'):
+              raise ValueError('Private test publication requires a trusted PR in the private test repository.')
+
+          run_id = os.environ.get('GITHUB_RUN_ID', '')
+          attempt = os.environ.get('GITHUB_RUN_ATTEMPT', '')
+          commit = os.environ.get('GITHUB_SHA', '')
+          if (not re.fullmatch(r'[1-9][0-9]*', run_id)
+              or not re.fullmatch(r'[1-9][0-9]*', attempt)
+              or not re.fullmatch(r'[0-9a-fA-F]{40}', commit)):
+              raise ValueError('Invalid private test build identity.')
+
+          def gh(*args):
+              return subprocess.run(['gh', *args], check=True, capture_output=True, text=True).stdout
+
+          # Verify current visibility independently of the event payload before any write.
+          actual = json.loads(gh('api', f'repos/{repo}'))
+          if actual.get('full_name') != repo or actual.get('private') is not True:
+              raise ValueError('Private test builds cannot be published to a public or different repository.')
+
+          metadata, assets = validate_assets(Path('artifacts/update'))
+          version = metadata['versionName']
+          tag = f'private-pr-{number}-v{version}-run-{run_id}-{attempt}'
+          notes = (f'Private test build for PR #{number}, Actions run {run_id} (attempt {attempt}).\n\n'
+                   f'Commit: {commit}\n\n'
+                   'Download the .apk asset directly. Corresponding tool sources are a separate ZIP asset.\n')
+          changes = Path('docs/releases') / (version + '.md')
+          if changes.is_file():
+              notes = changes.read_text(encoding='utf-8').rstrip() + '\n\n' + notes
+          with tempfile.TemporaryDirectory() as folder:
+              body = Path(folder) / 'notes.md'
+              body.write_text(notes, encoding='utf-8')
+              gh('release', 'create', tag, '--repo', repo, '--target', commit,
+                 '--title', f'Mobile Codex {version} · private PR #{number}',
+                 '--notes-file', str(body), '--draft', '--prerelease')
+
+          # Publish only after every independently downloadable asset has been verified.
+          gh('release', 'upload', tag, *map(str, assets), '--repo', repo)
+          remote = json.loads(gh('release', 'view', tag, '--repo', repo, '--json', 'assets'))['assets']
+          uploaded = {asset['name']: asset['size'] for asset in remote}
+          if any(uploaded.get(asset.name) != asset.stat().st_size for asset in assets):
+              raise ValueError('Private test release asset verification failed; the release remains a draft.')
+          gh('release', 'edit', tag, '--repo', repo, '--draft=false', '--prerelease', '--latest=false')
+          url = f'https://github.com/{repo}/releases/tag/{tag}'
+          summary = os.environ.get('GITHUB_STEP_SUMMARY')
+          if summary:
+              with Path(summary).open('a', encoding='utf-8') as out:
+                  out.write(f'Private test APK: [{metadata["fileName"]}]({url})\n\n')
+                  out.write('APK and corresponding tool sources are separate release assets.\n')
+          print(f'Private test build published: {url}')
+          PY
       - name: Upload explicitly requested test APK only
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: github.event_name != 'pull_request' && inputs.apk_only
@@ -175,13 +265,38 @@ jobs:
           compression-level: 0
           if-no-files-found: error
           retention-days: 7
+      - name: Upload private pull request test APK
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: env.PRIVATE_TEST_PR == 'true'
+        continue-on-error: true
+        with:
+          name: mobile-codex-private-pr-test-apk
+          path: |
+            artifacts/update/*.apk
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload private pull request corresponding tool sources
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: env.PRIVATE_TEST_PR == 'true'
+        continue-on-error: true
+        with:
+          name: mobile-codex-private-pr-tool-sources
+          path: |
+            artifacts/devtools-corresponding-source.zip
+            LICENSE
+            THIRD_PARTY_NOTICES.md
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
       - name: Publish versioned GitHub release
         if: (github.repository == 'nokryong/mobile-codex' || github.repository == 'SeeUSoon93/mobile-codex') && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && !inputs.apk_only
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 tools/publish_release.py
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        if: always()
+        if: failure()
+        continue-on-error: ${{ env.PRIVATE_TEST_PR == 'true' }}
         with:
           name: android-check-reports
           path: |

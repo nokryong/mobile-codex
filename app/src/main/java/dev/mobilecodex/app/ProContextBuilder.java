@@ -47,6 +47,15 @@ final class ProContextBuilder {
         this.instructions = instructions;
     }
 
+    /** A Codex-authored consultation prompt; no implicit files, history or instruction sources. */
+    static JSONObject buildConsultation(String prompt) throws IOException {
+        if (prompt == null || prompt.isBlank()) throw new IOException(t("Pro 자문 요청이 비어 있습니다."));
+        if (prompt.length() > 50_000) throw new IOException(t("Pro 자문 요청은 최대 50,000자까지 보낼 수 있습니다."));
+        byte[] bytes = prompt.getBytes(StandardCharsets.UTF_8);
+        return obj("prompt", prompt, "requestedModel", MODEL_ID, "displayModel", DISPLAY_MODEL,
+            "uploads", new JSONArray(), "contextHash", sha256(bytes), "contextBytes", bytes.length);
+    }
+
     JSONObject build(String request, JSONArray attachmentIds, JSONArray mentions, JSONObject session, String gitDiff) throws Exception {
         if (request == null || request.trim().isEmpty()) throw new IOException(t("메시지를 입력해 주세요."));
         if (request.length() > 50_000) throw new IOException(t("메시지는 최대 50,000자까지 입력할 수 있습니다."));

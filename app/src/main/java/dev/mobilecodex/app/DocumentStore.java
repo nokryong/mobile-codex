@@ -618,12 +618,18 @@ public final class DocumentStore {
                 if (!DocumentsContract.deleteDocument(context.getContentResolver(), resolve(path).uri)) throw new IOException(t("삭제하지 못했습니다."));
             }
             case "mobile_rename" -> {
-                if (DocumentsContract.renameDocument(context.getContentResolver(), resolve(path).uri, m.args.getString("name")) == null)
-                    throw new IOException(t("이름을 변경하지 못했습니다."));
+                Uri renamed = DocumentsContract.renameDocument(context.getContentResolver(), resolve(path).uri, m.args.getString("name"));
+                if (renamed == null) throw new IOException(t("이름을 변경하지 못했습니다."));
+                String name = query(renamed).name; WorkspacePath.checkName(name);
+                String parentPath = WorkspacePath.parent(path);
+                path = parentPath.isEmpty() ? name : parentPath + "/" + name;
             }
             case "mobile_move" -> {
-                if (DocumentsContract.moveDocument(context.getContentResolver(), resolve(path).uri, parent.uri,
-                    resolve(m.args.getString("destination")).uri) == null) throw new IOException(t("이동하지 못했습니다."));
+                String destination = m.args.getString("destination");
+                Uri moved = DocumentsContract.moveDocument(context.getContentResolver(), resolve(path).uri, parent.uri, resolve(destination).uri);
+                if (moved == null) throw new IOException(t("이동하지 못했습니다."));
+                String name = query(moved).name; WorkspacePath.checkName(name);
+                path = destination.isEmpty() ? name : destination + "/" + name;
             }
             default -> throw new IOException(t("지원하지 않는 작업입니다."));
         }

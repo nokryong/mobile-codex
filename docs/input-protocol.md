@@ -38,7 +38,15 @@
 ### Fast와 대화 표시 이력
 
 - Fast는 펼친 입력창의 최하단 줄 첫 번째 번개 버튼으로 켜고 끕니다. 기본은 꺼짐이며 모델 목록의 `serviceTiers` 또는 호환용 `additionalSpeedTiers`에 `fast`/`priority`가 있을 때만 활성화합니다. 모델이나 추론 강도, 전역 설정은 바꾸지 않습니다.
-- `chat.send.fastMode`가 있으면 `turn/start.serviceTierForTurn`에 켜짐은 지원 tier ID, 꺼짐은 `default`를 전달합니다. 필드 생략은 기존 상속 동작을 유지합니다. Pro 웹 전송과 진행 중 추가 지시에는 적용하지 않습니다. 추가 사용량·요금이 발생할 수 있어 자동 활성화하지 않습니다.
+- `chat.send.fastMode`가 있으면 `turn/start.serviceTierForTurn`에 켜짐은 지원 tier ID, 꺼짐은 `default`를 전달합니다. 필드 생략은 기존 상속 동작을 유지합니다. 진행 중 추가 지시에는 적용하지 않습니다. Pro 자문은 현재 Codex 모델과 서비스 등급을 변경하지 않습니다. 추가 사용량·요금이 발생할 수 있어 자동 활성화하지 않습니다.
+
+## Pro 자문
+
+`+` 메뉴의 Pro 선택은 작성창의 대화별 플래그만 설정합니다. 정상 `chat.send` 또는 `chat.steer`에 `consultPro: true`를 넣으면 해당 사용자 요청에 한 번 사용할 수 있는 자문 권한을 생성합니다. Codex가 필요한 근거를 모아 작성한 질문을 `mobile_consult_pro`로 전달하며, 기존 원격 스레드는 앱 전용 MCP의 `consult_pro`와 요청별 토큰을 사용합니다. 기존 스레드 ID와 기록은 유지하고 사용자 MCP 설정 파일은 수정하지 않습니다.
+
+앱은 질문을 그대로 한 번 전송하고 `pro.consult` 및 `pendingProConsultation`으로 웹 작업을 연결합니다. 완료·실패는 네이티브 전용 `chat.pro.consult.complete`를 통해 원래 스레드·턴의 도구 결과로 반환합니다. 사용자 웹 브리지는 직접 Pro 전송이나 자문 완료를 호출할 수 없습니다. 취소·연결 종료·시간 초과·중복 완료는 대기 중인 호출을 한 번만 끝내며 자동 재전송하지 않습니다.
+
+자문 웹 대화는 `proConsultConversationId`, `proConsultConversationPath`, `proConsultProjectPath`에 저장합니다. 이전 직접 Pro 전송의 `chatConversation*`는 첫 자문의 대화 ID로 사용하지 않습니다. 예전 AGENTS·도구 금지 지시가 새 자문에 남는 것을 방지하며, 기존 기록과 Codex 원격 대화는 유지합니다.
 - 네이티브 상태는 최근 40개 메시지와 `messageHistory {hasMore,beforeId,total}`만 웹 화면으로 전달합니다. 기존 대화 영역을 위로 올리면 `chat.history {threadId,beforeId,limit}`로 앞선 최대 40개를 자동으로 불러옵니다. 별도 스크롤 영역이나 더 보기 버튼은 만들지 않습니다.
 - 이전 메시지를 앞에 붙일 때 읽던 위치와 기존 DOM 노드를 유지합니다. 대화 전환 뒤 도착한 응답은 버리고, 다른 대화·삭제된 대화·오래된 cursor는 네이티브에서도 거절합니다. 로컬 저장 이력 및 모델에 전달하는 대화 맥락은 삭제하거나 잘라내지 않습니다. 디스크 저장 형식은 기존 `sessions.json`을 유지합니다.
 - 새 사용자 메시지의 실제 생성 시간을 밀리초 `createdAt`으로 저장해 말풍선 옆에 작게 표시합니다. 시간 기록이 없는 기존 메시지에는 임의 날짜를 만들지 않습니다.

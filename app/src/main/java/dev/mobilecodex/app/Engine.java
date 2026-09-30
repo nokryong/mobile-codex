@@ -54,6 +54,37 @@ public final class Engine {
     /** Turn ids are scoped to their server thread. The UI may move to another
      * conversation while an earlier thread continues in the same app-server. */
     private final Map<String, String> runningTurns = new HashMap<>();
+    private final Map<String, ConsultGrant> consultGrants = new HashMap<>();
+    private volatile PendingConsultation pendingConsultation;
+    private boolean consultMcpReady;
+    private String consultMcpThread = "";
+    private String consultMcpError = "";
+    private final Set<String> consultMcpThreads = new HashSet<>();
+    private ProConsultMcp consultMcp;
+    private static final class ConsultGrant {
+        final String token = UUID.randomUUID().toString();
+        final String workspaceKey;
+        String turnId;
+        boolean consumed;
+        ConsultGrant(String turnId, String workspaceKey) { this.turnId = turnId; this.workspaceKey = workspaceKey; }
+    }
+    private interface ConsultResponder { void respond(JSONObject result) throws IOException; }
+    private static final class PendingConsultation {
+        final RpcClient connection;
+        final Object requestId;
+        final String operationId, localThread, remoteThread, turnId, messageId, grantToken;
+        final JSONObject prepared;
+        final ConsultResponder responder;
+        ScheduledFuture<?> timeout;
+        PendingConsultation(RpcClient connection, Object requestId, String operationId, String localThread,
+                String remoteThread, String turnId, String messageId, String grantToken, JSONObject prepared, ConsultResponder responder) {
+            this.connection = connection; this.requestId = requestId; this.operationId = operationId;
+            this.localThread = localThread; this.remoteThread = remoteThread; this.turnId = turnId;
+            this.messageId = messageId; this.prepared = prepared;
+            this.grantToken = grantToken;
+            this.responder = responder;
+        }
+    }
     private String toolRequestThread = "";
     private String permissionMode, approvalMode;
     private final Map<String, PendingRequest> requests = new LinkedHashMap<>();
@@ -115,6 +146,7 @@ public final class Engine {
         io.execute(() -> {
             publish();
             if (pendingApproval != null && !pendingApproval.decision.isDone()) ui.approval(pendingApproval);
+            if (pendingConsultation != null) ui.event("pro.consult", (JSONObject) uiJsonCopy(pendingConsultation.prepared));
             requests.forEach((key, request) -> event("server.request", obj("key", key, "method", request.method, "params", requestUiParams(request))));
         });
     }
@@ -151,7 +183,7 @@ public final class Engine {
             publish(); throw error;
         } finally { lastAccountCheckElapsed = SystemClock.elapsedRealtime(); }
     }
-    public void observe(Ui observer) { observers.add(observer); io.execute(() -> { if (observers.contains(observer)) { observer.event("state", snapshot()); if (pendingApproval != null && !pendingApproval.decision.isDone()) observer.approval(pendingApproval); requests.forEach((key, request) -> observer.event("server.request", obj("key", key, "method", request.method, "params", requestUiParams(request)))); } }); }
+    public void observe(Ui observer) { observers.add(observer); io.execute(() -> { if (observers.contains(observer)) { observer.event("state", snapshot()); if (pendingApproval != null && !pendingApproval.decision.isDone()) observer.approval(pendingApproval); if (pendingConsultation != null) observer.event("pro.consult", (JSONObject) uiJsonCopy(pendingConsultation.prepared)); requests.forEach((key, request) -> observer.event("server.request", obj("key", key, "method", request.method, "params", requestUiParams(request)))); } }); }
     public void unobserve(Ui observer) { observers.remove(observer); }
     void setTestTransport(TestTransport value) { testTransport = value; }
     void setTestAccountValidation(boolean value) { testAccountValidation = value; }
@@ -185,7 +217,10 @@ public final class Engine {
         return obj("ready", ready, "busy", busy, "status", t(status), "account", account,
             "authState", authState, "authError", t(authError),
             "accounts", accountProfiles.list(), "rateLimits", rateLimits, "models", models, "workspace", documents.workspace(), "projects", documents.projects(), "sessions", summaries,
-            "threadId", threadId, "turnId", turnId, "proBusy", active != null && active.optJSONObject("proOperation") != null,
+            "threadId", threadId, "turnId", turnId, "proBusy", (pendingConsultation != null && pendingConsultation.localThread.equals(threadId)) || (active != null && active.optJSONObject("proOperation") != null),
+            "pendingProConsultation", pendingConsultation == null ? JSONObject.NULL : uiJsonCopy(pendingConsultation.prepared),
+            "consultProAvailable", consultProAvailable(),
+            "consultProUnavailableReason", consultProAvailable() ? "" : t(consultMcpError),
             "turnDiff", active == null ? "" : active.optString("turnDiff"), "messages", snapshotMessages(),
             "messageHistory", messageHistory(active == null ? null : active.optJSONArray("messages"), snapshotMessageStart()),
             "fastMode", active != null && active.optBoolean("fastMode"),
@@ -291,6 +326,14 @@ public final class Engine {
                     session.put("workspace", ""); changed = true; generalized = true;
                 }
                 if (!session.has("messages") || session.optJSONArray("messages") == null) { session.put("messages", new JSONArray()); changed = true; }
+                JSONArray restoredMessages = session.getJSONArray("messages");
+                for (int m = 0; m < restoredMessages.length(); m++) {
+                    JSONObject message = restoredMessages.optJSONObject(m);
+                    if (message != null && "proConsultation".equals(message.optString("kind")) && "pending".equals(message.optString("status"))) {
+                        message.put("status", "failed").put("text", t("앱이 종료되어 Pro 문의 결과를 원래 Codex 작업에 전달하지 못했습니다. 자동으로 다시 보내지 않습니다."));
+                        changed = true;
+                    }
+                }
                 JSONObject interruptedPro = session.optJSONObject("proOperation");
                 if (interruptedPro != null) {
                     if (proJournal != null && session.optString("id").equals(proJournal.optString("threadId"))
@@ -480,12 +523,12 @@ public final class Engine {
                     }
                     case "terminal.run" -> { runTerminal(args.getString("command")); reply.complete(obj("ok", true), null); }
                     case "terminal.stop" -> { stopTerminalProcess(); reply.complete(obj("ok", true), null); }
-                    case "files.list" -> reply.complete(documents.list(args.optString("path", "")), null);
-                    case "files.search" -> reply.complete(documents.search(args.getString("query")), null);
-                    case "files.read" -> reply.complete(documents.read(args.getString("path")), null);
-                    case "files.mention" -> reply.complete(documents.mention(args.getString("path"), attachments), null);
-                    case "images.read" -> reply.complete(readImage(args.getString("path")), null);
-                    case "files.mutate" -> mutate(args.getString("operation"), args.getJSONObject("arguments"), true, reply);
+                    case "files.list" -> { requireFileScope(args); reply.complete(documents.list(args.optString("path", "")), null); }
+                    case "files.search" -> { requireFileScope(args); reply.complete(documents.search(args.getString("query")), null); }
+                    case "files.read" -> { requireFileScope(args); reply.complete(documents.read(args.getString("path")), null); }
+                    case "files.mention" -> { requireFileScope(args); reply.complete(documents.mention(args.getString("path"), attachments), null); }
+                    case "images.read" -> { requireFileScope(args); reply.complete(readImage(args.getString("path")), null); }
+                    case "files.mutate" -> { requireFileScope(args); mutate(args.getString("operation"), args.getJSONObject("arguments"), true, reply); }
                     case "recovery.list" -> reply.complete(obj("entries", documents.recoveryList()), null);
                     case "recovery.preview" -> { requireScope(args); reply.complete(documents.previewRecovery(args.getString("id")), null); }
                     case "recovery.restore" -> { ensureEngineIdle(); requireScope(args); JSONObject restore = documents.recoveryMutation(args.getString("id")); mutate(restore.getString("operation"), restore.getJSONObject("arguments"), true, reply); }
@@ -531,11 +574,12 @@ public final class Engine {
                     case "documents.projects" -> reply.complete(obj("projects", documents.projects()), null);
                     case "chat.send" -> { requireChatScope(args); send(args.optString("text", ""), args.optString("model", ""), args.optString("effort", ""),
                         args.optJSONArray("attachments"), args.optJSONArray("skills"), args.optJSONArray("mentions"),
-                        args.has("fastMode") ? args.getBoolean("fastMode") : null); reply.complete(obj("ok", true), null); }
+                        args.has("fastMode") ? args.getBoolean("fastMode") : null, args.optBoolean("consultPro")); reply.complete(obj("ok", true), null); }
                     case "chat.history" -> reply.complete(history(args), null);
                     case "chat.pro.prepare" -> reply.complete(preparePro(args), null);
                     case "chat.pro.complete" -> reply.complete(completePro(args), null);
                     case "chat.pro.fail" -> reply.complete(failPro(args), null);
+                    case "chat.pro.consult.complete" -> reply.complete(completeConsultation(args), null);
                     case "chat.steer" -> { steer(args); reply.complete(obj("ok", true), null); }
                     case "chat.new" -> {
                         String key = args.has("workspaceKey") ? args.optString("workspaceKey", "") : documents.key();
@@ -550,6 +594,9 @@ public final class Engine {
                         reply.complete(result, null);
                     }
                     case "chat.stop" -> {
+                        if (pendingConsultation != null && pendingConsultation.localThread.equals(threadId))
+                            finishConsultation(pendingConsultation, "cancelled", t("사용자가 Pro 문의를 취소했습니다."), null);
+                        consultGrants.remove(threadId);
                         if (!turnId.isEmpty()) call("turn/interrupt", obj("threadId", activeCodexThreadId(), "turnId", turnId));
                         if (pendingApproval != null) pendingApproval.decision.complete(false);
                         reply.complete(obj("ok", true), null);
@@ -584,6 +631,7 @@ public final class Engine {
     public boolean isBusy() { return busy; }
     private boolean hasRunningTurns() { return !runningTurns.isEmpty(); }
     private boolean hasProOperations() {
+        if (pendingConsultation != null) return true;
         for (int i = 0; i < sessions.length(); i++) {
             JSONObject session = sessions.optJSONObject(i);
             if (session != null && session.optJSONObject("proOperation") != null) return true;
@@ -596,6 +644,8 @@ public final class Engine {
             throw new IOException(t("현재 대화의 작업을 먼저 중지해 주세요."));
         if (target != null && target.optJSONObject("proOperation") != null)
             throw new IOException(t("GPT-6-Pro 답변을 기다리는 대화는 먼저 중지해 주세요."));
+        if (pendingConsultation != null && pendingConsultation.localThread.equals(id))
+            throw new IOException(t("Pro 문의를 기다리는 대화는 먼저 중지해 주세요."));
     }
     private void ensureProjectIdle(String key) throws IOException {
         for (int i = 0; i < sessions.length(); i++) {
@@ -620,6 +670,8 @@ public final class Engine {
                 && (terminalProcess == null || !terminalProcess.isAlive())) context.stopService(new Intent(context, EngineService.class));
     }
     private void clearRunningState() {
+        if (pendingConsultation != null) finishConsultation(pendingConsultation, "failed", t("Codex 연결이 종료되어 Pro 문의를 완료하지 못했습니다."), null);
+        consultGrants.clear(); consultMcpReady = false; consultMcpThread = ""; consultMcpError = ""; consultMcpThreads.clear();
         runningTurns.clear();
         for (int i = 0; i < sessions.length(); i++) {
             JSONObject value = sessions.optJSONObject(i);
@@ -659,6 +711,17 @@ public final class Engine {
         ProcessBuilder builder = new ProcessBuilder(binary.getAbsolutePath(), "app-server", "--listen", "stdio://");
         builder.directory(projectDirectory());
         devTools.configure(builder, processHome, runtimeAliases());
+        if (consultMcp != null) consultMcp.close();
+        consultMcp = new ProConsultMcp(context, new ProConsultMcp.Handler() {
+            @Override public void consult(String token, String prompt, ProConsultMcp.Completion completion) {
+                consultPro(token, prompt, (result, error) -> {
+                    String text = error != null ? error.getMessage() : result.optJSONArray("contentItems").optJSONObject(0).optString("text");
+                    if (error == null && result.optBoolean("success")) completion.success(text); else completion.error(text);
+                });
+            }
+            @Override public void cancelled(String token) { cancelProConsultation(token); }
+        });
+        builder.command().addAll(consultMcp.configOverrides(builder.environment().get("MC_PYTHON")));
         linux.configureEnvironment(builder.environment());
         builder.environment().put("CODEX_SELF_EXE", binary.getAbsolutePath());
         context.startForegroundService(new Intent(context, EngineService.class));
@@ -671,9 +734,10 @@ public final class Engine {
                 try (InputStream stderr = launched.getErrorStream()) { byte[] buffer = new byte[4096]; int count; while ((count = stderr.read(buffer)) != -1) stderrTail.append(buffer, count); }
                 catch (IOException ignored) {}
             }, "codex-stderr"); errors.setDaemon(true); errors.start();
+            final RpcClient[] launchedConnection = new RpcClient[1];
             rpc = new RpcClient(process.getInputStream(), process.getOutputStream(), new RpcClient.Listener() {
                 @Override public void notification(String method, JSONObject params) { io.execute(() -> onNotification(method, params)); }
-                @Override public void request(Object id, String method, JSONObject params) { io.execute(() -> onRequest(id, method, params)); }
+                @Override public void request(Object id, String method, JSONObject params) { io.execute(() -> onRequest(launchedConnection[0], id, method, params)); }
                 @Override public void disconnected(Throwable error) {
                     io.execute(() -> {
                         if (process != launched) return;
@@ -685,6 +749,7 @@ public final class Engine {
                         requests.forEach((key, value) -> event("server.resolved", obj("key", key)));
                         requests.clear();
                         ready = false; clearRunningState(); serverThreadId = "";
+                        if (consultMcp != null) consultMcp.close(); consultMcp = null;
                         String detail = error == null ? t("Codex 연결이 종료되었습니다.") : error.getMessage();
                         String diagnosis = stderrTail.diagnosis();
                         status = t("실행 엔진 연결이 종료되었습니다") + (exitCode >= 0 ? t(" (종료 코드 ") + exitCode + ")" : "") + ". " + detail
@@ -695,6 +760,7 @@ public final class Engine {
                     });
                 }
             });
+            launchedConnection[0] = rpc;
             rpc.start();
             call("initialize", obj("clientInfo", obj("name", "mobile_codex", "title", "Mobile Codex", "version", "0.1.11"),
                 "capabilities", obj("experimentalApi", true)));
@@ -928,6 +994,77 @@ public final class Engine {
             "sandbox", permissionMode, "approvalPolicy", approvalPolicy(), "approvalsReviewer", approvalsReviewer(), "developerInstructions", workspaceInstructions(resolvedModel(model))));
         serverThreadId = remoteId;
         restoreImageHistory();
+        refreshConsultMcpAvailability(remoteId);
+    }
+    /**
+     * Existing conversations can only reach Pro through the MCP bridge. Report it unavailable only
+     * after this conversation was actually checked; an unchecked conversation is verified on send.
+     */
+    private boolean consultProAvailable() {
+        if (active == null || activeCodexThreadId().isBlank() || active.optInt("consultToolsVersion") >= 1) return true;
+        if (!activeCodexThreadId().equals(consultMcpThread)) return true;
+        return consultMcpReady;
+    }
+    private void refreshConsultMcpAvailability(String remoteId) {
+        if (consultMcp == null || testTransport != null) return;
+        consultMcpThread = remoteId;
+        if (consultMcpThreads.contains(remoteId)) { consultMcpReady = true; consultMcpError = ""; return; }
+        consultMcpReady = false;
+        long deadline = SystemClock.elapsedRealtime() + 20000;
+        // The stdio MCP server starts asynchronously after thread/resume; retry while it comes up.
+        for (int attempt = 0; attempt < 4; attempt++) {
+            if (attempt > 0) {
+                if (deadline - SystemClock.elapsedRealtime() < 1500) break;
+                SystemClock.sleep(1500);
+            }
+            try {
+                String result = findConsultMcpTool(remoteId, deadline);
+                if (result.isEmpty()) { consultMcpThreads.add(remoteId); consultMcpReady = true; consultMcpError = ""; return; }
+                consultMcpError = result;
+            } catch (Exception error) {
+                consultMcpError = "Pro 문의 도구 상태를 확인하지 못했습니다: " + (error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage());
+            }
+        }
+    }
+    /** @return an empty string when consult_pro is listed, otherwise the reason it is unavailable. */
+    private String findConsultMcpTool(String remoteId, long deadline) throws Exception {
+        String cursor = "", reason = "Pro 문의 MCP 서버(mobile_codex_pro)가 시작되지 않았습니다.";
+        for (int page = 0; page < 20; page++) {
+            long remaining = deadline - SystemClock.elapsedRealtime();
+            if (remaining <= 0) break;
+            JSONObject params = obj("detail", "toolsAndAuthOnly", "limit", 100);
+            if (!remoteId.isBlank()) params.put("threadId", remoteId);
+            if (!cursor.isBlank()) params.put("cursor", cursor);
+            JSONObject response = call("mcpServerStatus/list", params, Math.max(1, (int) ((remaining + 999) / 1000)));
+            JSONArray data = response.optJSONArray("data");
+            if (data != null) for (int i = 0; i < data.length(); i++) {
+                JSONObject server = data.optJSONObject(i);
+                if (server == null || !"mobile_codex_pro".equals(server.optString("name"))) continue;
+                if (hasConsultTool(server.opt("tools"))) return "";
+                String toolsError = server.optString("toolsError", server.optString("error"));
+                reason = toolsError.isBlank() ? "Pro 문의 MCP 서버에 consult_pro 도구가 없습니다." : "Pro 문의 MCP 서버 오류: " + toolsError;
+            }
+            String next = response.optString("nextCursor");
+            if (next.isBlank() || next.equals(cursor) || "null".equals(next)) break;
+            cursor = next;
+        }
+        return reason;
+    }
+    /** Tool maps may be keyed by plain or server-qualified names; arrays carry a name field. */
+    static boolean hasConsultTool(Object tools) {
+        if (tools instanceof JSONObject map) {
+            for (java.util.Iterator<String> keys = map.keys(); keys.hasNext(); ) if (isConsultToolName(keys.next())) return true;
+        } else if (tools instanceof JSONArray list) {
+            for (int i = 0; i < list.length(); i++) {
+                Object item = list.opt(i);
+                String name = item instanceof JSONObject tool ? tool.optString("name") : String.valueOf(item);
+                if (isConsultToolName(name)) return true;
+            }
+        }
+        return false;
+    }
+    private static boolean isConsultToolName(String name) {
+        return "consult_pro".equals(name) || name.endsWith("__consult_pro") || name.endsWith(".consult_pro") || name.endsWith("/consult_pro");
     }
     /** Old local records predate persisted image IDs; only recover them after a server resume. */
     private void restoreImageHistory() {
@@ -1028,6 +1165,10 @@ public final class Engine {
     private void requireScope(JSONObject args) throws IOException {
         if (!args.has("workspaceKey") || !args.optString("workspaceKey").equals(documents.key())) throw new IOException(t("프로젝트가 바뀌었습니다. 다시 열어 주세요."));
     }
+    private void requireFileScope(JSONObject args) throws IOException {
+        // Older packaged UIs omitted this field. Scoped requests must match before any I/O.
+        if (args.has("workspaceKey")) requireScope(args);
+    }
     private void requireChatScope(JSONObject args) throws IOException {
         if (args.has("expectedThreadId") && !args.optString("expectedThreadId").equals(threadId)) throw new IOException(t("대화가 바뀌었습니다. 현재 대화에서 다시 보내 주세요."));
         if (args.has("workspaceKey")) requireScope(args);
@@ -1072,10 +1213,18 @@ public final class Engine {
         if (text.isEmpty() || text.length() > 50000) throw new IOException(t("추가 지시는 1~50,000자로 입력해 주세요."));
         if (!busy || turnId.isEmpty() || !turnId.equals(args.optString("expectedTurnId"))) throw new IOException(t("진행 중인 작업이 변경되거나 종료되었습니다. 새 메시지로 보내 주세요."));
         JSONArray input = input(text, args.optJSONArray("attachments"), args.optJSONArray("skills"), args.optJSONArray("mentions"));
+        ConsultGrant consultation = null;
+        if (args.optBoolean("consultPro")) {
+            requireConsultationTool(); consultation = new ConsultGrant(turnId, active.optString("workspaceKey"));
+            input = consultationInput(input, consultation, active.optInt("consultToolsVersion") >= 1);
+        }
         String remoteId = activeCodexThreadId();
         if (remoteId.isBlank()) throw new IOException(t("이 대화에는 진행 중인 Codex 작업이 없습니다."));
         call("turn/steer", obj("threadId", remoteId, "expectedTurnId", turnId, "input", input));
-        active.getJSONArray("messages").put(userMessage(text, args.optJSONArray("attachments"), args.optJSONArray("skills"), args.optJSONArray("mentions")));
+        if (consultation != null) consultGrants.put(threadId, consultation);
+        JSONObject message = userMessage(text, args.optJSONArray("attachments"), args.optJSONArray("skills"), args.optJSONArray("mentions"));
+        if (consultation != null) message.put("consultPro", true);
+        active.getJSONArray("messages").put(message);
         persist(); publish();
     }
     private File reviewDirectory() throws IOException {
@@ -1096,6 +1245,149 @@ public final class Engine {
             if (directory == null || !new File(directory, ".git").exists()) return "";
             return new String(git(directory, List.of("diff", "--no-ext-diff", "--unified=3", "--", ".")), StandardCharsets.UTF_8);
         } catch (Exception ignored) { return ""; }
+    }
+    private void requireConsultationTool() throws IOException {
+        if (active == null || activeCodexThreadId().isBlank() || active.optInt("consultToolsVersion") >= 1) return;
+        String remoteId = activeCodexThreadId();
+        // A previous check may have run before the MCP server finished starting.
+        if (!(consultMcpReady && remoteId.equals(consultMcpThread))) { consultMcpThreads.remove(remoteId); refreshConsultMcpAvailability(remoteId); }
+        if (!(consultMcpReady && remoteId.equals(consultMcpThread))) {
+            publish();
+            throw new IOException(t("이 대화의 Pro 문의 도구를 연결하지 못했습니다. 연결 후 다시 시도해 주세요.") + (consultMcpError.isBlank() ? "" : " (" + t(consultMcpError) + ")"));
+        }
+    }
+    private JSONArray consultationInput(JSONArray input, ConsultGrant grant, boolean nativeTool) throws Exception {
+        String route = nativeTool ? "Call mobile_consult_pro with {prompt: focusedQuestionAndEvidence}."
+            : "Call the mobile_codex_pro MCP consult_pro tool with requestToken=" + grant.token + " and prompt=focusedQuestionAndEvidence.";
+        input.put(obj("type", "text", "text", "[Explicit user request: consult ChatGPT Pro]\n"
+            + "For this user request, gather the relevant evidence and prepare one focused question for ChatGPT Pro. "
+            + route + " Invoke it once before continuing this task. Do not automatically retry a failed consultation. "
+            + "Send only the focused question and necessary evidence, without unrelated conversation history, global instructions, or project-wide dumps. "
+            + "Use the consultant's result to continue the same Codex turn and answer the user.", "text_elements", new JSONArray()));
+        return input;
+    }
+    /** Authenticated MCP clients pass an opaque per-request grant; they never choose the target conversation. */
+    void consultPro(String requestToken, String prompt, Reply reply) {
+        io.execute(() -> {
+            try {
+                String local = ""; ConsultGrant grant = null;
+                for (Map.Entry<String, ConsultGrant> entry : consultGrants.entrySet()) {
+                    if (entry.getValue().token.equals(requestToken)) { local = entry.getKey(); grant = entry.getValue(); break; }
+                }
+                if (grant == null) throw new IOException(t("이 사용자 요청에는 Pro 문의 권한이 없습니다."));
+                if (!ready || rpc == null || rpc.isClosed()) throw new IOException(t("Codex 연결이 종료되었습니다."));
+                JSONObject target = session(local);
+                if (target == null) throw new IOException(t("대화 작업을 찾을 수 없습니다."));
+                RpcClient connection = rpc;
+                beginConsultation(connection, requestToken, local, codexThreadId(target), grant.turnId, prompt,
+                    result -> reply.complete(result, null));
+            } catch (Exception error) { reply.complete(ToolCatalog.result(false, unwrap(error).getMessage()), null); }
+        });
+    }
+    void cancelProConsultation(String requestToken) {
+        io.execute(() -> {
+            PendingConsultation pending = pendingConsultation;
+            if (pending != null && pending.grantToken.equals(requestToken))
+                finishConsultation(pending, "cancelled", t("Pro 문의 연결이 취소되었습니다."), null);
+        });
+    }
+    private void beginConsultation(RpcClient connection, Object requestId, String localThread, String remoteThread,
+            String requestTurn, String prompt, ConsultResponder responder) throws Exception {
+        if (connection == null || connection.isClosed()) throw new IOException(t("Codex 연결이 종료되었습니다."));
+        if (prompt == null || prompt.isBlank() || prompt.length() > 50000)
+            throw new IOException(t("Pro 문의는 1~50,000자로 입력해 주세요."));
+        ConsultGrant grant = consultGrants.get(localThread);
+        String running = runningTurns.get(localThread);
+        if (grant == null || grant.consumed || requestTurn == null || requestTurn.isBlank()
+                || !requestTurn.equals(running) || (!grant.turnId.isBlank() && !grant.turnId.equals(requestTurn)))
+            throw new IOException(t("이 사용자 요청의 Pro 문의 권한이 없거나 이미 사용되었습니다."));
+        JSONObject target = session(localThread);
+        if (target == null || target.optBoolean("deletionPending") || !remoteThread.equals(codexThreadId(target))
+                || !grant.workspaceKey.equals(target.optString("workspaceKey")))
+            throw new IOException(t("대화 작업을 찾을 수 없습니다."));
+        grant.turnId = requestTurn; grant.consumed = true;
+        if (hasProOperations()) throw new IOException(t("다른 Pro 문의가 진행 중입니다. 자동으로 다시 문의하지 않습니다."));
+        String operationId = UUID.randomUUID().toString(), messageId = UUID.randomUUID().toString();
+        JSONObject prepared = ProContextBuilder.buildConsultation(prompt);
+        String consultProject = target.optString("proConsultProjectPath");
+        if (consultProject.isBlank()) consultProject = target.optString("chatProjectPath");
+        prepared.put("operationId", operationId).put("threadId", localThread).put("turnId", requestTurn)
+            .put("chatConversationId", target.optString("proConsultConversationId"))
+            .put("chatConversationPath", target.optString("proConsultConversationPath"))
+            .put("chatProjectPath", consultProject);
+        JSONArray replacement = new JSONArray(sessions.toString());
+        JSONObject staged = sessionIn(replacement, localThread);
+        staged.getJSONArray("messages").put(obj("id", messageId, "role", "assistant", "kind", "proConsultation",
+            "backend", "chatgpt-web", "source", "ChatGPT Pro", "text", t("ChatGPT Pro에 문의 중입니다."),
+            "prompt", prompt, "status", "pending", "operationId", operationId, "callId", String.valueOf(requestId), "createdAt", System.currentTimeMillis()));
+        persistSessions(replacement); replaceSessions(replacement);
+        PendingConsultation pending = new PendingConsultation(connection, requestId, operationId, localThread,
+            remoteThread, requestTurn, messageId, grant.token, prepared, responder);
+        pendingConsultation = pending;
+        pending.timeout = approvalTimer.schedule(() -> io.execute(() ->
+            finishConsultation(pending, "timeout", t("Pro 문의 응답 시간이 초과되었습니다. 자동으로 다시 보내지 않습니다."), null)), 640, TimeUnit.SECONDS);
+        publish(); event("pro.consult", (JSONObject) uiJsonCopy(prepared));
+    }
+    private JSONObject completeConsultation(JSONObject args) throws Exception {
+        PendingConsultation pending = pendingConsultation;
+        if (pending == null || !pending.operationId.equals(args.optString("operationId")) || !pending.localThread.equals(args.optString("threadId")))
+            return obj("ok", true, "stale", true);
+        String status = args.optString("status", "completed");
+        if (!Set.of("completed", "failed", "cancelled", "timeout").contains(status)) {
+            finishConsultation(pending, "failed", t("Pro 문의가 잘못된 응답 상태를 반환했습니다."), null);
+            return obj("ok", true);
+        }
+        String text = "completed".equals(status) ? args.optString("reply") : args.optString("reason", t("Pro 문의에 실패했습니다."));
+        if ("completed".equals(status) && (text.isBlank() || text.length() > 200000)) {
+            finishConsultation(pending, "failed", t("Pro 답변 길이가 올바르지 않습니다."), null);
+            return obj("ok", true);
+        }
+        if (!"completed".equals(status)) text = text.isBlank() ? t("Pro 문의를 완료하지 못했습니다.") : text.substring(0, Math.min(1000, text.length()));
+        if (!pending.turnId.equals(runningTurns.get(pending.localThread)) || pending.connection.isClosed()) {
+            finishConsultation(pending, "failed", t("원래 Codex 작업이나 연결이 종료되어 Pro 결과를 전달하지 못했습니다."), null);
+            return obj("ok", true, "stale", true);
+        }
+        finishConsultation(pending, status, text, args);
+        return obj("ok", true);
+    }
+    /** Clear the live waiter before any callback so cancellation and late web replies cannot answer twice. */
+    private void finishConsultation(PendingConsultation pending, String status, String text, JSONObject args) {
+        if (pending == null || pendingConsultation != pending) return;
+        pendingConsultation = null;
+        if (pending.timeout != null) pending.timeout.cancel(false);
+        JSONObject target = session(pending.localThread), message = target == null ? null : messageIn(target, pending.messageId);
+        if (message == null) { status = "failed"; text = t("원래 Pro 문의 대화를 찾을 수 없습니다."); }
+        else {
+            try {
+                message.put("status", status).put("text", text);
+                if (args != null && "completed".equals(status)) {
+                    String remoteMessage = boundedRemoteId(args.optString("remoteMessageId"));
+                    String conversation = boundedRemoteId(args.optString("chatConversationId"));
+                    String project = boundedProjectPath(args.optString("chatProjectPath"));
+                    if (!remoteMessage.isBlank()) message.put("remoteMessageId", remoteMessage);
+                    if (!conversation.isBlank()) target.put("proConsultConversationId", conversation);
+                    if (!project.isBlank()) target.put("proConsultProjectPath", project);
+                    String effectiveProject = target.optString("proConsultProjectPath");
+                    if (effectiveProject.isBlank()) effectiveProject = target.optString("chatProjectPath");
+                    String path = boundedConversationPath(args.optString("chatConversationPath"), conversation, effectiveProject);
+                    if (!path.isBlank()) target.put("proConsultConversationPath", path);
+                }
+                persistSessions(sessions);
+            } catch (Exception error) {
+                status = "failed"; text = t("Pro 문의 결과를 저장하지 못했습니다. 자동으로 다시 보내지 않습니다.");
+                try { message.put("status", status).put("text", text); } catch (Exception ignored) {}
+                event("error", obj("threadId", pending.localThread, "message", text));
+            }
+        }
+        try { pending.responder.respond(ToolCatalog.result("completed".equals(status), text)); }
+        catch (IOException error) {
+            status = "failed";
+            if (message != null) try {
+                message.put("status", "failed").put("deliveryStatus", "failed").put("error", t("Pro 결과를 원래 Codex 연결에 전달하지 못했습니다."));
+                persistSessions(sessions);
+            } catch (Exception ignored) {}
+        }
+        publish(); event("pro.consult.resolved", obj("operationId", pending.operationId, "threadId", pending.localThread, "status", status));
     }
     private JSONObject preparePro(JSONObject args) throws Exception {
         requireChatScope(args);
@@ -1246,7 +1538,7 @@ public final class Engine {
         else if (projectPath != null && projectPath.matches("/projects/[A-Za-z0-9_-]+")) scoped = projectPath + "/c/" + conversationId;
         return normalized.equals(scoped) ? normalized : "";
     }
-    private void send(String text, String model, String effort, JSONArray attachmentIds, JSONArray skills, JSONArray mentions, Boolean fastMode) throws Exception {
+    private void send(String text, String model, String effort, JSONArray attachmentIds, JSONArray skills, JSONArray mentions, Boolean fastMode, boolean consultPro) throws Exception {
         if (ProContextBuilder.MODEL_ID.equals(model)) throw new IOException(t("GPT-6-Pro 웹 모델은 전용 전송 경로를 사용해야 합니다."));
         if (text.length() > 50000) throw new IOException(t("메시지는 최대 50,000자까지 입력할 수 있습니다."));
         documents.requireWorkspaceAvailable();
@@ -1267,7 +1559,7 @@ public final class Engine {
             candidateLocalId = "local-" + UUID.randomUUID();
             candidate = obj("id", candidateLocalId, "sessionVersion", 2, "codexThreadId", candidateRemoteId,
                 "title", titleFor(text, attachmentIds), "workspace", sessionWorkspaceName(), "workspaceKey", documents.key(), "model", actualModel,
-                "messages", new JSONArray(), "imageHistoryVersion", 1, "phoneToolsVersion", 1, "fastMode", false);
+                "messages", new JSONArray(), "imageHistoryVersion", 1, "phoneToolsVersion", 1, "consultToolsVersion", 1, "fastMode", false);
         } else {
             if (!active.optString("workspaceKey").equals(documents.key())) throw new IOException(t("이 대화의 원래 작업 폴더를 다시 연결해 주세요."));
             if (activeCodexThreadId().isBlank()) {
@@ -1277,6 +1569,11 @@ public final class Engine {
         }
         String targetLocal = candidate == null ? threadId : candidateLocalId;
         String targetRemote = candidateRemoteId.isBlank() ? activeCodexThreadId() : candidateRemoteId;
+        ConsultGrant consultation = consultPro ? new ConsultGrant("", candidate == null ? active.optString("workspaceKey") : candidate.optString("workspaceKey")) : null;
+        if (consultation != null) {
+            if (candidateRemoteId.isBlank()) requireConsultationTool();
+            input = consultationInput(input, consultation, !candidateRemoteId.isBlank() || active.optInt("consultToolsVersion") >= 1);
+        }
         busy = true; status = t("작업 중"); publish();
         try {
             JSONObject params = obj("threadId", targetRemote, "input", input, "cwd", projectDirectory().getAbsolutePath(), "approvalPolicy", approvalPolicy(), "approvalsReviewer", approvalsReviewer());
@@ -1287,14 +1584,19 @@ public final class Engine {
             if (candidate != null) { active = candidate; threadId = candidateLocalId; serverThreadId = candidateRemoteId; sessions.put(active); }
             else {
                 active.put("model", actualModel);
-                if (activeCodexThreadId().isBlank()) { active.put("codexThreadId", targetRemote); serverThreadId = targetRemote; }
+                if (activeCodexThreadId().isBlank()) { active.put("codexThreadId", targetRemote).put("consultToolsVersion", 1); serverThreadId = targetRemote; }
             }
             if (fastMode != null) active.put("fastMode", fastMode);
-            active.getJSONArray("messages").put(userMessage(text, attachmentIds, skills, mentions));
+            JSONObject message = userMessage(text, attachmentIds, skills, mentions);
+            if (consultation != null) message.put("consultPro", true);
+            active.getJSONArray("messages").put(message);
             if (turn != null) {
                 String startedTurn = turn.optString("id", "");
                 if (!startedTurn.isBlank()) runningTurns.put(targetLocal, startedTurn);
+                if (consultation != null) consultation.turnId = startedTurn;
             }
+            if (consultation != null) consultGrants.put(targetLocal, consultation);
+            else consultGrants.remove(targetLocal);
             syncCurrentTurn();
             persist(); publish();
         } catch (Exception e) { syncCurrentTurn(); status = t("요청 실패"); publish(); throw e; }
@@ -1526,15 +1828,30 @@ public final class Engine {
             } else if (method.equals("turn/started")) {
                 JSONObject turn = p.optJSONObject("turn"); String started = turn == null ? "" : turn.optString("id");
                 if (!eventThreadId.isBlank() && !started.isBlank()) runningTurns.put(eventThreadId, started);
+                ConsultGrant grant = consultGrants.get(eventThreadId);
+                if (grant != null && grant.turnId.isBlank()) grant.turnId = started;
                 syncCurrentTurn(); publish();
             } else if (method.equals("turn/completed")) {
+                JSONObject completedTurn = p.optJSONObject("turn");
+                String completedId = completedTurn == null ? "" : completedTurn.optString("id");
+                String runningId = runningTurns.get(eventThreadId);
+                if (!completedId.isBlank() && runningId != null && !completedId.equals(runningId)) return;
+                if (pendingConsultation != null && pendingConsultation.localThread.equals(eventThreadId))
+                    finishConsultation(pendingConsultation, "cancelled", t("원래 Codex 작업이 종료되어 Pro 문의를 취소했습니다."), null);
+                consultGrants.remove(eventThreadId);
                 if (!eventThreadId.isBlank()) runningTurns.remove(eventThreadId);
                 if (target != null) target.put("approvalPending", false);
                 syncCurrentTurn();
                 JSONObject turn = p.optJSONObject("turn");
-                boolean failed = turn != null && turn.optJSONObject("error") != null;
-                if (failed) event("error", obj("threadId", eventThreadId, "message", turn.getJSONObject("error").optString("message", t("작업 실패"))));
-                taskNotification(failed ? "failed" : "completed", failed ? t("작업 실패") : t("답변 완료"), failed ? t("Codex 작업이 실패했습니다.") : t("Codex가 작업을 마쳤습니다."), eventThreadId, "");
+                String completionStatus = turn == null ? "" : turn.optString("status");
+                boolean interrupted = "interrupted".equals(completionStatus);
+                JSONObject error = turn == null ? null : turn.optJSONObject("error");
+                boolean failed = !interrupted && ("failed".equals(completionStatus) || error != null);
+                if (currentThread && (interrupted || failed)) status = interrupted ? t("작업 중지됨") : t("작업 실패");
+                if (failed) event("error", obj("threadId", eventThreadId, "message", error == null ? t("작업 실패") : error.optString("message", t("작업 실패"))));
+                taskNotification(interrupted ? "interrupted" : failed ? "failed" : "completed",
+                    interrupted ? t("작업 중지됨") : failed ? t("작업 실패") : t("답변 완료"),
+                    interrupted ? t("Codex 작업이 중지되었습니다.") : failed ? t("Codex 작업이 실패했습니다.") : t("Codex가 작업을 마쳤습니다."), eventThreadId, "");
                 if (currentThread && pendingApproval != null) pendingApproval.decision.complete(false);
                 if (target != null) {
                     JSONObject previous = active;
@@ -1544,7 +1861,7 @@ public final class Engine {
                         for (int i = 0; i < messages.length(); i++) {
                             JSONObject message = messages.getJSONObject(i);
                             if (message.optString("imageStatus").equals("generating")) message.put("imageStatus", "failed")
-                                .put("imageError", t("이미지 생성이 완료되지 않았습니다. 다시 시도해 주세요."));
+                                .put("imageError", interrupted ? t("작업이 중지되어 이미지 생성이 완료되지 않았습니다.") : t("이미지 생성이 완료되지 않았습니다. 다시 시도해 주세요."));
                         }
                     } finally { active = previous; }
                 }
@@ -1620,8 +1937,8 @@ public final class Engine {
         }
         JSONObject m = obj("id", id, "role", "assistant", "text", ""); messages.put(m); return m;
     }
-    private void onRequest(Object id, String method, JSONObject p) {
-        RpcClient connection = rpc;
+    private void onRequest(Object id, String method, JSONObject p) { onRequest(rpc, id, method, p); }
+    private void onRequest(RpcClient connection, Object id, String method, JSONObject p) {
         try {
             if (!method.equals("item/tool/call")) {
                 String key = UUID.randomUUID().toString();
@@ -1645,6 +1962,13 @@ public final class Engine {
             String requestWorkspaceKey = requestSession.optString("workspaceKey");
             String tool = p.getString("tool"); JSONObject args = p.getJSONObject("arguments");
             event("tool", obj("threadId", requestThreadId, "name", tool, "path", args.optString("path", args.optString("query", ""))));
+            if (tool.equals("mobile_consult_pro")) {
+                if (connection != rpc) throw new IOException(t("Codex 연결이 변경되었습니다."));
+                if (args.length() != 1 || !(args.opt("prompt") instanceof String)) throw new IOException(t("Pro 문의 정보가 올바르지 않습니다."));
+                beginConsultation(connection, id, requestThreadId, p.optString("threadId"), p.optString("turnId"), args.getString("prompt"),
+                    result -> connection.respond(id, result));
+                return;
+            }
             String previousToolThread = toolRequestThread;
             toolRequestThread = requestThreadId;
             try { withWorkspace(requestWorkspaceKey, () -> {
@@ -1669,7 +1993,7 @@ public final class Engine {
                 return null;
             }); } finally { toolRequestThread = previousToolThread; }
         } catch (Exception e) {
-            try { connection.respond(id, ToolCatalog.result(false, unwrap(e).getMessage())); } catch (IOException ignored) {}
+            if (connection != null) try { connection.respond(id, ToolCatalog.result(false, unwrap(e).getMessage())); } catch (IOException ignored) {}
         }
     }
     private void mutate(String operation, JSONObject args, boolean interactive, Reply reply) throws Exception {
@@ -1681,6 +2005,7 @@ public final class Engine {
             JSONObject result = documents.commit(mutation); filesChanged(result); reply.complete(result, null); return;
         }
         Approval approval = new Approval(mutation.title, mutation.preview);
+        String approvalWorkspaceKey = documents.key();
         pendingApproval = approval;
         String approvalThread = threadId;
         JSONObject approvalSession = session(approvalThread);
@@ -1693,6 +2018,7 @@ public final class Engine {
                 JSONObject finishedApprovalSession = session(approvalThread);
                 if (finishedApprovalSession != null) { finishedApprovalSession.put("approvalPending", false); persist(); publish(); }
                 if (error != null || !Boolean.TRUE.equals(approved)) throw new IOException(t("사용자가 변경을 취소했습니다."));
+                if (!approvalWorkspaceKey.equals(documents.key())) throw new IOException(t("프로젝트가 바뀌었습니다. 다시 열어 주세요."));
                 JSONObject result = documents.commit(mutation);
                 filesChanged(result); reply.complete(result, null);
             } catch (Throwable e) { reply.complete(null, unwrap(e)); }
@@ -1711,6 +2037,8 @@ public final class Engine {
         io.execute(() -> { autoRestorePaused = true; stopNow(); });
     }
     private void stopNow() {
+        if (pendingConsultation != null) finishConsultation(pendingConsultation, "cancelled", t("Codex 실행이 중지되어 Pro 문의를 취소했습니다."), null);
+        consultGrants.clear(); consultMcpReady = false; consultMcpThread = ""; consultMcpError = ""; consultMcpThreads.clear();
         loginInProgress = false;
         PhoneUseService.stopControl();
         if (pendingApproval != null) pendingApproval.decision.complete(false);
@@ -1725,6 +2053,7 @@ public final class Engine {
             catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); }
         }
         if (rpc != null) rpc.close(); rpc = null;
+        if (consultMcp != null) consultMcp.close(); consultMcp = null;
         requests.forEach((key, value) -> event("server.resolved", obj("key", key)));
         requests.clear();
         stopTerminalProcess();

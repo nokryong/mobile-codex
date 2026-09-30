@@ -2,16 +2,18 @@
 (() => {
   'use strict';
   const L = window.MobileCodexLocale, t = L.t;
-  const PRO_MODEL = 'chatgpt-web:gpt-6-pro', PRO_LABEL = 'GPT-6-Pro';
+  const LEGACY_PRO_MODEL = 'chatgpt-web:gpt-6-pro', LEGACY_PRO_LABEL = 'GPT-6-Pro';
   const $ = id => document.getElementById(id), C = window.UiCore;
   const pending = new Map(), requestQueue = new Map();
   const dialogs = [], frame = fn => (window.requestAnimationFrame || (cb => setTimeout(cb, 0)))(fn);
-  let following = true, draftScope = '', sending = null, configOriginal = '', sidebarFocus = null, openedImage = null;
+  let following = true, draftScope = '', draftConsultAccount = '', sending = null, configOriginal = '', sidebarFocus = null, openedImage = null;
   let historyView = {threadId:'', hasMore:false, beforeId:'', total:0, loading:false, loaded:false, top:0};
   const imageReads = new Map();
   let viewerImages = [], viewerIndex = 0, viewerGroup = null;
   let seq = 0, state = {messages: [], sessions: [], projects: [], models: [], accounts: [], account: {}, authState:'unknown', rateLimits: {}, workspace: {}}, folder = '', openedFile = null, login = null, inputResolve = null, toastTimer, fileSeq = 0, modelKey = '', modelRefreshGeneration = 0, displayedRequest = null, projectMenuFocus = null, projectMenuActionClosing = false;
-  let draftContext = {attachments: [], mentions: [], skills: []}, draftOptions = {model:'', effort:''}, autocomplete = {items: [], index: -1, token: '', type: '', version: 0};
+  let fileContextGeneration = 0, fileReadSeq = 0, fileInputContext = null, searchTimer;
+  const fileDrafts = new Map();
+  let draftContext = {attachments: [], mentions: [], skills: [], consultPro:false}, draftOptions = {model:'', effort:''}, autocomplete = {items: [], index: -1, token: '', type: '', version: 0};
   const handledReceipts = new Set(), handledVoiceReceipts = new Set();
   let dictationState = {phase:'idle'}, dictationTimer = null;
   let voiceStarting = false, voiceActive = false, voiceRecoveryGeneration = 0;
@@ -142,6 +144,10 @@
       || (id === 'config-dialog' && $('config-editor').value !== configOriginal)
       || (id === 'settings-dialog' && instructionsLoaded && $('instructions-editor').value !== instructionsOriginal);
     if (dirty && !confirm(t('저장하지 않은 변경 사항을 닫을까요?'))) return;
+    if (id === 'editor-dialog' && openedFile) {
+      fileDrafts.delete(fileDraftKey(openedFile.context, openedFile.path));
+      $('editor').value = openedFile.content;
+    }
     // Keep the request in the queue; selecting its conversation can show it again.
     if (id === 'request-dialog') displayedRequest = null;
     close(id);
@@ -240,7 +246,9 @@
   }
   function contextScope(scope = draftScope) { return scope ? scope + ':context' : ''; }
   function optionsScope(scope = draftScope) { return scope ? scope + ':options' : ''; }
-  function restoreOptions(scope) { try { const value = JSON.parse(localStorage.getItem(optionsScope(scope)) || '{}'); return {model:value.model || '', effort:value.effort || '', fastMode:typeof value.fastMode === 'boolean' ? value.fastMode : undefined}; } catch { return {model:'', effort:''}; } }
+  function restoreOptions(scope) { try { const value = JSON.parse(localStorage.getItem(optionsScope(scope)) || '{}'); if (value.model === LEGACY_PRO_MODEL) { value.model = ''; value.effort = ''; localStorage.setItem(optionsScope(scope), JSON.stringify(value)); } return {model:value.model || '', effort:value.effort || '', fastMode:typeof value.fastMode === 'boolean' ? value.fastMode : undefined}; } catch { return {model:'', effort:''}; } }
+  function consultAccountScope(snapshot = state) { return (snapshot.accounts || []).find(account => account.active)?.key || snapshot.account?.id || snapshot.account?.email || accountScope(snapshot.account); }
+  function consultScope(scope = draftScope, account = draftConsultAccount) { return contextScope(scope) + ':consult-pro:' + JSON.stringify(account); }
   function saveOptions() { if (!draftScope) return; draftOptions = {model:$('model').value, effort:$('effort').value, fastMode:draftOptions.fastMode === true}; try { localStorage.setItem(optionsScope(), JSON.stringify(draftOptions)); } catch {} }
   function saveDraft() {
     if (!draftScope) return;
@@ -248,14 +256,16 @@
       if ($('prompt').value) localStorage.setItem(draftScope, $('prompt').value); else localStorage.removeItem(draftScope);
       const context = {attachments:draftContext.attachments || [], mentions:draftContext.mentions || [], skills:draftContext.skills || []};
       if (context.attachments.length || context.mentions.length || context.skills.length) localStorage.setItem(contextScope(), JSON.stringify(context)); else localStorage.removeItem(contextScope());
+      if (draftContext.consultPro) localStorage.setItem(consultScope(), 'true'); else localStorage.removeItem(consultScope());
     } catch {}
   }
-  function restoreContext(scope) {
-    try { const value = JSON.parse(localStorage.getItem(contextScope(scope)) || '{}'); return {attachments:Array.isArray(value.attachments) ? value.attachments : [], mentions:Array.isArray(value.mentions) ? value.mentions : [], skills:Array.isArray(value.skills) ? value.skills : []}; }
-    catch { return {attachments:[], mentions:[], skills:[]}; }
+  function restoreContext(scope, account = draftConsultAccount) {
+    try { const value = JSON.parse(localStorage.getItem(contextScope(scope)) || '{}'); return {attachments:Array.isArray(value.attachments) ? value.attachments : [], mentions:Array.isArray(value.mentions) ? value.mentions : [], skills:Array.isArray(value.skills) ? value.skills : [], consultPro:localStorage.getItem(consultScope(scope, account)) === 'true'}; }
+    catch { return {attachments:[], mentions:[], skills:[], consultPro:false}; }
   }
   function migrateDraftToGeneral(sourceScope, targetScope) {
     try {
+      const targetHasContent = localStorage.getItem(targetScope) !== null || localStorage.getItem(contextScope(targetScope)) !== null;
       if (localStorage.getItem(targetScope) === null) {
         const text = localStorage.getItem(sourceScope);
         if (text !== null) localStorage.setItem(targetScope, text);
@@ -269,6 +279,7 @@
         if (safe.attachments.length || safe.skills.length) localStorage.setItem(contextScope(targetScope), JSON.stringify(safe));
         if (context.mentions.length) toast(t('프로젝트 파일 멘션은 원래 초안에 남겨 두었습니다.'));
       }
+      if (!targetHasContent && localStorage.getItem(consultScope(targetScope)) === null && localStorage.getItem(consultScope(sourceScope)) === 'true') localStorage.setItem(consultScope(targetScope), 'true');
     } catch {}
   }
   function draftKeyFor(scope = draftScope) { return scope.replace(/^draft:/, ''); }
@@ -287,33 +298,38 @@
       if (item.type === 'attachments' && C.safeImageUrl(image.url)) { const preview = button('', () => previewImage(image), 'context-image'); preview.setAttribute('aria-label', item.label + t(' 미리 보기')); const img = node('img'); img.src = image.url; img.alt = item.label; preview.append(img); chip.append(preview); }
       chip.append(node('span', item.label)); const remove = button('×', () => removeContext(item.type, item.value.id || item.value.path || item.value.name), 'chip-remove'); remove.setAttribute('aria-label', item.label + t(' 제거')); chip.append(remove); target.append(chip);
     }
-    target.hidden = !items.length;
+    if (draftContext.consultPro) {
+      const chip = node('span', null, 'context-chip pro-consultation-chip'); chip.append(node('span', t('Pro자문')));
+      const remove = node('button', '×', 'chip-remove'); remove.type = 'button';
+      remove.addEventListener('click', () => { draftContext.consultPro = false; renderDraftContext(); saveDraft(); updateSend(); $('prompt').focus(); });
+      remove.setAttribute('aria-label', t('Pro자문 제거')); chip.append(remove); target.append(chip);
+    }
+    target.hidden = !items.length && !draftContext.consultPro;
     updateComposerExpansion();
   }
   function setDraftScope(next) {
     const workspaceKey = Object.prototype.hasOwnProperty.call(next.workspace || {}, 'key') ? next.workspace.key : (next.cwd || '');
     const scope = 'draft:' + C.draftKey(workspaceKey || '', next.threadId || 'new');
-    if (scope === draftScope) return;
+    const consultAccount = consultAccountScope(next);
+    if (scope === draftScope && consultAccount === draftConsultAccount) return;
     const previousScope = draftScope, previousWorkspaceKey = state.workspace?.key || '';
     saveDraft();
-    if (!workspaceKey && next.workspace?.selected === false && state.threadId && state.threadId === next.threadId && previousWorkspaceKey && previousScope) migrateDraftToGeneral(previousScope, scope);
-    const createdBySend = sending && !state.threadId && next.threadId && state.cwd === next.cwd && state.workspace?.key === next.workspace?.key;
-    draftScope = scope; hideAutocomplete();
+    if (consultAccount === draftConsultAccount && !workspaceKey && next.workspace?.selected === false && state.threadId && state.threadId === next.threadId && previousWorkspaceKey && previousScope) migrateDraftToGeneral(previousScope, scope);
+    const createdBySend = sending && consultAccount === sending.consultAccount && consultAccount === draftConsultAccount && !state.threadId && next.threadId && state.cwd === next.cwd && state.workspace?.key === next.workspace?.key;
+    draftScope = scope; draftConsultAccount = consultAccount; hideAutocomplete(); closeComposerAddMenu(false);
     if (createdBySend) { sending.scopes.add(scope); saveDraft(); saveOptions(); }
     else { try { $('prompt').value = localStorage.getItem(scope) || ''; } catch { $('prompt').value = ''; } draftContext = restoreContext(scope); renderDraftContext(); }
     if (!createdBySend) draftOptions = restoreOptions(scope);
     if (draftOptions.fastMode === undefined) draftOptions.fastMode = next.fastMode === true;
-    if ([...$('model').options].some(o => o.value === draftOptions.model)) $('model').value = draftOptions.model;
+    $('model').value = [...$('model').options].some(o => o.value === draftOptions.model) ? draftOptions.model : '';
     efforts(); if ([...$('effort').options].some(o => o.value === draftOptions.effort)) $('effort').value = draftOptions.effort;
     sizeComposer();
   }
-  const proSelected = () => $('model')?.value === PRO_MODEL;
   const projectWorkBusy = () => !!state.busy || !!state.proBusy || (state.sessions || []).some(session => !!session.busy);
   const generalFolderAvailable = (workspace = state.workspace) => !workspace?.selected && (workspace?.hasLocalFolder === true || workspace?.available === true);
   const workspaceFilesAvailable = (workspace = state.workspace) => workspace?.selected ? workspace.available !== false : generalFolderAvailable(workspace);
   const workspaceFolderLabel = (workspace = state.workspace) => workspace?.selected ? (workspace.name || t('작업 폴더 선택')) : (workspace.name || 'Codex');
   function fastTier() {
-    if (proSelected()) return '';
     const selected = $('model').value;
     const model = selected ? state.models.find(m => (m.model || m.id) === selected) : state.models.find(m => m.isDefault);
     const tiers = model?.serviceTiers?.length ? model.serviceTiers : (model?.additionalSpeedTiers || []);
@@ -323,17 +339,28 @@
     const supported = !!fastTier(), enabled = supported && draftOptions.fastMode === true, control = $('fast-mode');
     control.disabled = !supported || !!state.busy || !!state.proBusy || !!sending;
     control.setAttribute('aria-pressed', String(enabled));
-    const title = proSelected() ? t('GPT-6-Pro 웹에서는 Fast 모드를 사용할 수 없습니다.')
-      : !supported ? t('선택한 모델은 Fast 모드를 지원하지 않습니다.')
+    const title = !supported ? t('선택한 모델은 Fast 모드를 지원하지 않습니다.')
       : state.busy || state.proBusy ? t('Fast 모드는 다음 요청부터 변경할 수 있습니다.')
       : enabled ? t('Fast 모드 켜짐 · 사용량·요금이 더 높을 수 있습니다.') : t('Fast 모드 켜기 · 사용량·요금이 더 높을 수 있습니다.');
     control.title = title; control.setAttribute('aria-label', title);
   }
-  function updateSend() { const pro = proSelected(), occupied = !!state.proBusy || (pro && !!state.busy); $('voice-input').disabled = !draftScope || voiceStarting || voiceActive || !!sending; $('voice-input').setAttribute('aria-busy', String(voiceStarting || voiceActive)); $('send').disabled = ((!$('prompt').value.trim() && !(draftContext.attachments || []).length) || !!sending || voiceStarting || voiceActive || occupied || (state.workspace?.selected && state.workspace.available === false)); const steering = state.busy && !pro; $('send').setAttribute('aria-label', pro ? t('GPT-6-Pro에 보내기') : steering ? t('진행 중인 작업에 추가 지시') : t('메시지 보내기')); $('send').title = pro ? t('GPT-6-Pro에 보내기') : steering ? t('추가 지시') : t('보내기'); updateFastButton(); }
+  function updateSend() { const unavailable = state.consultProAvailable === false, occupied = !!state.proBusy && (!!draftContext.consultPro || !state.busy); $('voice-input').disabled = !draftScope || voiceStarting || voiceActive || !!sending; $('voice-input').setAttribute('aria-busy', String(voiceStarting || voiceActive)); $('send').disabled = ((!$('prompt').value.trim() && !(draftContext.attachments || []).length) || !!sending || voiceStarting || voiceActive || occupied || (unavailable && !!draftContext.consultPro) || (state.workspace?.selected && state.workspace.available === false)); const steering = !!state.busy; $('send').setAttribute('aria-label', steering ? t('진행 중인 작업에 추가 지시') : t('메시지 보내기')); $('send').title = steering ? t('추가 지시') : t('보내기'); $('composer-consult-pro').disabled = unavailable || !!state.proBusy || !!sending || !!draftContext.consultPro; $('composer-consult-pro').title = unavailable ? (state.consultProUnavailableReason || t('현재 Pro 자문을 사용할 수 없습니다.')) : state.proBusy ? t('Pro 답변이 끝나면 다시 선택할 수 있습니다.') : t('선택하면 다음 요청에 Pro 자문을 추가합니다.'); $('composer-consult-note').textContent = unavailable ? (state.consultProUnavailableReason || t('현재 Pro 자문을 사용할 수 없습니다.')) : state.proBusy ? t('Pro 답변이 끝나면 다시 선택할 수 있습니다.') : ''; $('composer-consult-note').hidden = !unavailable && !state.proBusy; $('composer-attach').disabled = !!sending; updateFastButton(); }
+  function closeComposerAddMenu(restoreFocus = true) {
+    if ($('composer-add-menu').hidden) return false;
+    $('composer-add-menu').hidden = true; $('add-attachment').setAttribute('aria-expanded', 'false');
+    if (restoreFocus) $('add-attachment').focus();
+    return true;
+  }
+  function openComposerAddMenu(last = false) {
+    hideAutocomplete(); updateSend(); $('composer-add-menu').hidden = false; $('add-attachment').setAttribute('aria-expanded', 'true');
+    const choices = [...$('composer-add-menu').querySelectorAll('button:not(:disabled)')];
+    (last ? choices.at(-1) : choices[0])?.focus();
+  }
   function scrollLatest() { following = true; $('chat-scroll').scrollTop = $('chat-scroll').scrollHeight; historyView.top = $('chat-scroll').scrollTop; $('jump-latest').hidden = true; }
   function updateComposerExpansion() {
     const composer = $('composer');
-    composer.classList.toggle('composer-expanded', !$('dictation').hidden || !$('draft-context').hidden || composer.contains(document.activeElement));
+    // Keep task controls reachable while reading messages outside the input.
+    composer.classList.toggle('composer-expanded', !!state.busy || !!state.proBusy || !$('dictation').hidden || !$('draft-context').hidden || composer.contains(document.activeElement));
     sizeComposer();
   }
   function sizeComposer() {
@@ -357,15 +384,6 @@
   }
   function optionsSummary() {
     updateFastButton();
-    if (proSelected()) {
-      $('model-summary').textContent = PRO_LABEL + ' · ' + t('읽기 전용');
-      $('composer-options').setAttribute('aria-label', t('작업 설정: ') + PRO_LABEL + t(', 읽기 전용'));
-      $('composer-options').title = PRO_LABEL + ' · ' + t('읽기 전용');
-      $('approval-mode').title = t('GPT-6-Pro에서는 승인 요청을 사용하지 않습니다.');
-      $('permission-help').textContent = t('분석·검토·질문 답변만 지원합니다. 파일 수정, 명령 실행, 휴대폰 제어는 사용할 수 없습니다.');
-      $('model-help').textContent = t('공식 ChatGPT 웹에서 실제 GPT-6 Pro 선택 상태를 확인한 뒤 읽기 전용으로 보냅니다.');
-      return;
-    }
     const model = $('model').selectedOptions[0]?.textContent || t('기본 모델');
     const effort = $('effort').selectedOptions[0]?.textContent || t('기본');
     const approval = $('approval-mode').selectedOptions[0]?.textContent || t('자동 검토');
@@ -378,27 +396,14 @@
     $('model-help').textContent = current?.description || (current ? t('연결된 계정에서 사용할 수 있는 모델입니다.') : t('기본 모델을 사용합니다.'));
   }
   function syncPermissionControls(mode, disabled = !!state.busy) {
-    if (proSelected()) {
-      $('permissions').value = 'read-only'; $('permissions').disabled = true;
-      document.querySelectorAll('input[name="permission"]').forEach(r => { r.checked = r.value === 'read-only'; r.disabled = true; });
-      return;
-    }
     const value = ['read-only','workspace-write','danger-full-access'].includes(mode) ? mode : 'workspace-write';
     $('permissions').value = value; $('permissions').disabled = disabled;
     document.querySelectorAll('input[name="permission"]').forEach(r => { r.checked = r.value === value; r.disabled = disabled; });
   }
   function syncApprovalControl(disabled = !!state.busy) {
-    const select = $('approval-mode'), proOption = [...select.options].find(option => option.value === 'pro-disabled');
-    if (proSelected()) {
-      if (!proOption) select.add(new Option(t('승인 사용 안 함'), 'pro-disabled'));
-      select.value = 'pro-disabled'; select.disabled = true;
-    } else {
-      if (proOption) proOption.remove();
-      select.value = state.approvalMode || 'auto-review'; select.disabled = disabled;
-    }
+    const select = $('approval-mode'); select.value = state.approvalMode || 'auto-review'; select.disabled = disabled;
   }
   async function setApprovalMode(mode) {
-    if (proSelected()) return;
     const previous = state.approvalMode || 'auto-review';
     $('approval-mode').disabled = true;
     try { await call('approvals.set', {mode}); state.approvalMode = mode; }
@@ -406,7 +411,6 @@
     finally { $('approval-mode').value = state.approvalMode || previous; $('approval-mode').disabled = !!state.busy; optionsSummary(); }
   }
   async function setPermissionMode(mode) {
-    if (proSelected()) return;
     const previous = state.permissions || 'workspace-write';
     syncPermissionControls(mode, true); optionsSummary();
     try { await call('permissions.set', {mode}); state.permissions = mode; }
@@ -940,7 +944,8 @@
       if (el !== position) $('messages').insertBefore(el, position);
       previous = el;
       const iconName = m.imageStatus === 'generating' ? 'working' : state.busy && m.id === messages[messages.length - 1]?.id ? 'thinking' : C.messageIcon(m);
-      const signature = JSON.stringify([m.text, m.createdAt, m.status, m.source, m.backend, m.displayModel, m.error, m.images, m.attachments, m.imageStatus, m.imageError, L.language(), chatIconsEnabled, iconName, characterVisualKey()]);
+      el.classList.toggle('pro-consultation-message', m.kind === 'proConsultation');
+      const signature = JSON.stringify([m.text, m.kind, m.prompt, m.createdAt, m.status, m.source, m.backend, m.displayModel, m.error, m.images, m.attachments, m.imageStatus, m.imageError, L.language(), chatIconsEnabled, iconName, characterVisualKey()]);
       if (el.dataset.signature !== signature) {
         el.dataset.signature = signature;
         if (m.role === 'user') {
@@ -949,13 +954,18 @@
           el.replaceChildren(body);
           const date = messageDate(m.createdAt); el.classList.toggle('has-date', !!date); if (date) el.append(date);
           if (m.attachments?.length) el.append(sentAttachments(m.attachments));
-          if (m.source === 'ChatGPT Pro' || m.backend === 'chatgpt-web') el.prepend(node('span', m.displayModel || PRO_LABEL, 'message-source-badge'));
+          if (m.source === 'ChatGPT Pro' || m.backend === 'chatgpt-web') el.prepend(node('span', m.displayModel || LEGACY_PRO_LABEL, 'message-source-badge'));
           if (['not_sent','uncertain','failed'].includes(m.status)) el.append(node('p', m.status === 'uncertain' ? t('전송 상태를 확인해야 합니다. 같은 메시지를 다시 보내기 전에 ChatGPT 웹 대화를 확인하세요.') : (m.error || t('보내지 못했습니다.')), 'message-transport-status'));
         }
         else {
           const previousIcon = el.querySelector('.chat-character');
           prose(el, m.text || '');
-          if (m.source === 'ChatGPT Pro' || m.backend === 'chatgpt-web') el.prepend(node('span', 'ChatGPT Pro', 'message-source-badge'));
+          if (m.kind === 'proConsultation') {
+            const status = {completed:t('검토 완료'),failed:t('검토 실패'),cancelled:t('검토 취소됨'),timeout:t('검토 시간 초과')}[m.status];
+            el.prepend(node('span', t('Pro 검토 답변'), 'message-source-badge'));
+            if (status) { const label = node('p', status, 'message-transport-status'); label.setAttribute('role', 'status'); el.append(label); }
+            if (m.prompt?.trim()) { const detail = node('details', null, 'pro-consultation-prompt'); detail.append(node('summary', t('Pro에게 보낸 질문')), node('pre', m.prompt, 'console')); el.append(detail); }
+          } else if (m.source === 'ChatGPT Pro' || m.backend === 'chatgpt-web') el.prepend(node('span', 'ChatGPT Pro', 'message-source-badge'));
            if (chatIconsEnabled) el.prepend(previousIcon?.getAttribute('src') === characterIconUrl(iconName) ? previousIcon : characterIcon(iconName));
           if (m.images?.length) el.append(imageGallery(m.images, m.id));
           if (m.imageStatus === 'generating') el.append(node('p', t('이미지 생성 중…'), 'image-placeholder'));
@@ -976,10 +986,6 @@
     else $('jump-latest').hidden = !messages.length;
   }
   function efforts() {
-    if (proSelected()) {
-      $('effort').replaceChildren(new Option(t('Pro에서 자동 결정'), 'pro-auto'));
-      $('effort').value = 'pro-auto'; $('effort').disabled = true; optionsSummary(); return;
-    }
     $('effort').disabled = false;
     const selected = state.models.find(m => (m.model || m.id) === $('model').value) || state.models.find(m => m.isDefault);
     const previous = $('effort').value; $('effort').replaceChildren(new Option(t('기본'), ''));
@@ -989,7 +995,7 @@
   }
   function renderModelList() {
     const target = $('model-list'); target.replaceChildren();
-    const choices = [{id:'', label:t('기본 모델'), description:t('기본 모델을 사용합니다.')}, {id:PRO_MODEL, label:PRO_LABEL, description:t('공식 ChatGPT 웹 · 분석과 검토 전용')}, ...state.models.map(m => ({id:m.model || m.id, label:m.displayName || m.model || m.id, description:m.description || m.model || m.id}))];
+    const choices = [{id:'', label:t('기본 모델'), description:t('기본 모델을 사용합니다.')}, ...state.models.filter(m => (m.model || m.id) !== LEGACY_PRO_MODEL).map(m => ({id:m.model || m.id, label:m.displayName || m.model || m.id, description:m.description || m.model || m.id}))];
     for (const choice of choices) {
       const label = node('label', null, 'model-choice'); const input = node('input'); input.type = 'radio'; input.name = 'model-choice'; input.value = choice.id; input.checked = $('model').value === choice.id;
       input.addEventListener('change', () => { $('model').value = choice.id; $('model').dispatchEvent(new Event('change')); renderModelList(); });
@@ -1334,6 +1340,8 @@
     const previousAccountScope = accountScope(state.account), nextAccountScope = accountScope(next.account);
     if (previousAccountScope !== nextAccountScope) { usageGeneration++; resetCredits = null; resetCreditBusy = false; resetCreditIdempotencyKey = ''; resetCreditSelectedId = ''; resetCreditScope = nextAccountScope; }
     const changedThread = state.threadId !== next.threadId;
+    const changedFileContext = fileWorkspaceScope(state) !== fileWorkspaceScope(next);
+    if (changedFileContext) resetFileContext();
     setDraftScope(next); state = historySnapshot(next, changedThread);
     state.models ||= []; state.messages ||= []; state.projects ||= []; state.accounts ||= []; state.workspace ||= {}; state.account ||= {}; state.rateLimits ||= {}; setCharacterState(state.characters);
     const logged = C.isLoggedIn(state.account), selected = state.workspace.selected;
@@ -1354,6 +1362,7 @@
     $('pending-deletions').textContent = pendingDeletes ? t('원본 삭제 대기 {count}건. 아래 ‘Codex 시작 / 다시 연결’을 누르면 다시 시도합니다.', {count:pendingDeletes}) : '';
     const anyBusy = !!state.busy || !!state.proBusy;
     $('send').hidden = false; $('stop').hidden = !anyBusy; $('activity').hidden = !anyBusy;
+    updateComposerExpansion();
     if (changedThread || !anyBusy)
       $('activity-text').textContent = state.proBusy ? t('Pro 답변 중') : t('Codex 답변 기다리는 중');
     if (state.proBusy) $('activity-text').textContent = t('Pro 답변 중');
@@ -1377,8 +1386,8 @@
     for (const session of (state.sessions || []).filter(session => !projectWorkspaceKeys.has(sessionWorkspaceKey(session)))) $('sessions').append(sessionRow(session));
     if (!state.sessions?.length) $('sessions').append(node('p', t('대화를 시작하면 여기에 표시됩니다.'), 'sidebar-empty'));
     const key = JSON.stringify(state.models);
-    if (key !== modelKey) { modelKey = key; const value = draftOptions.model || $('model').value; $('model').replaceChildren(new Option(t('기본 모델'), ''), new Option(PRO_LABEL, PRO_MODEL)); for (const m of state.models) $('model').add(new Option(m.displayName || m.model || m.id, m.model || m.id)); if ([...$('model').options].some(o => o.value === value)) $('model').value = value; efforts(); if ([...$('effort').options].some(o => o.value === draftOptions.effort)) $('effort').value = draftOptions.effort; }
-    syncPermissionControls(state.permissions, anyBusy || proSelected());
+    if (key !== modelKey) { modelKey = key; const value = draftOptions.model || $('model').value; $('model').replaceChildren(new Option(t('기본 모델'), '')); for (const m of state.models) if ((m.model || m.id) !== LEGACY_PRO_MODEL) $('model').add(new Option(m.displayName || m.model || m.id, m.model || m.id)); $('model').value = [...$('model').options].some(o => o.value === value) ? value : ''; efforts(); if ([...$('effort').options].some(o => o.value === draftOptions.effort)) $('effort').value = draftOptions.effort; }
+    syncPermissionControls(state.permissions, anyBusy);
     syncApprovalControl(anyBusy);
     renderModelList();
     if (changedThread) { following = true; $('event-log').replaceChildren(); $('messages').replaceChildren(); }
@@ -1388,6 +1397,7 @@
     // selected session is restored, show only that session's pending request.
     nextRequest();
     if (logged && $('login-dialog').open) { login = null; close('login-dialog'); }
+    if (changedFileContext && !$('file-panel').hidden) listFiles().catch(error => toast(error.message));
   }
   function logEvent(title, data) {
     const detail = node('details', null, 'event-card'); detail.append(node('summary', title), node('pre', typeof data === 'string' ? data : JSON.stringify(data, null, 2), 'console'));
@@ -1402,42 +1412,132 @@
     if (!C.safeLoginUrl(login.verificationUrl)) throw new Error(t('잘못된 로그인 응답입니다.'));
     $('device-code').textContent = login.userCode; $('open-login').disabled = false;
   }
-  async function pickFolder(projectKey = '') { if (projectWorkBusy()) return; const result = await call('files.pick', projectKey ? {projectKey} : {}); if (!result.cancelled) { folder = ''; if (!$('file-panel').hidden) await listFiles(); } }
+  function fileWorkspaceScope(snapshot = state) {
+    return JSON.stringify([accountScope(snapshot.account), snapshot.workspace?.key || '', !!snapshot.workspace?.selected, snapshot.workspace?.available !== false, snapshot.cwd || '']);
+  }
+  function fileContext() { return {scope:fileWorkspaceScope(), workspaceKey:state.workspace?.key || '', generation:fileContextGeneration}; }
+  function sameFileContext(context) { return !!context && context.scope === fileWorkspaceScope() && context.generation === fileContextGeneration; }
+  function requireFileContext(context) { if (!sameFileContext(context)) throw new Error(t('프로젝트가 바뀌었습니다. 다시 열어 주세요.')); }
+  function fileDraftKey(context, path) { return JSON.stringify([context.scope, path]); }
+  function rememberFileDraft() {
+    if (!openedFile) return;
+    const key = fileDraftKey(openedFile.context, openedFile.path);
+    if ($('editor').value !== openedFile.content) fileDrafts.set(key, {content:$('editor').value, originalContent:openedFile.content, sha256:openedFile.sha256});
+    else fileDrafts.delete(key);
+  }
+  function relocateFileDraft(context, source, destination) {
+    if (source === destination) return;
+    const relocated = [];
+    for (const [key, draft] of fileDrafts) {
+      const [scope, path] = JSON.parse(key);
+      if (scope === context.scope && (path === source || path.startsWith(source + '/')))
+        relocated.push({previousKey:key, nextKey:fileDraftKey(context, destination + path.slice(source.length)), draft});
+    }
+    // Snapshot first so a directory move cannot remap its own newly written keys.
+    for (const entry of relocated) fileDrafts.delete(entry.previousKey);
+    for (const entry of relocated) fileDrafts.set(entry.nextKey, entry.draft);
+  }
+  function resetFileContext() {
+    rememberFileDraft(); fileContextGeneration++; fileSeq++; fileReadSeq++;
+    clearTimeout(searchTimer); folder = ''; $('file-query').value = '';
+    $('breadcrumbs').textContent = ''; $('file-up').disabled = true; $('file-list').replaceChildren();
+    openedFile = null; $('editor').value = ''; $('editor-title').textContent = t('파일');
+    if ($('editor-dialog').open) close('editor-dialog');
+    if ($('file-actions-dialog').open) close('file-actions-dialog');
+    if (fileInputContext && $('input-dialog').open) close('input-dialog');
+  }
+  async function fileInput(context, title, description, value = '') {
+    requireFileContext(context); fileInputContext = context;
+    try { const result = await input(title, description, value); requireFileContext(context); return result; }
+    finally { if (fileInputContext === context) fileInputContext = null; }
+  }
+  async function pickFolder(projectKey = '') { if (projectWorkBusy()) return; const result = await call('files.pick', projectKey ? {projectKey} : {}); if (!result.cancelled) { folder = ''; $('file-query').value = ''; if (!$('file-panel').hidden) await listFiles(); } }
   async function listFiles(query = '') {
+    const context = fileContext(), requestedFolder = folder, version = ++fileSeq;
     if (!workspaceFilesAvailable()) { $('file-list').replaceChildren(button(t('작업 폴더 선택'), pickFolder)); return; }
-    const version = ++fileSeq; $('file-list').replaceChildren(node('p', t('불러오는 중…'), 'empty-note'));
-    const result = await call(query ? 'files.search' : 'files.list', query ? {query} : {path: folder});
-    if (version !== fileSeq) return;
-    $('breadcrumbs').textContent = query ? t('검색: ') + query : state.workspace.name + (folder ? ' / ' + folder : '');
-    $('file-up').disabled = !folder || !!query; $('file-list').replaceChildren();
+    $('file-list').replaceChildren(node('p', t('불러오는 중…'), 'empty-note'));
+    const result = await call(query ? 'files.search' : 'files.list', {workspaceKey:context.workspaceKey, ...(query ? {query} : {path:requestedFolder})});
+    if (version !== fileSeq || !sameFileContext(context)) return;
+    $('breadcrumbs').textContent = query ? t('검색: ') + query : workspaceFolderLabel() + (requestedFolder ? ' / ' + requestedFolder : '');
+    $('file-up').disabled = !requestedFolder || !!query; $('file-list').replaceChildren();
     for (const entry of result.entries || []) {
       const row = node('div', null, 'file-entry');
-      const b = button('', async () => { if (entry.directory) { folder = entry.path; $('file-query').value = ''; await listFiles(); } else await openFile(entry.path); }, 'file-row');
+      const b = button('', async () => { requireFileContext(context); if (entry.directory) { folder = entry.path; $('file-query').value = ''; await listFiles(); } else await openFile(entry.path, context); }, 'file-row');
       b.append(icon(entry.directory ? 'folder' : 'file'), node('span', entry.name), node('small', entry.directory ? '' : C.size(entry.size))); row.append(b);
-      const menu = button('⋯', () => fileAction(entry), 'icon-button'); menu.setAttribute('aria-label', entry.name + t(' 관리')); row.append(menu); $('file-list').append(row);
+      const menu = button('⋯', () => fileAction(entry, context), 'icon-button'); menu.setAttribute('aria-label', entry.name + t(' 관리')); row.append(menu); $('file-list').append(row);
     }
     if (!result.entries?.length) $('file-list').append(node('p', t('항목이 없습니다.'), 'empty-note'));
     if (result.truncated) $('file-list').append(node('p', t('일부 검색 결과입니다. 더 구체적인 이름으로 검색하세요.'), 'empty-note'));
   }
-  async function openFile(path) {
-    if (/\.(png|jpe?g|webp|gif|bmp|heic|heif|avif)$/i.test(path)) { previewImage(await call('images.read', {path})); return; }
-    openedFile = await call('files.read', {path}); $('editor-title').textContent = path; $('editor').value = openedFile.content; show('editor-dialog');
+  async function openFile(path, context = fileContext()) {
+    requireFileContext(context); const version = ++fileReadSeq;
+    if (/\.(png|jpe?g|webp|gif|bmp|heic|heif|avif)$/i.test(path)) {
+      const image = await call('images.read', {path, workspaceKey:context.workspaceKey});
+      if (version === fileReadSeq && sameFileContext(context)) previewImage(image);
+      return;
+    }
+    const result = await call('files.read', {path, workspaceKey:context.workspaceKey});
+    if (version !== fileReadSeq || !sameFileContext(context)) return;
+    rememberFileDraft();
+    const draft = fileDrafts.get(fileDraftKey(context, result.path || path));
+    openedFile = {...result, context, ...(draft ? {content:draft.originalContent, sha256:draft.sha256} : {})};
+    $('editor-title').textContent = openedFile.path; $('editor').value = draft ? draft.content : openedFile.content; show('editor-dialog');
   }
   function input(title, description, value = '') {
     if (inputResolve) inputResolve(null);
     $('input-title').textContent = title; $('input-description').textContent = description; $('input-value').value = value; show('input-dialog'); $('input-value').focus();
     return new Promise(resolve => inputResolve = resolve);
   }
-  async function mutate(operation, args) { const result = await call('files.mutate', {operation, arguments: args}); toast(t('적용했습니다.')); if (!$('file-panel').hidden) await listFiles(); return result; }
-  function fileAction(entry) {
+  async function mutate(operation, args, context = fileContext(), applied) {
+    requireFileContext(context);
+    const result = await call('files.mutate', {operation, arguments:args, workspaceKey:context.workspaceKey});
+    if (applied) applied(result);
+    requireFileContext(context); toast(t('적용했습니다.'));
+    if (!$('file-panel').hidden) {
+      try { await listFiles($('file-query').value.trim()); }
+      catch (error) { if (sameFileContext(context)) toast(error.message); }
+    }
+    // A failed panel refresh must not hide a completed move from the editor.
+    requireFileContext(context); return result;
+  }
+  function fileAction(entry, context = fileContext()) {
+    requireFileContext(context);
     $('file-actions-title').textContent = entry.name;
     const action = (label, fn, cls) => button(label, async () => { close('file-actions-dialog'); await fn(); }, cls);
     $('file-actions').replaceChildren(
-      action(t('이름 변경'), async () => { const name = await input(t('이름 변경'), t('새 이름'), entry.name); if (name) await mutate('mobile_rename', {path:entry.path, name}); }),
-      action(t('이동'), async () => { const destination = await input(t('이동'), t('작업 폴더 기준 대상 폴더 경로 (루트는 빈칸)')); if (destination !== null) await mutate('mobile_move', {path:entry.path, destination}); }),
-      action(t('삭제'), () => mutate('mobile_delete', {path:entry.path}), 'secondary-button danger')
+      action(t('이름 변경'), async () => { const name = await fileInput(context, t('이름 변경'), t('새 이름'), entry.name); if (name) await mutate('mobile_rename', {path:entry.path, name}, context, result => relocateFileDraft(context, entry.path, result.path || C.join(C.parent(entry.path), name))); }),
+      action(t('이동'), async () => { const destination = await fileInput(context, t('이동'), t('작업 폴더 기준 대상 폴더 경로 (루트는 빈칸)')); if (destination !== null) await mutate('mobile_move', {path:entry.path, destination}, context, result => relocateFileDraft(context, entry.path, result.path || C.join(destination, C.basename(entry.path)))); }),
+      action(t('삭제'), () => mutate('mobile_delete', {path:entry.path}, context), 'secondary-button danger')
     );
     show('file-actions-dialog');
+  }
+  function currentEditor() {
+    if (!openedFile) throw new Error(t('파일을 읽을 수 없습니다.'));
+    requireFileContext(openedFile.context); return openedFile;
+  }
+  async function saveEditor() {
+    const file = currentEditor(), content = $('editor').value;
+    const result = await mutate('mobile_write', {path:file.path, expectedSha256:file.sha256, content}, file.context);
+    if (openedFile !== file) return;
+    const saved = await call('files.read', {path:result.path || file.path, workspaceKey:file.context.workspaceKey});
+    if (openedFile !== file || !sameFileContext(file.context)) return;
+    openedFile = {...saved, context:file.context}; rememberFileDraft();
+  }
+  async function relocateEditor(operation) {
+    const file = currentEditor();
+    const value = await fileInput(file.context, t(operation === 'mobile_rename' ? '이름 변경' : '이동'), t(operation === 'mobile_rename' ? '새 파일 이름' : '대상 폴더 경로 (루트는 빈칸)'), operation === 'mobile_rename' ? C.basename(file.path) : '');
+    if (value === null || (operation === 'mobile_rename' && !value)) return;
+    if (openedFile !== file) return;
+    const args = operation === 'mobile_rename' ? {path:file.path, name:value} : {path:file.path, destination:value};
+    await mutate(operation, args, file.context, result => {
+      const requestedPath = C.join(operation === 'mobile_rename' ? C.parent(file.path) : value, operation === 'mobile_rename' ? value : C.basename(file.path));
+      const path = result.path || requestedPath;
+      relocateFileDraft(file.context, file.path, path);
+      // Record the successful relocation before refreshing. If the user has
+      // switched projects, only migrate that project's draft; never paint it here.
+      if (openedFile !== file || !sameFileContext(file.context)) return;
+      openedFile = {...file, path}; $('editor-title').textContent = path; rememberFileDraft();
+    });
   }
   async function loadInstructions() {
     if (instructionsSaving) return;
@@ -1470,19 +1570,19 @@
   const reviewScope = () => (state.workspace?.key || '') + '\0' + (state.threadId || '');
   const reviewArgs = extra => ({workspaceKey:state.workspace?.key || '', ...extra});
   function showFileDiff(before, after) {
-    const a = String(before || '').split('\n'), b = String(after || '').split('\n');
-    let first=0, last=0;
-    while(first<a.length && first<b.length && a[first]===b[first]) first++;
-    while(last<a.length-first && last<b.length-first && a[a.length-1-last]===b[b.length-1-last]) last++;
-    const lines = [];
-    for(let i=Math.max(0,first-3);i<first;i++) lines.push([' ',a[i]]);
-    for(let i=first;i<a.length-last;i++) lines.push(['-',a[i]]);
-    for(let i=first;i<b.length-last;i++) lines.push(['+',b[i]]);
-    for(let i=0;i<Math.min(last,3);i++) lines.push([' ',a[a.length-last+i]]);
-    const box=$('change-diff'); box.replaceChildren();
-    for(const [sign,text] of lines.slice(0,2000)) box.append(node('span',sign+' '+text+'\n',sign==='-'?'diff-removed':sign==='+'?'diff-added':'diff-context'));
-    if(lines.length>2000) box.append(node('span',t('\n… 미리보기 2,000줄 이후 생략. 파일 탐색기에서 전체 내용을 확인하세요.')));
-    if(first===a.length && first===b.length) box.textContent=t('내용 차이가 없습니다.');
+    const diff=C.fileDiff(before,after),box=$('change-diff');box.replaceChildren();
+    if(diff.identical){box.textContent=t('내용 차이가 없습니다.');return;}
+    for(const hunk of diff.hunks){
+      box.append(node('span',`@@ -${hunk.oldStart},${hunk.oldCount} +${hunk.newStart},${hunk.newCount} @@\n`,'diff-context'));
+      for(const line of hunk.lines){
+        if(line.kind==='omitted'){box.append(node('span',`… ${line.count} …\n`,'diff-context'));continue;}
+        const oldNumber=line.kind==='+'?'':String(line.oldLine),newNumber=line.kind==='-'?'':String(line.newLine);
+        box.append(node('span',oldNumber.padStart(5)+' '+newNumber.padStart(5)+' '+line.kind+' '+line.text+'\n',line.kind==='-'?'diff-removed':line.kind==='+'?'diff-added':'diff-context'));
+        if(line.noNewline)box.append(node('span',t('\\ 마지막 줄에 줄바꿈 없음')+'\n','diff-context'));
+      }
+    }
+    if(diff.approximate)box.append(node('span',t('큰 변경 구간은 간략히 비교했습니다. 표시된 문맥 밖의 변경도 확인하세요.')+'\n','diff-context'));
+    if(diff.truncated)box.append(node('span',t('… 일부 변경 내용은 생략했습니다. 파일 탐색기에서 전체 내용을 확인하세요.')+'\n','diff-context'));
   }
   async function previewChange(kind, value) {
     const generation=++changesGeneration, scope=reviewScope(), args=reviewArgs(kind==='git'?{path:value}:{id:value});
@@ -1532,7 +1632,7 @@
     for (const entry of entries || []) { const row = node('div', null, 'recovery-item'), desc = node('div'); desc.append(node('strong', entry.path), node('small', new Date(entry.timestamp).toLocaleString(L.language()))); row.append(desc, button(t('비교 / 복원'), async () => { close('recovery-dialog'); show('changes-dialog'); await previewChange('saf',entry.id); }), button(t('다른 위치에 저장'), () => call('recovery.export', {id: entry.id, name: C.basename(entry.path)}))); $('recovery-list').append(row); }
     if (!entries?.length) $('recovery-list').append(node('p', t('저장된 복구 사본이 없습니다.'), 'empty-note'));
   }
-  let toolsScope = "", toolsGeneration = 0;
+  let toolsScope = "", toolsGeneration = 0, toolsTab = 0, toolsQuery = "";
   const currentToolsScope = () => JSON.stringify([state.cwd, state.threadId, state.account]);
   function usageTime(value) {
     if (!Number.isSafeInteger(value) || value <= 0 || value > 8640000000000) return '';
@@ -1918,55 +2018,88 @@
     const results = await Promise.allSettled([rpc('plugin/list', {cwds, ...(force ? {forceRefetch:true} : {})}), rpc('skills/list', {cwds, ...(force ? {forceReload:true} : {})}), rpc('mcpServerStatus/list', {limit: 100, ...(state.threadId ? {threadId: state.threadId} : {})})]);
     if (generation !== toolsGeneration || scope !== currentToolsScope()) return;
     target.replaceChildren();
-    const card = (name, description, parent = target) => { const c = node('div', null, 'tool-card'); c.append(node('strong', name), node('p', description || '', 'muted')); parent.append(c); return c; };
-    [t('플러그인'), t('스킬'), t('MCP 서버')].forEach((title, i) => {
-      target.append(node('h3', title));
-      const result = results[i];
+    // Plugins, skills and MCP servers each get a tab; long lists stay searchable instead of one long scroll.
+    const titles = [t('플러그인'), t('스킬'), t('MCP 서버')], counts = [0, 0, 0];
+    const tabs = node('div', null, 'tools-tabs'); tabs.setAttribute('role', 'tablist'); tabs.setAttribute('aria-label', t('도구 종류'));
+    const search = node('input', null, 'tools-search'); search.type = 'search'; search.placeholder = t('이름 또는 설명 검색'); search.setAttribute('aria-label', t('도구 검색')); search.value = toolsQuery;
+    const panels = titles.map((title, i) => { const panel = node('section', null, 'tools-panel'); panel.dataset.toolsPanel = String(i); panel.setAttribute('role', 'tabpanel'); panel.setAttribute('aria-label', title); return panel; });
+    const empty = node('p', t('검색 결과가 없습니다.'), 'empty-note tools-no-match'); empty.hidden = true;
+    const card = (name, description, parent) => {
+      const c = node('div', null, 'tool-card'), main = node('div', null, 'tool-card-main');
+      main.append(node('strong', name), node('p', description || '', 'muted')); c.append(main); parent.append(c); return c;
+    };
+    const actions = (c, ...buttons) => { let row = c.querySelector('.tool-card-actions'); if (!row) { row = node('div', null, 'tool-card-actions'); c.append(row); } row.append(...buttons); return row; };
+    const group = (title, parent) => { const g = node('div', null, 'tools-group'); g.append(node('h4', title, 'tools-group-title')); parent.append(g); return g; };
+    titles.forEach((title, i) => {
+      const panel = panels[i], result = results[i];
       if (result.status === 'fulfilled') toolCache[i] = result.value;
       const data = result.status === 'fulfilled' ? result.value : toolCache[i];
-      if (result.status === 'rejected') { card(t('불러오지 못했습니다'), errorText(result.reason) + (data ? t(' 이전 목록을 표시합니다.') : '')); if (!data) return; }
+      if (result.status === 'rejected') { card(t('불러오지 못했습니다'), errorText(result.reason) + (data ? t(' 이전 목록을 표시합니다.') : ''), panel).classList.add('tool-card-notice'); if (!data) return; }
       if (i === 0) {
         for (const market of data.marketplaces || []) {
-          const heading = node('p', market.interface?.displayName || market.name, 'muted'); target.append(heading);
+          const parent = group(market.interface?.displayName || market.name, panel);
           for (const plugin of market.plugins || []) {
-            const c = card(plugin.interface?.displayName || plugin.name, plugin.interface?.shortDescription || plugin.id);
+            counts[0]++;
+            const c = card(plugin.interface?.displayName || plugin.name, plugin.interface?.shortDescription || plugin.id, parent);
+            if (plugin.installed) c.classList.add(plugin.enabled ? 'is-enabled' : 'is-disabled');
             const params = {pluginName: plugin.name, ...(market.path ? {marketplacePath: market.path} : {remoteMarketplaceName: market.name})};
-            c.append(button(t('상세'), async () => { const detail = await rpc('plugin/read', params); logEvent(t('플러그인: ') + plugin.name, detail.plugin); show('activity-dialog'); }));
+            actions(c, button(t('상세'), async () => { const detail = await rpc('plugin/read', params); logEvent(t('플러그인: ') + plugin.name, detail.plugin); show('activity-dialog'); }));
             if (plugin.installed) {
-              c.append(button(plugin.enabled ? t('비활성화') : t('활성화'), async () => { await rpc('config/value/write', {keyPath: 'plugins.' + JSON.stringify(plugin.id) + '.enabled', value: !plugin.enabled, mergeStrategy: 'replace'}); await loadTools(); }));
-              c.append(button(t('제거'), async () => { if (!confirm(plugin.name + t(' 플러그인을 제거할까요?'))) return; await rpc('plugin/uninstall', {pluginId: plugin.id}); await loadTools(); }));
-            } else c.append(button(t('설치'), async () => {
+              actions(c, button(plugin.enabled ? t('비활성화') : t('활성화'), async () => { await rpc('config/value/write', {keyPath: 'plugins.' + JSON.stringify(plugin.id) + '.enabled', value: !plugin.enabled, mergeStrategy: 'replace'}); await loadTools(); }),
+                button(t('제거'), async () => { if (!confirm(plugin.name + t(' 플러그인을 제거할까요?'))) return; await rpc('plugin/uninstall', {pluginId: plugin.id}); await loadTools(); }, 'secondary-button subtle-danger'));
+            } else actions(c, button(t('설치'), async () => {
               const detail = await rpc('plugin/read', params);
               const summary = detail.plugin;
               if (!confirm(plugin.name + t(' 설치\n\n') + (summary.description || '') + t('\n\n스킬 ') + (summary.skills?.length || 0) + t('개 · MCP ') + (summary.mcpServers?.length || 0) + t('개 · 훅 ') + (summary.hooks?.length || 0) + t('개'))) return;
               const result = await rpc('plugin/install', params);
-              for (const app of result.appsNeedingAuth || []) if (app.installUrl) { const c = card(app.name + t(' 계정 연결'), t('플러그인을 사용하려면 계정 연결이 필요합니다.')); c.append(button(t('연결'), () => call('ui.externalBrowser', {url: app.installUrl}))); }
+              for (const app of result.appsNeedingAuth || []) if (app.installUrl) { const c = card(app.name + t(' 계정 연결'), t('플러그인을 사용하려면 계정 연결이 필요합니다.'), panel); actions(c, button(t('연결'), () => call('ui.externalBrowser', {url: app.installUrl}))); }
               toast(t('플러그인을 설치했습니다.')); if (!result.appsNeedingAuth?.length) await loadTools();
-            }));
+            }, 'primary-button'));
           }
         }
-        for (const e of data.marketplaceLoadErrors || []) card(t('마켓플레이스 오류'), errorText(e.message));
-        if (!data.marketplaces?.length) card(t('등록된 플러그인이 없습니다'), t('마켓플레이스를 추가하거나 계정 연결 상태를 확인하세요.'));
+        for (const e of data.marketplaceLoadErrors || []) card(t('마켓플레이스 오류'), errorText(e.message), panel).classList.add('tool-card-notice');
+        if (!data.marketplaces?.length) card(t('등록된 플러그인이 없습니다'), t('마켓플레이스를 추가하거나 계정 연결 상태를 확인하세요.'), panel).classList.add('tool-card-notice');
       } else if (i === 1) {
-        let count = 0;
         for (const entry of data.data || []) {
           for (const skill of entry.skills || []) {
-            count++; const c = card(skill.interface?.displayName || skill.name, skill.description);
-            c.append(node('p', skill.path, 'muted'), button(skill.enabled ? t('비활성화') : t('활성화'), async () => { await rpc('skills/config/write', {path: skill.path, enabled: !skill.enabled}); await loadTools(); }), button(t('대화에 사용'), () => { $('prompt').value += '$' + skill.name + ' '; close('tools-dialog'); $('prompt').focus(); }));
+            counts[1]++; const c = card(skill.interface?.displayName || skill.name, skill.description, panel);
+            c.classList.add(skill.enabled === false ? 'is-disabled' : 'is-enabled');
+            c.querySelector('.tool-card-main').append(node('small', skill.path, 'tool-card-path'));
+            actions(c, button(t('대화에 사용'), () => { $('prompt').value += '$' + skill.name + ' '; close('tools-dialog'); $('prompt').focus(); }),
+              button(skill.enabled ? t('비활성화') : t('활성화'), async () => { await rpc('skills/config/write', {path: skill.path, enabled: !skill.enabled}); await loadTools(); }));
           }
-          for (const e of entry.errors || []) card(t('스킬 로드 오류'), errorText(e.message));
+          for (const e of entry.errors || []) card(t('스킬 로드 오류'), errorText(e.message), panel).classList.add('tool-card-notice');
         }
-        if (!count) card(t('설치된 스킬이 없습니다'), t('SKILL.md가 들어 있는 스킬 폴더를 가져오거나 Codex에게 스킬 생성을 요청하세요.'));
+        if (!counts[1]) card(t('설치된 스킬이 없습니다'), t('SKILL.md가 들어 있는 스킬 폴더를 가져오거나 Codex에게 스킬 생성을 요청하세요.'), panel).classList.add('tool-card-notice');
       } else {
         for (const server of data.data || []) {
-          const c = card(server.name, (server.runtimeStatus?.status || server.authStatus) + t(' · 도구 ') + Object.keys(server.tools || {}).length + t('개'));
-          if (server.toolsError) c.append(node('p', errorText(server.toolsError), 'muted'));
-          c.append(button(t('도구 보기'), () => { logEvent('MCP: ' + server.name, server); show('activity-dialog'); }), button(t('로그인'), async () => { const r = await rpc('mcpServer/oauth/login', {name: server.name}); await call('ui.externalBrowser', {url: r.authorizationUrl}); }));
+          counts[2]++;
+          const c = card(server.name, (server.runtimeStatus?.status || server.authStatus) + t(' · 도구 ') + Object.keys(server.tools || {}).length + t('개'), panel);
+          if (server.toolsError) c.querySelector('.tool-card-main').append(node('p', errorText(server.toolsError), 'muted tool-card-error'));
+          actions(c, button(t('도구 보기'), () => { logEvent('MCP: ' + server.name, server); show('activity-dialog'); }), button(t('로그인'), async () => { const r = await rpc('mcpServer/oauth/login', {name: server.name}); await call('ui.externalBrowser', {url: r.authorizationUrl}); }));
         }
-        if (!data.data?.length) card(t('설정된 MCP 서버가 없습니다'), t('서버 설정에서 HTTP 또는 stdio 서버를 추가할 수 있습니다.'));
-        if (data.nextCursor) target.append(node('p', t('표시된 서버: 처음 100개'), 'muted'));
+        if (!data.data?.length) card(t('설정된 MCP 서버가 없습니다'), t('서버 설정에서 HTTP 또는 stdio 서버를 추가할 수 있습니다.'), panel).classList.add('tool-card-notice');
+        if (data.nextCursor) panel.append(node('p', t('표시된 서버: 처음 100개'), 'muted'));
       }
     });
+    const tabButtons = titles.map((title, i) => {
+      const b = node('button', null, 'tools-tab'); b.type = 'button'; b.id = 'tools-tab-' + i; b.setAttribute('role', 'tab'); b.dataset.toolsTab = String(i);
+      b.append(node('span', title), node('span', String(counts[i]), 'tools-count')); panels[i].setAttribute('aria-labelledby', b.id);
+      b.addEventListener('click', () => { toolsTab = i; applyTools(); });
+      b.addEventListener('keydown', event => { const step = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0; if (!step) return; event.preventDefault(); toolsTab = (toolsTab + step + titles.length) % titles.length; applyTools(); tabButtons[toolsTab].focus(); });
+      tabs.append(b); return b;
+    });
+    function applyTools() {
+      const query = search.value.trim().toLowerCase(); toolsQuery = search.value;
+      tabButtons.forEach((b, i) => { const selected = i === toolsTab; b.setAttribute('aria-selected', String(selected)); b.tabIndex = selected ? 0 : -1; panels[i].hidden = !selected; });
+      const panel = panels[toolsTab]; let visible = 0;
+      for (const c of panel.querySelectorAll('.tool-card:not(.tool-card-notice)')) { const match = !query || c.textContent.toLowerCase().includes(query); c.hidden = !match; if (match) visible++; }
+      for (const g of panel.querySelectorAll('.tools-group')) g.hidden = !!query && !g.querySelector('.tool-card:not([hidden])');
+      empty.hidden = !query || visible > 0;
+    }
+    search.addEventListener('input', applyTools);
+    target.append(tabs, search, ...panels, empty);
+    applyTools();
   }
   function elicitationForm(schema, target) {
     const fields = [];
@@ -2096,6 +2229,7 @@
     else if (name === 'back') window.mobileCodexBack();
   };
   window.mobileCodexBack = () => {
+    if (closeComposerAddMenu()) return true;
     if (dictationState.phase !== 'idle') { call('voice.cancel').catch(error => toast(error.message)); return true; }
     const id = dialogs.at(-1);
     if (id) { dismiss(id); return true; }
@@ -2163,15 +2297,15 @@
   });
    const closeToolMenu = () => { if ($('tool-menu-dialog').open) close('tool-menu-dialog'); };
    setFilePanelOpen(false);
-   ['show-files', 'files-toggle'].forEach(id => on(id, async () => { closeToolMenu(); setFilePanelOpen($('file-panel').hidden); sidebar(false); if (!$('file-panel').hidden) await listFiles(); }));
+   ['files-toggle'].forEach(id => on(id, async () => { closeToolMenu(); setFilePanelOpen($('file-panel').hidden); sidebar(false); if (!$('file-panel').hidden) await listFiles(); }));
   on('file-close', () => setFilePanelOpen(false)); on('file-up', async () => { folder = C.parent(folder); await listFiles(); });
-  let searchTimer; on('file-query', () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => listFiles($('file-query').value.trim()).catch(e => toast(e.message)), 300); }, 'input');
-  ['file-new', 'folder-new'].forEach(id => on(id, async () => { const name = await input(id === 'file-new' ? t('새 파일') : t('새 폴더'), t('이름을 입력하세요.')); if (name) await mutate(id === 'file-new' ? 'mobile_create' : 'mobile_mkdir', {path: C.join(folder, name), content: ''}); }));
+  on('file-query', () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => listFiles($('file-query').value.trim()).catch(e => toast(e.message)), 300); }, 'input');
+  ['file-new', 'folder-new'].forEach(id => on(id, async () => { const context = fileContext(), destination = folder; const name = await fileInput(context, id === 'file-new' ? t('새 파일') : t('새 폴더'), t('이름을 입력하세요.')); if (name) await mutate(id === 'file-new' ? 'mobile_create' : 'mobile_mkdir', {path:C.join(destination, name), content:''}, context); }));
   on('show-changes', () => { closeToolMenu(); return loadChanges(); }); on('changes-refresh', () => loadChanges()); on('changes-history', () => loadChanges(true)); on('change-restore', restoreChange);
-  on('editor-save', async () => { const result = await mutate('mobile_write', {path: openedFile.path, expectedSha256: openedFile.sha256, content: $('editor').value}); openedFile = await call('files.read', {path: result.path || openedFile.path}); });
-  on('editor-delete', async () => { await mutate('mobile_delete', {path: openedFile.path}); close('editor-dialog'); });
-  on('editor-rename', async () => { const name = await input(t('이름 변경'), t('새 파일 이름'), C.basename(openedFile.path)); if (name) { await mutate('mobile_rename', {path: openedFile.path, name}); await openFile(C.join(C.parent(openedFile.path), name)); } });
-  on('editor-move', async () => { const destination = await input(t('이동'), t('대상 폴더 경로 (루트는 빈칸)')); if (destination !== null) { await mutate('mobile_move', {path: openedFile.path, destination}); await openFile(C.join(destination, C.basename(openedFile.path))); } });
+  on('editor-save', saveEditor);
+  on('editor-delete', async () => { const file = currentEditor(); await mutate('mobile_delete', {path:file.path}, file.context); if (openedFile === file) { fileDrafts.delete(fileDraftKey(file.context, file.path)); openedFile = null; close('editor-dialog'); } });
+  on('editor-rename', () => relocateEditor('mobile_rename'));
+  on('editor-move', () => relocateEditor('mobile_move'));
   on('input-confirm', () => { const r = inputResolve; inputResolve = null; const value = $('input-value').value; close('input-dialog'); if (r) r(value); });
   $('input-dialog').addEventListener('close', () => { if (inputResolve) { const r = inputResolve; inputResolve = null; r(null); } });
   on('input-value', e => { if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) $('input-confirm').click(); }, 'keydown');
@@ -2179,12 +2313,14 @@
     if (state.workspace?.selected && state.workspace.available === false) { toast(t('먼저 로컬 폴더를 연결해 주세요.')); return; }
     const value = $('prompt').value, text = value.trim();
     if ((!text && !draftContext.attachments.length) || sending || voiceStarting || voiceActive) return;
-    const pro = proSelected(), steer = !!state.busy && !pro, expectedTurnId = state.turnId || '', expectedThreadId = state.threadId || '', workspaceKey = state.workspace?.key || '';
-    const submitted = {value, context:JSON.parse(JSON.stringify(draftContext)), scopes:new Set([draftScope])}; sending = submitted;
+    if ((state.proBusy && (draftContext.consultPro || !state.busy)) || (state.consultProAvailable === false && draftContext.consultPro)) return;
+    const steer = !!state.busy, expectedTurnId = state.turnId || '', expectedThreadId = state.threadId || '', workspaceKey = state.workspace?.key || '';
+    const submitted = {value, context:JSON.parse(JSON.stringify(draftContext)), consultAccount:draftConsultAccount, scopes:new Set([draftScope])}; sending = submitted;
+    closeComposerAddMenu(false);
     saveDraft(); updateSend(); scrollLatest();
     try {
-      await call(pro ? 'chat.pro.send' : steer ? 'chat.steer' : 'chat.send', {text, expectedTurnId, expectedThreadId, workspaceKey, model:$('model').value, effort:pro ? '' : $('effort').value,
-        ...(!pro && !steer ? {fastMode:!!fastTier() && draftOptions.fastMode === true} : {}),
+      await call(steer ? 'chat.steer' : 'chat.send', {text, expectedTurnId, expectedThreadId, workspaceKey, model:$('model').value, effort:$('effort').value, consultPro:submitted.context.consultPro === true,
+        ...(!steer ? {fastMode:!!fastTier() && draftOptions.fastMode === true} : {}),
         attachments:submitted.context.attachments.map(x => x.id), skills:submitted.context.skills, mentions:submitted.context.mentions});
       // Keep text typed during the request, or drafts from a different conversation.
       if (submitted.scopes.has(draftScope) && $('prompt').value === value) {
@@ -2196,8 +2332,9 @@
         renderDraftContext();
       }
       for (const scope of submitted.scopes) {
-        try { if (localStorage.getItem(scope) === value) localStorage.removeItem(scope); if (localStorage.getItem(contextScope(scope)) === JSON.stringify(submitted.context)) localStorage.removeItem(contextScope(scope)); } catch {}
+        try { if (localStorage.getItem(scope) === value) localStorage.removeItem(scope); const submittedContext = {attachments:submitted.context.attachments, mentions:submitted.context.mentions, skills:submitted.context.skills}; if (localStorage.getItem(contextScope(scope)) === JSON.stringify(submittedContext)) localStorage.removeItem(contextScope(scope)); if (submitted.context.consultPro) localStorage.removeItem(consultScope(scope, submitted.consultAccount)); } catch {}
       }
+      if (submitted.context.consultPro && submitted.scopes.has(draftScope) && draftConsultAccount === submitted.consultAccount) { draftContext.consultPro = false; renderDraftContext(); }
       saveDraft();
     } finally { sending = null; sizeComposer(); }
   }, 'submit');
@@ -2253,7 +2390,23 @@
     imageTouch = null;
   }, {passive:true});
   $('image-stage').addEventListener('touchcancel', () => imageTouch = null, {passive:true});
-  on('stop', () => call(state.proBusy ? 'chat.pro.cancel' : 'chat.stop')); on('model', () => { efforts(); syncPermissionControls(state.permissions, !!state.busy || !!state.proBusy || proSelected()); syncApprovalControl(!!state.busy || !!state.proBusy); saveOptions(); updateSend(); renderModelList(); }, 'change'); on('effort', () => { optionsSummary(); saveOptions(); }, 'change'); on('add-attachment', chooseAttachment);
+  on('stop', () => call(state.proBusy && !state.pendingProConsultation ? 'chat.pro.cancel' : 'chat.stop')); on('model', () => { efforts(); syncPermissionControls(state.permissions, !!state.busy || !!state.proBusy); syncApprovalControl(!!state.busy || !!state.proBusy); saveOptions(); updateSend(); renderModelList(); }, 'change'); on('effort', () => { optionsSummary(); saveOptions(); }, 'change');
+  $('add-attachment').addEventListener('click', () => { if (!closeComposerAddMenu()) openComposerAddMenu(); });
+  // Focusing the compact plus before pointerup moves it to the expanded row.
+  // Keep its target still until the click opens and focuses the menu.
+  $('add-attachment').addEventListener('pointerdown', e => { if (e.button === 0) e.preventDefault(); });
+  on('composer-attach', () => { closeComposerAddMenu(false); return chooseAttachment(); });
+  $('composer-consult-pro').addEventListener('click', () => { if (state.consultProAvailable === false || state.proBusy || sending || draftContext.consultPro) return; draftContext.consultPro = true; closeComposerAddMenu(false); renderDraftContext(); saveDraft(); updateSend(); $('prompt').focus(); });
+  $('add-attachment').addEventListener('keydown', e => { if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); openComposerAddMenu(e.key === 'ArrowUp'); } });
+  $('composer-add-menu').addEventListener('keydown', e => {
+    const choices = [...$('composer-add-menu').querySelectorAll('button:not(:disabled)')], current = choices.indexOf(document.activeElement);
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeComposerAddMenu(); }
+    else if (e.key === 'Tab') closeComposerAddMenu(false);
+    else if (['ArrowDown','ArrowUp','Home','End'].includes(e.key)) { e.preventDefault(); const index = e.key === 'Home' ? 0 : e.key === 'End' ? choices.length - 1 : (current + (e.key === 'ArrowDown' ? 1 : -1) + choices.length) % choices.length; choices[index]?.focus(); }
+    else if ((e.key === 'Enter' || e.key === ' ') && choices.includes(e.target)) { e.preventDefault(); e.target.click(); }
+  });
+  document.addEventListener('pointerdown', e => { if (!e.target.closest('.composer-add-wrap')) closeComposerAddMenu(false); });
+  document.addEventListener('focusin', e => { if (!e.target.closest('.composer-add-wrap')) closeComposerAddMenu(false); });
   on('permissions', () => setPermissionMode($('permissions').value), 'change');
   on('approval-mode', () => setApprovalMode($('approval-mode').value), 'change');
   document.querySelectorAll('input[name="permission"]').forEach(r => r.addEventListener('change', () => setPermissionMode(r.value).catch(error => toast(error.message))));

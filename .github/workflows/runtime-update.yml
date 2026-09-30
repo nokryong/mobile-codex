@@ -1,0 +1,61 @@
+name: Codex runtime update
+# Daily: pin the newest @mmmbuto/codex-cli-termux release and open a pull request.
+# Nothing merges automatically; the test APK build runs on the PR branch.
+on:
+  schedule:
+    - cron: '41 21 * * *'
+  workflow_dispatch:
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+concurrency:
+  group: codex-runtime-update
+  cancel-in-progress: false
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: main
+      - name: Check update rules
+        run: python3 -m unittest discover -s tests -p 'test_update_runtime.py'
+      - name: Pin the newest runtime
+        id: runtime
+        run: python3 tools/update_runtime.py
+      - name: Open pull request
+        if: steps.runtime.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.runtime.outputs.version }}
+          PREVIOUS: ${{ steps.runtime.outputs.previous }}
+        run: |
+          branch="runtime/codex-termux-$VERSION"
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null; then
+            echo "$branch already exists; its pull request is still open or was reviewed."
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git switch -c "$branch"
+          git add -A tools/runtime-lock.json README.md README.ko.md THIRD_PARTY_NOTICES.md app/src/main/assets
+          git commit -m "chore: update Codex Android runtime to $VERSION"
+          git push origin "$branch"
+          body=$(printf '%s\n' \
+            "Updates the bundled \`@mmmbuto/codex-cli-termux\` runtime from **$PREVIOUS** to **$VERSION** (npm \`latest\`)." \
+            '' \
+            "- Release: https://www.npmjs.com/package/@mmmbuto/codex-cli-termux/v/$VERSION" \
+            "- Source: https://github.com/DioNanos/codex-termux/tree/v$VERSION" \
+            '- Archive pinned by the registry sha512 integrity; `prepare_runtime.py` verifies it again and refuses an unknown binary layout.' \
+            '' \
+            'Before merging:' \
+            '- [ ] The "Android APK" run on this branch is green and its `mobile-codex-test-apk` artifact installs.' \
+            '- [ ] Codex starts, the model list loads, a conversation resumes and Pro consultation still works.' \
+            '- [ ] App-server calls used by the app (`thread/*`, `turn/*`, `model/list`, `mcpServerStatus/list`) did not change.' \
+            '' \
+            'Opened automatically by `.github/workflows/runtime-update.yml`.')
+          gh pr create --base main --head "$branch" --title "Update Codex Android runtime to $VERSION" --body "$body"
+          # Pull requests opened with GITHUB_TOKEN do not start other workflows; dispatch the APK build explicitly.
+          gh workflow run android.yml --ref "$branch" -f apk_only=true
