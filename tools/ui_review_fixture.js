@@ -29,26 +29,13 @@
     linux:{supported:true,installed:false,enabled:false,busy:false,state:'not_installed',label:'Review Linux',downloadBytes:157000000,requiredFreeBytes:400000000,availableBytes:2500000000},
     characters:{folderConfigured:false,packs:[{id:'builtin',name:'Builtin',valid:true,icons:{}}],selectedPackId:'builtin'}
   };
-  const repositories = [{fullName:'review/private-projects'},{fullName:'review/long-repository-name-for-layout'}];
   let updateState = {versionName:'0.2.1',versionCode:201,repository:'nokryong/mobile-codex',prereleases:true,status:'available',available:true,candidate:{versionName:'0.2.2',size:12345678,sha256:'a'.repeat(64)}};
-  let syncStatus = {configured:true,authenticated:true,connected:true,account:'review-octo',repository:'review/private-projects',branch:'main',lastSynced:now - 86400000,selectedKeys:['review-project'],projects:state.projects};
-  let syncFixtureError = false;
   const response = (id, result = {}) => setTimeout(() => window.mobileCodexEvent?.('response',{id,result}), 0);
   const rpc = (method, params) => {
     if (method === 'account/rateLimits/read') return state.rateLimits;
     if (method === 'plugin/list') return {marketplaces:[{name:'Review marketplace',plugins:[{id:'review-plugin',name:'Review plugin',enabled:true,version:'1.0.0'}]}]};
     if (method === 'skills/list') return {data:[{name:'review-skill',description:'A fixture skill',path:'/review/SKILL.md',enabled:true}]};
     if (method === 'mcpServerStatus/list') return {data:[{name:'review-mcp',enabled:true,transport:'stdio'}]};
-    return {data:[]};
-  };
-  const sync = (method, params) => {
-    if (method === 'sync.status') { if (syncFixtureError) throw Error('Fixture sync status failed'); return syncStatus; }
-    if (method === 'sync.repositories') return {repositories,page:params?.page || 1,hasMore:false};
-    if (method === 'sync.selection') { syncStatus = {...syncStatus,selectedKeys:params?.keys || []}; return syncStatus; }
-    if (method === 'sync.preview') return {token:'fixture-preview',summary:{projects:[{projectId:'remote-one',name:'Incoming review project',nameConflicts:['UI review project']}],eventCount:2,linkCount:1,conflictCount:1},addedEvents:2,uploadCount:(params?.keys || []).length};
-    if (method === 'sync.login.start') return {flowId:'fixture-flow',userCode:'FIXTURE-CODE',verificationUri:'https://github.com/login/device',interval:60,expiresAt:now + 600000};
-    if (method === 'sync.login.poll') return {pending:true,interval:60};
-    if (method === 'sync.apply' || method === 'sync.cancel' || method === 'sync.disconnect') return syncStatus;
     return {data:[]};
   };
   window.Native = {
@@ -58,9 +45,7 @@
       try {
         let result = {};
         if (message.action === 'state') result = state;
-        else if (message.action.startsWith('sync.')) result = sync(message.action, message.args);
         else if (message.action === 'rpc') {
-          if (message.args.method.startsWith('sync.')) throw Error('Sync is a native action');
           result = rpc(message.args.method, message.args.params);
         }
         else if (message.action === 'voice.recover') result = {active:surface === 'dictation',receipts:[]};
@@ -138,14 +123,6 @@
     if (name === 'loading') { window.mobileCodexEvent('state', {...state,busy:true,messages:[...state.messages,{id:'review-loading',role:'assistant',text:'',createdAt:now,imageStatus:'generating'}]}); return; }
     if (name === 'error') { window.mobileCodexEvent('error',{threadId:state.threadId,message:'Fixture operation failed. Review this inline feedback.'}); return; }
     if (name === 'login') return prepareDialog('login-dialog');
-    if (name === 'sync-pending' || name === 'sync-error' || name === 'sync-preview') {
-      if (name === 'sync-pending') syncStatus = {...syncStatus,authenticated:false,connected:false,repository:''};
-      if (name === 'sync-error') syncFixtureError = true;
-      click('#settings'); document.querySelector('[data-settings-tab="sync"]')?.click(); await pause(35);
-      if (name === 'sync-pending') { click('#sync-login'); await pause(35); }
-      if (name === 'sync-preview') { click('#sync-preview'); await pause(35); }
-      return;
-    }
     if (name.startsWith('settings-')) { click('#settings'); const tab=name.slice('settings-'.length); document.querySelectorAll('[data-settings-tab]').forEach(button => { if (button.dataset.settingsTab === tab) button.click(); }); await pause(20); return; }
     const id = name.endsWith('-dialog') ? name : name + '-dialog'; prepareDialog(id);
   }

@@ -1,6 +1,6 @@
 {
   "name": "mobile-codex-ui-tests",
-  "version": "0.2.6",
+  "version": "0.2.6-alpha.6",
   "private": true,
   "scripts": {
     "test": "node --test tests/*.test.cjs",

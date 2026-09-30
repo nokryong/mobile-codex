@@ -49,7 +49,7 @@ function inventory() {
   const index = fs.readFileSync(path.join(web, 'index.html'), 'utf8');
   const dialogs = [...index.matchAll(/<dialog\s+id="([^"]+)"/g)].map(match => match[1]);
   const tabs = [...index.matchAll(/data-settings-tab="([^"]+)"/g)].map(match => match[1]);
-  const surfaces = ['main','welcome','files','options','tool-menu','composer-expanded','dictation','autocomplete','images','loading','error','sync-pending','sync-error','sync-preview','login', ...tabs.map(tab => 'settings-' + tab), ...dialogs.filter(id => !['options-dialog','tool-menu-dialog','login-dialog','settings-dialog'].includes(id))];
+  const surfaces = ['main','welcome','files','options','tool-menu','composer-expanded','dictation','autocomplete','images','loading','error','login', ...tabs.map(tab => 'settings-' + tab), ...dialogs.filter(id => !['options-dialog','tool-menu-dialog','login-dialog','settings-dialog'].includes(id))];
   return {dialogs, tabs:[...new Set(tabs)], surfaces:[...new Set(surfaces)]};
 }
 function reviewPage() {

@@ -26,20 +26,20 @@ APK를 여는 앱에서 **이 출처 허용**을 별도로 요구할 수 있습�
 
 Codex 데스크톱의 작업 방식을 모바일로 옮기는 개인용 클라이언트입니다. Codex 실행 엔진과 Python·Node.js·Git을 APK에 포함해, Termux 설치나 별도 PC 서버 없이 기기에서 바로 작업할 수 있습니다.
 
-**0.2.6 정식 버전** · **ARM64 / Android 10 이상** · 제작 [nokryong](https://github.com/nokryong)
+**0.2.5 정식 버전** · **ARM64 / Android 10 이상** · 제작 [nokryong](https://github.com/nokryong)
 
 [APK 다운로드](https://github.com/nokryong/mobile-codex/releases) · [개발 빌드](https://github.com/nokryong/mobile-codex/actions/workflows/android.yml) · [문제 제보](https://github.com/nokryong/mobile-codex/issues)
 
 > OpenAI 공식 앱이 아닌 개인 프로젝트입니다. 모델 추론에는 인터넷과 Codex를 사용할 수 있는 계정이 필요합니다. Codex 프로세스와 파일·명령 도구는 Android 기기에서 실행합니다.
 
-## 0.2.6 주요 업데이트
+## 0.2.5 주요 업데이트
 
-- **Pro 자문:** `+ → Pro에게 물어보기`로 Codex가 질문과 근거를 준비하고, Pro 답변을 받아 같은 작업을 이어갑니다. 기존 대화에서도 사용할 수 있습니다.
-- **Pro 선택 개선:** ChatGPT가 Work 모드이면 Chat으로 전환하고 실제 Pro 선택을 확인한 뒤 질문을 보냅니다.
-- **파일 편집·작업 상태:** 이름 변경·이동 시 미저장 내용을 보존하고 프로젝트 전환 시 파일 경로를 갱신합니다. 중지 버튼과 변경 비교를 개선하고 완료·실패·중지를 구분합니다.
-- **도구·플로팅 대화:** 플러그인·스킬·MCP를 탭과 검색으로 나누고, 접힌 플로팅 대화는 캐릭터 얼굴로 표시합니다.
+- **기기 간 프로젝트 동기화:** Android 기기끼리, 또는 Android와 PC 보조 도구 사이에서 프로젝트 ID·이름·병합 이력을 공유합니다. 개인 GitHub 비공개 저장소나 JSON 파일을 사용하고, 변경 내용을 미리 확인한 뒤 적용하며, 작업 폴더는 기기마다 따로 연결합니다.
+- **GitHub 연결 개선:** 앱에서 받은 코드를 브라우저에서 승인해 로그인합니다. 로그인과 동기화 요청 경로를 수정하고 간결한 오류 안내와 브라우저 재시도를 지원합니다.
+- **대화별 독립 관리:** 한 대화가 실행 중이어도 관련 없는 대화와 프로젝트를 삭제하거나 이름을 바꿀 수 있으며, 진행 중인 작업의 연결을 유지합니다.
+- **Pro 자문·Fast 지원:** Codex 작업 중 ChatGPT Pro에 한 번 자문을 요청하거나, 지원하는 Codex 모델의 Fast 모드를 선택할 수 있습니다.
 
-동기화는 사용자가 실행하는 프로젝트 정보 동기화입니다. 대화 기록·진행 중인 작업·소스 파일·로그인 정보는 각 기기에 남습니다. 이번 변경은 [0.2.6 릴리스 노트](docs/releases/0.2.6.md)를 참고하세요.
+동기화는 사용자가 실행하는 프로젝트 정보 동기화입니다. 대화 기록·진행 중인 작업·소스 파일·로그인 정보는 각 기기에 남습니다. 자세한 내용은 [0.2.5 릴리스 노트](docs/releases/0.2.5.md)를 참고하세요.
 
 ## 일반 Chat과 Codex
 
@@ -57,7 +57,6 @@ Codex 입력창의 **+ → Pro에게 물어보기**를 선택하면 다음 메�
 | --- | --- |
 | 프로젝트와 대화 | 프로젝트별 목록, 기본 Codex 폴더를 사용하는 일반 대화, 저장된 기록 열기, 응답 스트리밍·중지·재개, 작업 중 추가 지시 |
 | Pro 자문·Fast | + 메뉴에서 Pro 자문 요청 후 같은 Codex 작업 계속, 지원하는 Codex 모델에서 번개 버튼으로 Fast 선택 |
-| 기기 간 프로젝트 동기화 | Android 기기와 PC 보조 도구 사이에서 비공개 GitHub 저장소나 JSON 파일로 프로젝트 ID·이름·병합 이력 공유, 기기별 작업 폴더 연결 |
 | 파일 작업 | 폴더 탐색·검색, 파일 읽기·생성·수정·이동·이름 변경·삭제, 변경 전 확인과 복구 사본 |
 | 첨부와 이미지 | 여러 파일 첨부, 이미지 미리보기, 여러 장의 생성 결과 갤러리, 확대·스와이프·원본 저장 |
 | 기기 내 개발 도구 | Python·pip, Node.js·npm/npx, Git, 선택 설치하는 Linux 환경, 명령 입력과 출력 스트리밍 |
@@ -77,7 +76,7 @@ Codex 입력창의 **+ → Pro에게 물어보기**를 선택하면 다음 메�
 
 ### APK 받기
 
-[0.2.6 릴리스](https://github.com/nokryong/mobile-codex/releases/tag/v0.2.6)에서 **`mobile-codex-0.2.6-arm64.apk`**를 받습니다. 일반 빌드의 설치 파일은 Releases에 게시합니다. [Actions → Android APK](https://github.com/nokryong/mobile-codex/actions/workflows/android.yml)의 **Artifacts**에는 아래 검사 자료를 보관하며, APK 산출물은 `apk_only`를 선택한 수동 테스트 실행에만 있습니다.
+[0.2.5 릴리스](https://github.com/nokryong/mobile-codex/releases/tag/v0.2.5)에서 **`mobile-codex-0.2.5-arm64.apk`**를 받습니다. 일반 빌드의 설치 파일은 Releases에 게시합니다. [Actions → Android APK](https://github.com/nokryong/mobile-codex/actions/workflows/android.yml)의 **Artifacts**에는 아래 검사 자료를 보관하며, APK 산출물은 `apk_only`를 선택한 수동 테스트 실행에만 있습니다.
 
 | Actions 산출물 | 용도 |
 | --- | --- |
@@ -103,13 +102,9 @@ Actions 산출물 다운로드에는 GitHub 로그인이 필요하며, 보관 �
 
 다른 대화가 실행 중이어도 관련 없는 대화와 프로젝트를 삭제하거나 이름을 바꿀 수 있습니다. 실행 중인 대화와 해당 프로젝트의 삭제는 작업을 중지할 때까지 제한합니다.
 
-### 기기 간 프로젝트 동기화 시작하기
+### 프로젝트 정보 옮기기
 
-1. **설정 → 동기화 → GitHub 로그인**에서 받은 코드를 브라우저에서 승인합니다. OAuth 앱 등록이나 Client ID 입력은 필요하지 않습니다.
-2. 쓰기 권한이 있는 기존 비공개 저장소를 선택하고 업로드할 프로젝트를 고릅니다.
-3. 미리보기에서 가져올 프로젝트와 이름 충돌을 확인한 뒤 적용합니다. 다른 Android 기기나 PC 보조 도구에서 같은 저장소를 연결하고, 각 기기의 작업 폴더를 따로 지정합니다.
-
-프로젝트 ID·이름·명시적 병합 이력만 수동으로 동기화합니다. 소스 파일·대화·인증정보·진행 중인 작업은 옮기지 않습니다. JSON 파일 내보내기·가져오기도 지원합니다. [PC 보조 도구](packages/desktop-companion)는 Node.js 20 이상과 GitHub용 `gh` 로그인을 사용하며, 공식 Codex Desktop의 대화와 연동하지 않습니다. 자세한 절차는 [Android·PC 동기화 안내](docs/project-transfer.ko.md)를 참고하세요.
+Android 앱의 GitHub 프로젝트 동기화는 0.2.6-alpha.5에서 제거했습니다. 프로젝트 ID·이름·병합 이력은 JSON 파일 내보내기·가져오기로 옮길 수 있고, 대화와 작업은 각 기기에 남습니다. [PC 보조 도구](packages/desktop-companion)의 GitHub 동기화는 [안내](docs/project-transfer.ko.md)를 참고하세요.
 
 ### 기존 앱 업데이트
 
@@ -155,7 +150,7 @@ Android 10은 화면 요소를 읽고, Android 11 이상은 스크린샷도 사�
 
 ## Android에서 알아둘 점
 
-0.2.6은 정식 릴리스입니다. 기기별 동작은 Android·WebView·권한 설정에 따라 달라질 수 있습니다. 자동 테스트와 실기기 확인 범위는 [검증 기록](docs/verification.md)과 [기기 검증 목록](docs/device-validation.md)에 구분합니다.
+0.2.5는 정식 릴리스입니다. 기기별 동작은 Android·WebView·권한 설정에 따라 달라질 수 있습니다. 자동 테스트와 실기기 확인 범위는 [검증 기록](docs/verification.md)과 [기기 검증 목록](docs/device-validation.md)에 구분합니다.
 
 - **파일 접근:** Android가 허용한 범위에서 동작합니다. 다른 앱의 비공개 데이터나 시스템 보호 영역에는 접근할 수 없으며, 전체 파일 접근은 루트 권한이 아닙니다. 클라우드 문서 제공자 폴더는 일반 셸 경로 대신 문서 도구를 사용합니다.
 - **승인 방식:** 대화 입력창의 모델 옆에서 **승인 받기 / 자동 검토 / 모두 허용**을 선택합니다. 자동 검토는 승인 요청을 Codex 위험 검토기에 맡기며 파일 접근 범위와는 별도입니다.

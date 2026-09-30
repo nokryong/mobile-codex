@@ -87,7 +87,6 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 select,
 .option-field select,
 .settings-row select,
-#sync-repository,
 .question select,
 .question input:not([type="checkbox"]):not([type="radio"]) {
   width: 100%; min-height: var(--touch); padding: 0 var(--s-3);
@@ -756,7 +755,7 @@ html[data-theme=dark] .diff-added { color: #7fdcb9; }
 .about { margin-top: var(--s-4); padding-top: var(--s-3); border-top: 1px solid var(--divider); color: var(--text-3) !important; font-size: var(--fs-xs) !important; line-height: 1.7 !important; }
 
 /* Grouped cards inside settings use a fill, never a nested border. */
-.devtools-card, .sync-card, .reset-credits, .sync-device-flow, .sync-preview-result {
+.devtools-card, .reset-credits {
   margin-top: var(--s-3); padding: var(--s-4); border-radius: var(--r-lg); background: var(--fill-1);
 }
 .devtools-card > strong { display: block; font-size: var(--fs-md); font-weight: 600; }
@@ -768,8 +767,8 @@ html[data-theme=dark] .diff-added { color: #7fdcb9; }
 .card-heading strong { font-size: var(--fs-md); font-weight: 600; }
 .card-heading small { margin-top: 2px; color: var(--text-2); font-size: var(--fs-xs); line-height: 1.5; }
 .card-heading .secondary-button { flex: none; min-height: 36px; padding: 0 var(--s-3); font-size: var(--fs-sm); }
-.devtools-card .secondary-button, .devtools-card .primary-button, .sync-card .secondary-button, .sync-card .primary-button { background-color: var(--surface); }
-.devtools-card .primary-button, .sync-card .primary-button { background: var(--solid); }
+.devtools-card .secondary-button, .devtools-card .primary-button { background-color: var(--surface); }
+.devtools-card .primary-button { background: var(--solid); }
 .devtools-versions { display: flex; flex-wrap: wrap; gap: var(--s-2); margin: var(--s-2) 0; }
 .devtools-version { padding: 2px var(--s-2); border-radius: var(--r-full); background: var(--surface); color: var(--text-2); font-size: var(--fs-xs); }
 .devtools-output { max-height: 180px; margin: var(--s-3) 0 0; }
@@ -848,37 +847,6 @@ html[data-theme=dark] .diff-added { color: #7fdcb9; }
 #update-progress { width: 100%; height: 6px; }
 #update-status { overflow-wrap: anywhere; }
 #update-repository { margin-bottom: var(--s-1); }
-
-/* GitHub sync */
-.sync-card { display: grid; gap: var(--s-3); }
-#sync-controls { display: grid; gap: var(--s-3); min-width: 0; }
-#sync-controls > p { margin: 0; }
-#sync-controls .settings-row { padding: 0; min-height: 44px; border-bottom: 0; }
-.sync-card label[for="sync-repository"] { display: block; margin-top: var(--s-1); font-size: var(--fs-md); font-weight: 600; }
-#sync-repository { background: var(--surface); }
-.sync-actions { display: flex; flex-wrap: wrap; gap: var(--s-2); }
-.sync-actions:empty { display: none; }
-.sync-actions .primary-button { flex: 1 1 150px; }
-.sync-actions .secondary-button { flex: 1 1 120px; }
-.sync-device-flow { margin: 0; background: var(--surface); }
-.sync-device-flow p { margin: 0 0 var(--s-2); }
-.sync-device-flow .device-code { margin: 0 0 var(--s-2); background: var(--fill-1); }
-.sync-project-heading { display: grid; gap: 2px; margin-top: var(--s-2); }
-.sync-project-heading strong { font-size: var(--fs-md); font-weight: 600; }
-.sync-project-heading small { color: var(--text-2); font-size: var(--fs-xs); line-height: 1.5; }
-.sync-project-list, .sync-incoming-projects { display: grid; gap: var(--s-2); }
-.sync-project-option, .sync-incoming-project {
-  display: flex; align-items: flex-start; gap: var(--s-3); min-width: 0; min-height: 44px;
-  padding: var(--s-3); border-radius: var(--r-md); background: var(--surface);
-}
-.sync-incoming-project { display: grid; gap: 2px; }
-.sync-project-option input { margin-top: 1px; }
-.sync-project-option span { display: grid; gap: 2px; min-width: 0; }
-.sync-project-option strong, .sync-incoming-project strong { font-size: var(--fs-sm); font-weight: 500; overflow-wrap: anywhere; }
-.sync-project-option small, .sync-incoming-project small { color: var(--text-2); font-size: var(--fs-xs); overflow-wrap: anywhere; }
-.sync-preview-result { display: grid; gap: var(--s-3); margin: 0; background: var(--surface); }
-.sync-preview-result > p { margin: 0; }
-.sync-preview-result .primary-button { width: 100%; }
 
 /* ---------- Floating feedback ---------- */
 .toast {

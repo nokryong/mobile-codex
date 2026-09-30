@@ -82,7 +82,7 @@
   .settings-content { max-height: none; overflow: visible; }
   .settings-section h3 { margin-top: var(--s-1); }
 
-  .file-search input, .text-input, .question input:not([type="checkbox"]), .question select, #sync-repository { font-size: 16px; }
+  .file-search input, .text-input, .question input:not([type="checkbox"]), .question select { font-size: 16px; }
   .toolbar button { flex: 1 1 auto; }
   #tools-dialog .toolbar { margin-left: calc(var(--s-4) * -1); margin-right: calc(var(--s-4) * -1); padding: 0 var(--s-4); }
   #tools-dialog .toolbar button { flex: none; }

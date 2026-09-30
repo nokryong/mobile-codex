@@ -79,7 +79,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      GITHUB_OAUTH_CLIENT_ID: ${{ vars.MOBILE_CODEX_GITHUB_CLIENT_ID }}
       # Only trusted branches in the private test repository may access signing.
       PRIVATE_TEST_PR: ${{ github.repository == 'SeeUSoon93/mobile-codex' && github.event.repository.private == true && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
     permissions:
@@ -91,12 +90,6 @@ jobs:
         env:
           MOBILE_CODEX_SIGNING_JSON: ${{ secrets.MOBILE_CODEX_SIGNING_JSON }}
         run: python3 tools/sign_ci_apk.py --check-config
-      - name: Report GitHub login availability
-        if: github.event_name != 'pull_request' || env.PRIVATE_TEST_PR == 'true'
-        run: |
-          if [ -z "$GITHUB_OAUTH_CLIENT_ID" ]; then
-            echo "::notice::GitHub sign-in is unavailable in this build until the public MOBILE_CODEX_GITHUB_CLIENT_ID repository variable is configured (Device Flow enabled)."
-          fi
       - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
         with:
           distribution: temurin

@@ -1572,61 +1572,13 @@ test('Codex user messages stay fully visible even when long',async()=>{
  assert.equal(w.document.querySelector('.user-message-toggle'),null);
 });
 
-test('sync is a settings tab and never asks for a personal access token',async()=>{
- const status={configured:false,authenticated:false,connected:false,account:'',repository:'',branch:'',lastSynced:0,selectedKeys:[],projects:[]};
- const {w,calls}=setup({'sync':m=>{assert.equal(m.action,'sync.status');return status;}});await tick();
- const d=w.document;assert.ok(d.querySelector('[data-settings-tab="sync"]'));
- assert.equal(d.querySelector('#sync-controls input[type="password"]'),null);
- assert.doesNotMatch(d.getElementById('sync-controls').innerHTML,/<input[^>]*(token|pat|client)/i);
- d.querySelector('[data-settings-tab="sync"]').click();await tick();await tick();
- assert.match(d.getElementById('sync-unavailable').textContent,/구성되지 않았습니다/);
- assert.equal(d.getElementById('sync-controls').hidden,true);
- assert.equal(calls.some(call=>call.action==='sync.login.start'),false);
-});
-
-test('sync device login is explicit and cancelling it invalidates the flow',async()=>{
- const status={configured:true,authenticated:false,connected:false,account:'',repository:'',branch:'main',lastSynced:0,selectedKeys:[],projects:[]};
- const {w,calls}=setup({'sync':m=>{
-   if(m.action==='sync.status')return status;
-   if(m.action==='sync.login.start')return {flowId:'flow-1',userCode:'ABCD-EFGH',verificationUri:'https://github.com/login/device',interval:60,expiresAt:Date.now()+60000};
-   if(m.action==='sync.login.cancel')return status;
-   throw Error('unexpected '+m.action);
- }});await tick();const d=w.document;d.querySelector('[data-settings-tab="sync"]').click();await tick();
- d.getElementById('sync-login').click();await tick();
- assert.equal(d.getElementById('sync-device-flow').hidden,false);assert.equal(d.getElementById('sync-device-code').textContent,'ABCD-EFGH');
- assert.equal(calls.some(call=>call.action==='ui.externalBrowser'),false,'login never opens a browser by itself');
- d.getElementById('sync-open-browser').click();await tick();
- assert.ok(calls.some(call=>call.action==='ui.externalBrowser'&&call.args.url==='https://github.com/login/device'));
- assert.equal(calls.some(call=>call.action==='rpc'&&call.args.method.startsWith('sync.')),false);
- d.getElementById('sync-cancel-login').click();await tick();
- assert.ok(calls.some(call=>call.action==='sync.login.cancel'&&call.args.flowId==='flow-1'));
- assert.equal(d.getElementById('sync-device-flow').hidden,true);
-});
-
-test('sync rejects invalid state and summarizes verbose failures without exposing response bodies',async()=>{
- let response={}, fail=false;
- const {w}=setup({sync:()=>{if(fail)throw Error('<html>Authorization: Bearer private-token\n'+'trace line\n'.repeat(300));return response;}});
- await tick();const d=w.document;d.querySelector('[data-settings-tab="sync"]').click();await tick();
- assert.match(d.getElementById('sync-status').textContent,/상태를 불러오지 못했습니다/);
- assert.equal(d.getElementById('sync-login').disabled,true);
- response={configured:true,authenticated:false,connected:false,projects:[],selectedKeys:[]};
- d.getElementById('sync-refresh').click();await tick();assert.equal(d.getElementById('sync-login').disabled,false);
- fail=true;d.getElementById('sync-login').click();await tick();
- assert.equal(d.getElementById('sync-status').textContent,'GitHub 로그인을 시작하지 못했습니다.');
- assert.doesNotMatch(d.getElementById('sync-status').textContent,/private-token|trace|html/);
- assert.equal(d.getElementById('sync-login').disabled,false,'failed login remains retryable');
-});
-
-test('sync browser launch failures are visible inline and keep the code available for retry',async()=>{
- const status={configured:true,authenticated:false,connected:false,projects:[],selectedKeys:[]};let attempts=0;
- const {w}=setup({sync:m=>m.action==='sync.login.start'?{flowId:'browser-flow',userCode:'ABCD-EFGH',verificationUri:'https://github.com/login/device',interval:60}:status,
-  'ui.externalBrowser':()=>{attempts++;throw Error('Android exception\n'+'stack frame\n'.repeat(300));}});
- await tick();const d=w.document;d.getElementById('settings').click();await tick();d.querySelector('[data-settings-tab="sync"]').click();await tick();
- d.getElementById('sync-login').click();await tick();d.getElementById('sync-open-browser').click();await tick();
- assert.match(d.getElementById('sync-status').textContent,/브라우저를 열지 못했습니다/);
- assert.doesNotMatch(d.getElementById('sync-status').textContent,/stack frame/);
- assert.equal(d.getElementById('sync-device-code').textContent,'ABCD-EFGH');
- d.getElementById('sync-open-browser').click();await tick();assert.equal(attempts,2);
+test('settings have no GitHub sync tab and the app never calls sync actions',async()=>{
+ const {w,calls}=setup();await tick();await tick();
+ const d=w.document;
+ assert.equal(d.querySelector('[data-settings-tab="sync"]'),null);assert.equal(d.querySelector('[data-settings-panel="sync"]'),null);
+ d.getElementById('settings').click();await tick();
+ for(const tab of d.querySelectorAll('[data-settings-tab]')){tab.click();await tick();}
+ assert.equal(calls.some(call=>call.action.startsWith('sync.')||call.action.startsWith('cloud.')),false);
 });
 
 test('tool errors are compact and failed buttons show feedback inside the open modal',async()=>{
@@ -1644,70 +1596,6 @@ test('tool errors are compact and failed buttons show feedback inside the open m
  assert.equal(feedback.hidden,false);assert.match(feedback.textContent,/요청을 처리하지 못했습니다/);
  assert.equal(login.disabled,false);
 });
-
-test('sync keeps migrated GitHub credentials usable when device login is not configured',async()=>{
- const status={configured:false,authenticated:true,connected:false,account:'legacy-octo',repository:'legacy/projects',branch:'main',lastSynced:0,selectedKeys:[],projects:[]};
- const {w}=setup({'sync':m=>m.action==='sync.status'?status:{repositories:[{fullName:'legacy/projects'}],page:1,hasMore:false}});await tick();
- const d=w.document;d.querySelector('[data-settings-tab="sync"]').click();await tick();await tick();
- assert.equal(d.getElementById('sync-controls').hidden,false);
- assert.equal(d.getElementById('sync-login').hidden,true);
- assert.equal(d.getElementById('sync-disconnect').hidden,false);
-});
-
-test('a device flow returned after leaving sync is cancelled without starting a poll',async()=>{
- let resolveStart;
- const status={configured:true,authenticated:false,connected:false,account:'',repository:'',branch:'main',lastSynced:0,selectedKeys:[],projects:[]};
- const {w,calls}=setup({'sync':m=>{
-   if(m.action==='sync.status')return status;
-   if(m.action==='sync.login.start')return new Promise(resolve=>{resolveStart=resolve;});
-   if(m.action==='sync.login.cancel')return status;
-   throw Error('unexpected '+m.action);
- }});await tick();const d=w.document;d.querySelector('[data-settings-tab="sync"]').click();await tick();
- d.getElementById('sync-login').click();await tick();d.querySelector('[data-settings-tab="general"]').click();
- resolveStart({flowId:'late-flow',userCode:'LATE-CODE',verificationUri:'https://github.com/login/device',interval:60});await tick();await tick();
- assert.ok(calls.some(call=>call.action==='sync.login.cancel'&&call.args.flowId==='late-flow'));
- assert.equal(calls.some(call=>call.action==='sync.login.poll'),false);
-});
-
-test('sync persists selected uploads, previews incoming projects, applies only the preview, and leaves errors inline',async()=>{
- let status={configured:true,authenticated:true,connected:true,account:'octo',repository:'octo/projects',branch:'main',lastSynced:0,selectedKeys:[],projects:[{key:'local-a',projectId:'local-a',name:'Local A'}]};
- const {w,calls}=setup({'sync':m=>{
-   if(m.action==='sync.status')return status;
-   if(m.action==='sync.repositories')return {repositories:[{fullName:'octo/projects'}],page:1,hasMore:false};
-   if(m.action==='sync.selection'){assert.deepEqual(m.args.keys,['local-a']);return status={...status,selectedKeys:['local-a']};}
-   if(m.action==='sync.preview'){assert.deepEqual(m.args.keys,['local-a']);return {token:'preview-1',summary:{projects:[{projectId:'remote-a',name:'Remote A',nameConflicts:['Local A']}],eventCount:2,linkCount:1,conflictCount:1},addedEvents:0,uploadCount:1};}
-   if(m.action==='sync.apply'){assert.deepEqual(m.args,{token:'preview-1'});return {...status,account:'octo',lastSynced:Date.UTC(2026,8,29),projects:[{key:'local-a',projectId:'local-a',name:'Merged A'}],workspace:{selected:false},changed:true};}
-   throw Error('unexpected '+m.action);
- }});await tick();const d=w.document;d.querySelector('[data-settings-tab="sync"]').click();await tick();await tick();
- const check=d.querySelector('#sync-project-list input');check.checked=true;check.dispatchEvent(new w.Event('change'));await tick();
- d.getElementById('sync-preview').click();await tick();
- assert.match(d.getElementById('sync-incoming-projects').textContent,/Remote A/);assert.match(d.getElementById('sync-incoming-projects').textContent,/이름 충돌/);assert.match(d.getElementById('sync-preview-summary').textContent,/새 변경 0개/);
- d.getElementById('sync-apply').click();await tick();await tick();
- assert.ok(calls.some(call=>call.action==='sync.apply'));
- assert.equal(d.getElementById('sync-preview-result').hidden,true);
- assert.equal(d.getElementById('logout').textContent,'로그아웃','sync account text must not replace the app account object');
- const failed=setup({'sync':m=>m.action==='sync.status'?status:Promise.reject(Error('remote failed'))});await tick();
- failed.w.document.querySelector('[data-settings-tab="sync"]').click();await tick();await tick();failed.w.document.getElementById('sync-preview').click();await tick();
- assert.match(failed.w.document.getElementById('sync-status').textContent,/remote failed/);
- assert.equal(failed.w.document.getElementById('sync-preview-result').hidden,true);
-});
-
-test('a failed sync apply consumes its preview and requires a fresh preview',async()=>{
- const status={configured:true,authenticated:true,connected:true,account:'octo',repository:'octo/projects',branch:'main',lastSynced:0,selectedKeys:[],projects:[]}; let applyCalls=0;
- const {w,calls}=setup({'sync':m=>{
-   if(m.action==='sync.status')return status;
-   if(m.action==='sync.repositories')return {repositories:[{fullName:'octo/projects'}],page:1,hasMore:false};
-   if(m.action==='sync.preview')return {token:'single-use',summary:{projects:[],eventCount:0,linkCount:0,conflictCount:0},addedEvents:0,uploadCount:0};
-   if(m.action==='sync.apply'){applyCalls++;throw Error('apply rejected');}
-   throw Error('unexpected '+m.action);
- }});await tick();const d=w.document;d.querySelector('[data-settings-tab="sync"]').click();await tick();await tick();
- d.getElementById('sync-preview').click();await tick();d.getElementById('sync-apply').click();await tick();
- assert.equal(applyCalls,1);assert.equal(d.getElementById('sync-preview-result').hidden,true);assert.equal(d.getElementById('sync-apply').disabled,true);
- d.getElementById('sync-apply').click();await tick();assert.equal(applyCalls,1);
- assert.match(d.getElementById('sync-status').textContent,/apply rejected/);
- assert.equal(calls.filter(call=>call.action==='sync.apply').length,1);
-});
-
 
 test('deleting unrelated projects and conversations remains available during Codex or Pro work',async()=>{
  for (const mode of ['busy','proBusy','background']) {

@@ -316,8 +316,8 @@ async function checkSidebar(page,width) {
  await page.screenshot({path:path.join(output,`sidebar-open-${width}.png`)});
  if(width===320) {
   await page.locator('#settings').click();await page.locator('#settings-dialog').waitFor({state:'visible'});
-  const names=['general','personal','account','sync','tools','advanced','updates'];
-  assert.deepEqual(await page.locator('[data-settings-tab]').evaluateAll(items=>items.map(el=>el.dataset.settingsTab)),names,'all seven settings tabs exist at 320px');
+  const names=['general','personal','account','tools','advanced','updates'];
+  assert.deepEqual(await page.locator('[data-settings-tab]').evaluateAll(items=>items.map(el=>el.dataset.settingsTab)),names,'all six settings tabs exist at 320px');
   for(const name of names) {
    const tab=page.locator(`[data-settings-tab="${name}"]`);
    await tab.click();
