@@ -970,7 +970,7 @@ window.MobileCodexEnglish = {
   "버전 확인 중": "Checking version",
   "제작: nokryong": "Created by nokryong",
   "OpenAI 공식 앱이 아닌 개인용 클라이언트입니다.": "An independent client, not an official OpenAI app.",
-  "Android용 Codex 포트 0.155.1 · Apache-2.0": "Android Codex port 0.155.1 · Apache-2.0",
+  "Android용 Codex 포트 0.159.3-termux.1 · Apache-2.0": "Android Codex port 0.159.3-termux.1 · Apache-2.0",
   "요청 처리에 사용되는 파일 내용은 AI 서비스로 전송됩니다.": "File content used to process requests is sent to the AI service.",
   "입력": "Input",
   "파일 새로고침": "Refresh files",
