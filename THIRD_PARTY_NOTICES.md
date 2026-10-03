@@ -3,9 +3,9 @@
 Mobile Codex is an independent client; it is not an official OpenAI Android application.
 
 The APK bundles a pinned Android port of Codex:
-- Source: https://github.com/DioNanos/codex-termux/tree/v0.155.1
+- Source: https://github.com/DioNanos/codex-termux/tree/v0.159.3-termux.1
 - Upstream: https://github.com/openai/codex
-- Package: `@mmmbuto/codex-cli-termux@0.155.1`
+- Package: `@mmmbuto/codex-cli-termux@0.159.3-termux.1`
 - The package's original `LICENSE` and `NOTICE` are copied into `assets/runtime/` at build time.
 - A fixed-width helper executable name change is applied for Android APK native-library packaging. See `tools/prepare_runtime.py` and README.
 - The original archive integrity and the resulting packaged file hashes are recorded separately.
