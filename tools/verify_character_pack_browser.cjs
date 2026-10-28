@@ -9,7 +9,7 @@ const web = path.join(root, 'app/src/main/assets/web');
 const out = path.join(root, 'artifacts/character-pack');
 fs.mkdirSync(out, { recursive: true });
 const custom = { id: 'english', name: 'English pack', valid: true, icons: { done: '/packs/done.png', greeting: '/packs/greeting.png' } };
-const base = { ready: true, busy: false, permissions: 'workspace-write', status: 'Connected', threadId: 'pack-test', cwd: '/workspace', workspace: { selected: false, name: '' }, projects: [], sessions: [], account: { type: 'chatgpt', email: 'qa@example.test' }, models: [], messages: [{ id: 'a', role: 'assistant', text: '완료했어요.' }] };
+const base = { ready: true, busy: false, permissions: 'workspace-write', status: 'Connected', threadId: 'pack-test', cwd: '/workspace', workspace: { selected: false, name: '' }, projects: [], sessions: [], account: { type: 'chatgpt', email: 'qa@example.test' }, models: [], messages: [{ id: 'a', role: 'assistant', text: '[[icon:완료]]\n완료했어요.' }] };
 const packSnapshot = { folderName: 'Character packs', folderConfigured: true, selectedPackId: 'english', packs: [{ id: 'builtin', name: '기본 캐릭터', valid: true, icons: {} }, custom] };
 
 (async () => {

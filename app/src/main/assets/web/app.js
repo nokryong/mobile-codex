@@ -913,6 +913,43 @@
       else renderProseLines(target, block.content);
     }
   }
+  function renderMessageIconTags(target, pack, previousIcons, streaming) {
+    // Replace only assistant prose. Code examples and user messages retain their literal text.
+    const walker = document.createTreeWalker(target, NodeFilter.SHOW_TEXT);
+    const nodes = [];
+    while (walker.nextNode()) {
+      const textNode = walker.currentNode;
+      if (!textNode.parentElement?.closest('code,pre,button')) nodes.push(textNode);
+    }
+    for (const textNode of nodes) {
+      const text = textNode.nodeValue || '';
+      const pattern = streaming
+        ? /\[\[\s*icon\s*:\s*([^\]\r\n]*?)\s*\]\]|\[\[\s*(?:i(?:c(?:o(?:n(?:\s*:\s*[^\]\r\n]*\]?)?)?)?)?)?$/gi
+        : /\[\[\s*icon\s*:\s*([^\]\r\n]*?)\s*\]\]|\[\[\s*i(?:c(?:o(?:n(?:\s*:\s*[^\]\r\n]*\]?)?)?)?)?$/gi;
+      let match, cursor = 0, changed = false;
+      const fragment = document.createDocumentFragment();
+      while ((match = pattern.exec(text))) {
+        changed = true;
+        fragment.append(document.createTextNode(text.slice(cursor, match.index)));
+        const iconName = match[1] === undefined ? null : C.chatIconForTag(match[1]);
+        if (chatIconsEnabled && iconName) {
+          const url = characterIconUrl(iconName, pack || undefined);
+          const oldIndex = previousIcons.findIndex(image => image.dataset.messageIconKey === iconName && image.getAttribute('src') === url);
+          const image = oldIndex < 0 ? characterIcon(iconName, '', pack) : previousIcons.splice(oldIndex, 1)[0];
+          image.dataset.messageIconKey = iconName;
+          fragment.append(image);
+        }
+        cursor = match.index + match[0].length;
+      }
+      if (changed) {
+        fragment.append(document.createTextNode(text.slice(cursor)));
+        textNode.replaceWith(fragment);
+      }
+    }
+    for (const paragraph of target.querySelectorAll('p.prose-line')) {
+      if (!paragraph.textContent.trim() && !paragraph.querySelector('img,button')) paragraph.remove();
+    }
+  }
   function drawStatusIcons() {
     for (const [id, name] of [['welcome-character','greeting'], ['activity-character',activityIcon]]) {
       const host = $(id); host.hidden = !chatIconsEnabled;
@@ -924,7 +961,9 @@
     chatIconsEnabled = $('chat-icons-toggle').checked;
     try { localStorage.setItem('chat-icons', chatIconsEnabled ? 'on' : 'off'); } catch { toast(t('아이콘 설정을 저장하지 못했습니다.')); }
     drawStatusIcons(); drawMessages();
+    syncChatIcons();
   }
+  function syncChatIcons() { call('chat.icons.set', {enabled:chatIconsEnabled}).catch(() => {}); }
   function historyStatus(message = '') {
     let status = $('history-status');
     if (!status) { status = node('p', '', 'history-status'); status.id = 'history-status'; status.setAttribute('role','status'); $('messages').before(status); }
@@ -1015,11 +1054,11 @@
       const position = previous ? previous.nextSibling : $('messages').firstChild;
       if (el !== position) $('messages').insertBefore(el, position);
       previous = el;
-      const iconName = m.imageStatus === 'generating' ? 'working' : state.busy && m.id === messages[messages.length - 1]?.id ? 'thinking' : C.messageIcon(m);
       el.classList.toggle('pro-consultation-message', m.kind === 'proConsultation');
       el.classList.toggle('agent-message', !!m.agent);
       const agentPack = m.agent ? agentCharacter(m.agent) : null;
-      const signature = JSON.stringify([m.agent, m.agentName, agentPack?.id, grouped, m.text, m.kind, m.prompt, m.createdAt, m.status, m.source, m.backend, m.displayModel, m.error, m.images, m.attachments, m.imageStatus, m.imageError, L.language(), chatIconsEnabled, iconName, characterVisualKey()]);
+      const streaming = m.status === 'streaming' || (state.busy && m.id === messages[messages.length - 1]?.id);
+      const signature = JSON.stringify([m.agent, m.agentName, agentPack?.id, grouped, m.text, m.kind, m.prompt, m.createdAt, m.status, m.source, m.backend, m.displayModel, m.error, m.images, m.attachments, m.imageStatus, m.imageError, L.language(), chatIconsEnabled, streaming, characterVisualKey()]);
       if (el.dataset.signature !== signature) {
         el.dataset.signature = signature;
         if (m.role === 'user') {
@@ -1032,17 +1071,15 @@
           if (['not_sent','uncertain','failed'].includes(m.status)) el.append(node('p', m.status === 'uncertain' ? t('전송 상태를 확인해야 합니다. 같은 메시지를 다시 보내기 전에 ChatGPT 웹 대화를 확인하세요.') : (m.error || t('보내지 못했습니다.')), 'message-transport-status'));
         }
         else {
-          const previousIcon = el.querySelector('.chat-character');
+          const previousIcons = [...el.querySelectorAll('.chat-character[data-message-icon-key]')];
           prose(el, m.text || '');
+          renderMessageIconTags(el, agentPack, previousIcons, streaming);
           if (m.kind === 'proConsultation') {
             const status = {completed:t('검토 완료'),failed:t('검토 실패'),cancelled:t('검토 취소됨'),timeout:t('검토 시간 초과')}[m.status];
             el.prepend(node('span', t('Pro 검토 답변'), 'message-source-badge'));
             if (status) { const label = node('p', status, 'message-transport-status'); label.setAttribute('role', 'status'); el.append(label); }
             if (m.prompt?.trim()) { const detail = node('details', null, 'pro-consultation-prompt'); detail.append(node('summary', t('Pro에게 보낸 질문')), node('pre', m.prompt, 'console')); el.append(detail); }
           } else if (m.source === 'ChatGPT Pro' || m.backend === 'chatgpt-web') el.prepend(node('span', 'ChatGPT Pro', 'message-source-badge'));
-          if (chatIconsEnabled && !m.agent) el.prepend(previousIcon?.getAttribute('src') === characterIconUrl(iconName) ? previousIcon : characterIcon(iconName));
-          // An invited agent shows its own character pack, chosen in the participants panel.
-          if (chatIconsEnabled && agentPack) el.prepend(characterIcon(m.status === 'streaming' ? 'thinking' : m.status === 'error' ? 'blocked' : iconName, '', agentPack));
           if (grouped) el.prepend(agentSpeaker(m));
           if (m.agent && m.status === 'streaming' && !m.text) el.append(node('p', t('응답 중…'), 'agent-pending'));
           if (m.agent && ['error','interrupted'].includes(m.status)) el.append(node('p', m.status === 'interrupted' ? t('중단된 응답입니다.') + (m.error ? ' ' + m.error : '') : (m.error || t('답하지 못했습니다.')), 'message-transport-status'));
@@ -2241,7 +2278,7 @@
     closeComposerAddMenu(false);
     saveDraft(); updateSend(); scrollLatest();
     try {
-      await call(steer ? 'chat.steer' : 'chat.send', {text, expectedTurnId, expectedThreadId, workspaceKey, model:$('model').value, effort:$('effort').value,
+      await call(steer ? 'chat.steer' : 'chat.send', {text, expectedTurnId, expectedThreadId, workspaceKey, model:$('model').value, effort:$('effort').value, chatIconsEnabled,
         ...(!steer ? {fastMode:!!fastTier() && draftOptions.fastMode === true} : {}),
         attachments:submitted.context.attachments.map(x => x.id), skills:submitted.context.skills, mentions:submitted.context.mentions});
       // Keep text typed during the request, or drafts from a different conversation.
@@ -2377,7 +2414,7 @@
     if ($('tools-dialog').open) await loadTools(false);
   }, 'change');
   on('chat-icons-toggle', setChatIcons, 'change');
-  $('chat-icons-toggle').checked = chatIconsEnabled; drawStatusIcons();
+  $('chat-icons-toggle').checked = chatIconsEnabled; drawStatusIcons(); syncChatIcons();
   on('instructions-reload', loadInstructions); on('instructions-save', saveInstructions);
   $('settings-dialog').addEventListener('cancel', event => { event.preventDefault(); dismiss('settings-dialog'); });
   on('storage-access', () => call('ui.storageAccess')); on('theme', setTheme, 'change');

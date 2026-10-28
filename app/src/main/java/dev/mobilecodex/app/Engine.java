@@ -88,6 +88,7 @@ public final class Engine {
     }
     private String toolRequestThread = "";
     private String permissionMode, approvalMode;
+    private boolean chatIconsEnabled = true;
     private final Map<String, PendingRequest> requests = new LinkedHashMap<>();
     private final TerminalSession terminal = new TerminalSession((name, data) -> {
         event(name, data);
@@ -711,7 +712,9 @@ public final class Engine {
                     case "projects.merge" -> { ensureEngineIdle(); JSONObject merged = documents.mergeProjects(args.getString("sourceKey"), args.getString("targetKey")); publish(); reply.complete(merged, null); }
                     case "projects.prefer" -> { ensureEngineIdle(); JSONObject result = documents.preferProject(args.getString("key")); publish(); reply.complete(result, null); }
                     case "documents.projects" -> reply.complete(obj("projects", documents.projects()), null);
-                    case "chat.send" -> { requireChatScope(args); send(args.optString("text", ""), args.optString("model", ""), args.optString("effort", ""),
+                    case "chat.icons.set" -> { setChatIconsEnabled(args.getBoolean("enabled")); reply.complete(obj("ok", true), null); }
+                    case "chat.send" -> { requireChatScope(args); if (args.has("chatIconsEnabled")) setChatIconsEnabled(args.getBoolean("chatIconsEnabled"));
+                        send(args.optString("text", ""), args.optString("model", ""), args.optString("effort", ""),
                         args.optJSONArray("attachments"), args.optJSONArray("skills"), args.optJSONArray("mentions"),
                         args.has("fastMode") ? args.getBoolean("fastMode") : null, args.optBoolean("consultPro")); reply.complete(obj("ok", true), null); }
                     case "chat.history" -> reply.complete(history(args), null);
@@ -1082,6 +1085,13 @@ public final class Engine {
         }
         throw new IOException(t("선택한 모델에서는 Fast 모드를 지원하지 않습니다."));
     }
+    private void setChatIconsEnabled(boolean enabled) {
+        if (chatIconsEnabled != enabled) {
+            chatIconsEnabled = enabled;
+            // Apply changed developer instructions when this conversation next resumes.
+            serverThreadId = "";
+        }
+    }
     private String workspaceInstructions(String model) {
         JSONObject workspace = documents.workspace();
         return ToolCatalog.INSTRUCTIONS + " Selected Android folder: " + workspace.optString("name", "none")
@@ -1089,7 +1099,7 @@ public final class Engine {
             + (documents.directDirectory() != null) + ". The exact model requested for this thread is "
             + (model == null || model.isBlank() ? "not available from the runtime" : model)
             + ". When the user asks which model you are, report that exact requested model id."
-            + linuxInstructions(linux.status());
+            + linuxInstructions(linux.status()) + ChatIconInstructions.forEnabled(chatIconsEnabled);
     }
     static String linuxInstructions(JSONObject state) {
         if (!state.optBoolean("installed") || !state.optBoolean("enabled"))
@@ -2596,7 +2606,7 @@ public final class Engine {
             agentRequest("agents.run", obj("runId", turn.runId, "sessionId", run.local, "memberId", id, "provider", member.optString("provider"),
                 "model", member.optString("model"), "effort", member.optString("effort"), "mode", mode, "projectKey", projectKey,
                 "approvalMode", member.optString("approvalMode", "ask"), "nativeSession", member.optString("nativeSession"),
-                "prompt", AgentGroup.agentPrompt(owner, member, run.context)), (result, error) -> {
+                "prompt", AgentGroup.agentPrompt(owner, member, run.context, chatIconsEnabled)), (result, error) -> {
                     if (error != null) io.execute(() -> agentRunEvent(obj("runId", turn.runId, "kind", "error", "message", unwrap(error).getMessage())));
                 });
         } catch (Exception e) {

@@ -493,6 +493,35 @@ public class EngineOfflineSessionTest {
         assertEquals("gpt-6-astra", turn.getString("model"));
         engine.io.shutdownNow();
     }
+    @Test public void iconPreferenceChangesInstructionsForTheNextTurnInTheSameThread() throws Exception {
+        Engine engine = new Engine(context); loggedIn(engine);
+        java.util.ArrayList<JSONObject> calls = new java.util.ArrayList<>();
+        engine.setTestTransport((method, params) -> {
+            calls.add(obj("method", method, "params", new JSONObject(params.toString())));
+            if (method.equals("thread/start")) return obj("thread", obj("id", "icon-thread"));
+            if (method.equals("thread/resume")) return new JSONObject();
+            if (method.equals("turn/start")) return obj("turn", obj("id", "turn-" + calls.size()));
+            throw new AssertionError(method);
+        });
+        handle(engine, "chat.send", obj("text", "first", "chatIconsEnabled", true));
+        JSONObject started = calls.stream().filter(c -> c.optString("method").equals("thread/start")).findFirst().orElseThrow().getJSONObject("params");
+        assertTrue(started.getString("developerInstructions").contains("[[icon:태그명]]"));
+        assertTrue(started.getString("developerInstructions").contains("검토완료"));
+        setField(engine, "busy", false);
+        handle(engine, "chat.icons.set", obj("enabled", false));
+        handle(engine, "chat.send", obj("text", "second", "chatIconsEnabled", false));
+        JSONObject disabled = calls.stream().filter(c -> c.optString("method").equals("thread/resume")).reduce((a,b) -> b).orElseThrow().getJSONObject("params");
+        assertEquals("icon-thread", disabled.getString("threadId"));
+        assertFalse(disabled.getString("developerInstructions").contains("[[icon:태그명]]"));
+        assertTrue(disabled.getString("developerInstructions").contains("You are Codex"));
+        setField(engine, "busy", false);
+        handle(engine, "chat.send", obj("text", "third", "chatIconsEnabled", true));
+        JSONObject enabled = calls.stream().filter(c -> c.optString("method").equals("thread/resume")).reduce((a,b) -> b).orElseThrow().getJSONObject("params");
+        assertEquals("icon-thread", enabled.getString("threadId"));
+        assertTrue(enabled.getString("developerInstructions").contains("[[icon:태그명]]"));
+        assertEquals(2, calls.stream().filter(c -> c.optString("method").equals("thread/resume")).count());
+        engine.io.shutdownNow();
+    }
     private java.util.Set<String> types(JSONArray input) throws Exception {
         java.util.HashSet<String> out = new java.util.HashSet<>();
         for (int i = 0; i < input.length(); i++) out.add(input.getJSONObject(i).getString("type"));

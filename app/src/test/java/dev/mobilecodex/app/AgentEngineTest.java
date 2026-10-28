@@ -272,6 +272,7 @@ public class AgentEngineTest {
         assertEquals(1,call("state",obj()).getJSONArray("messages").length());
         assertTrue(launch("claude").getString("prompt").contains("첫 질문"));
         assertTrue(launch("gemini").getString("prompt").contains("첫 질문"));
+        assertTrue(launch("claude").getString("prompt").contains("[[icon:태그명]]"));
         agentEvent("gemini","delta",obj("text","Gemini 먼저"));
         notify("item/completed",obj("threadId","remote-1","item",obj("type","agentMessage","id","c1","text","Codex 의견")));
         agentEvent("claude","delta",obj("text","Claude 나중"));
@@ -291,6 +292,13 @@ public class AgentEngineTest {
         assertEquals("claude-native",launch("claude").getString("nativeSession"));
         String codex=turns().get(1).getJSONArray("input").getJSONObject(0).getString("text");
         assertTrue(codex.contains("Claude 나중"));assertTrue(codex.contains("Gemini 먼저"));assertFalse(codex.contains("Codex 의견"));
+        call("chat.stop",obj());
+    }
+    @Test public void invitedAgentsDoNotReceiveIconGuidanceWhenIconsAreDisabled()throws Exception{
+        call("chat.icons.set",obj("enabled",false));
+        beginGroup("첫 질문");
+        assertFalse(launch("claude").getString("prompt").contains("[[icon:태그명]]"));
+        assertFalse(launch("gemini").getString("prompt").contains("[[icon:태그명]]"));
         call("chat.stop",obj());
     }
     @Test public void lastClaudeReplyCanRecallCodexAfterEveryoneHasAnswered()throws Exception{

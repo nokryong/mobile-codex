@@ -2,6 +2,7 @@ package dev.mobilecodex.app;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
+import dev.mobilecodex.app.core.ChatIconInstructions;
 import java.util.*;
 import java.util.regex.*;
 import static dev.mobilecodex.app.core.Json.*;
@@ -152,6 +153,9 @@ final class AgentGroup {
     }
     /** Prompt for an invited agent: everything after its cursor, plus who is present. */
     static String agentPrompt(JSONObject session, JSONObject member, JSONArray messages) {
+        return agentPrompt(session, member, messages, false);
+    }
+    static String agentPrompt(JSONObject session, JSONObject member, JSONArray messages, boolean chatIconsEnabled) {
         String id = member.optString("id");
         int from = indexOf(messages, member.optString("cursorId")) + 1;
         String mode = member.optString("mode", "chat");
@@ -162,7 +166,8 @@ final class AgentGroup {
         };
         String header = "당신은 Mobile Codex 그룹 대화의 @" + id + " (" + name(id) + ")입니다. 다른 참가자: " + roster(session, id) + ".\n"
             + access + " 공유된 대화 기록을 읽고 답하세요. 같은 질문에 다른 참가자도 동시에 답할 수 있습니다. 다른 참가자 의견이 꼭 필요할 때만 독립된 @ID로 호출하세요. "
-            + "@file:경로, @app:이름은 참가자 호출이 아닙니다. 도구 결과 없이 작업 성공을 주장하지 마세요.\n";
+            + "@file:경로, @app:이름은 참가자 호출이 아닙니다. 도구 결과 없이 작업 성공을 주장하지 마세요.\n"
+            + ChatIconInstructions.forEnabled(chatIconsEnabled) + "\n";
         Set<String> known = new HashSet<>();
         if (!member.optString("nativeSession").isBlank()) for (int i = from; i < messages.length(); i++) {
             JSONObject m = messages.optJSONObject(i);
