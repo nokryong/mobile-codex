@@ -1690,6 +1690,93 @@ test('terminal queue rejection keeps unsent input and leaves stop available',asy
  assert.equal(calls.filter(c=>c.action==='terminal.stop').length,1);w.close();
 });
 
+test('terminal input failure disables only input, survives reopening and still drains output',async()=>{
+ let terminal={id:'failed',revision:1,running:true,output:'Waiting',exitCode:null,inputError:''};
+ const {w,calls}=setup({'terminal.state':()=>terminal,'terminal.stop':()=>terminal={...terminal,revision:5,stopping:true}});await tick();
+ const d=w.document,entry=d.getElementById('terminal-command'),form=d.getElementById('terminal-form');
+ d.getElementById('show-terminal').click();await tick();entry.value='keep-private-code';
+ w.mobileCodexEvent('terminal.inputError',{id:'failed',revision:2,reason:'input_closed'});
+ assert.match(d.getElementById('terminal-status').textContent,/입력을 보내지 못했습니다/);
+ assert.equal(entry.disabled,true);assert.equal(d.getElementById('terminal-submit').disabled,true);
+ assert.equal(d.getElementById('terminal-stop').disabled,false);
+ form.dispatchEvent(new w.Event('submit',{cancelable:true}));await tick();
+ assert.equal(calls.filter(c=>c.action==='terminal.input').length,0);
+ w.mobileCodexEvent('terminal.output',{id:'failed',revision:3,text:'Still running'});
+ assert.match(d.getElementById('terminal-output').textContent,/Still running/);
+ assert.doesNotMatch(d.getElementById('terminal-output').textContent,/keep-private-code/);
+ terminal={...terminal,revision:3,output:'WaitingStill running',inputError:'input_closed'};
+ d.querySelector('[data-close="terminal-dialog"]').click();d.getElementById('show-terminal').click();await tick();
+ assert.equal(entry.value,'keep-private-code');assert.equal(entry.disabled,true);
+ assert.match(d.getElementById('terminal-status').textContent,/입력을 보내지 못했습니다/);
+ d.getElementById('terminal-stop').click();await tick();
+ assert.equal(calls.filter(c=>c.action==='terminal.stop').length,1);
+ assert.match(d.getElementById('terminal-status').textContent,/중지하는 중/);w.close();
+});
+
+test('terminal closed-input rejection is persistent and distinct from queue backpressure',async()=>{
+ let terminal={id:'failed',revision:1,running:true,output:'Waiting',exitCode:null};
+ const {w,calls}=setup({'terminal.state':()=>terminal,'terminal.input':()=>{
+  terminal={...terminal,revision:2,inputError:'input_closed'};
+  return {ok:false,id:terminal.id,revision:2,reason:'input_closed'};
+ }});await tick();const d=w.document;d.getElementById('show-terminal').click();await tick();
+ const entry=d.getElementById('terminal-command'),form=d.getElementById('terminal-form');entry.value='private-code';
+ form.dispatchEvent(new w.Event('submit',{cancelable:true}));await tick();await tick();
+ assert.match(d.getElementById('terminal-status').textContent,/입력을 보내지 못했습니다/);
+ assert.doesNotMatch(d.getElementById('terminal-status').textContent,/가득|전송했습니다/);
+ assert.equal(entry.value,'private-code');assert.equal(entry.disabled,true);
+ form.dispatchEvent(new w.Event('submit',{cancelable:true}));await tick();
+ assert.equal(calls.filter(c=>c.action==='terminal.input').length,1);w.close();
+});
+
+test('terminal queued acknowledgement cannot overwrite an asynchronous input failure',async()=>{
+ let finish;
+ const terminal={id:'failed',revision:1,running:true,output:'Waiting',exitCode:null};
+ const {w}=setup({'terminal.state':()=>terminal,'terminal.input':()=>new Promise(resolve=>{finish=resolve;})});await tick();
+ const d=w.document;d.getElementById('show-terminal').click();await tick();
+ const entry=d.getElementById('terminal-command');entry.value='private-code';
+ d.getElementById('terminal-form').dispatchEvent(new w.Event('submit',{cancelable:true}));await tick();
+ w.mobileCodexEvent('terminal.inputError',{id:'failed',revision:2,reason:'input_closed'});
+ finish({ok:true,queued:true,id:'failed'});await tick();
+ assert.match(d.getElementById('terminal-status').textContent,/입력을 보내지 못했습니다/);
+ assert.equal(entry.value,'private-code');assert.equal(entry.disabled,true);w.close();
+});
+
+test('terminal ignores stale input errors and late replies after a replacement',async()=>{
+ for (const reply of ['accepted','rejected','exception']) {
+  let finish,fail,terminal={id:'old',revision:1,running:true,output:'Old',exitCode:null};
+  const {w}=setup({'terminal.state':()=>terminal,'terminal.input':()=>new Promise((resolve,reject)=>{finish=resolve;fail=reject;})});await tick();
+  const d=w.document;d.getElementById('show-terminal').click();await tick();
+  const entry=d.getElementById('terminal-command');entry.value='old-secret';
+  d.getElementById('terminal-form').dispatchEvent(new w.Event('submit',{cancelable:true}));await tick();
+  terminal={id:'new',revision:5,running:true,output:'New',exitCode:null,inputError:''};
+  w.mobileCodexEvent('terminal.state',terminal);entry.value='new-draft';
+  w.mobileCodexEvent('terminal.inputError',{id:'old',revision:100,reason:'input_closed'});
+  w.mobileCodexEvent('terminal.inputError',{id:'new',revision:4,reason:'input_closed'});
+  if (reply==='exception') fail(new Error('Old terminal failed'));
+  else finish(reply==='accepted'?{ok:true,queued:true,id:'old'}:{ok:false,reason:'input_closed',id:'old',revision:2});
+  await tick();await tick();
+  assert.equal(entry.value,'new-draft',reply);assert.equal(entry.disabled,false,reply);
+  assert.equal(d.getElementById('terminal-submit').disabled,false,reply);
+  assert.equal(d.getElementById('terminal-output').textContent,'New',reply);
+  assert.equal(d.getElementById('terminal-status').textContent,'실행 중인 프로그램에 입력을 보냅니다.',reply);w.close();
+ }
+});
+
+test('terminal ignores failure events after stopping and restores failed state on a fresh view',async()=>{
+ const terminal={id:'failed',revision:2,running:true,output:'Waiting',exitCode:null,inputError:'input_closed'};
+ const {w}=setup({'terminal.state':()=>terminal},{language:'en'});await tick();
+ const d=w.document;d.getElementById('show-terminal').click();await tick();
+ assert.equal(d.getElementById('terminal-command').disabled,true);
+ assert.match(d.getElementById('terminal-status').textContent,/Could not send input/);
+ w.mobileCodexEvent('terminal.state',{...terminal,revision:3,stopping:true});
+ const stopping=d.getElementById('terminal-status').textContent;
+ w.mobileCodexEvent('terminal.inputError',{id:'failed',revision:4,reason:'input_closed'});
+ assert.equal(d.getElementById('terminal-status').textContent,stopping);
+ w.mobileCodexEvent('terminal.state',{...terminal,revision:5,stopping:false,running:false,exitCode:1});
+ assert.equal(d.getElementById('terminal-command').disabled,false);
+ assert.equal(d.getElementById('terminal-submit').textContent,'Run');w.close();
+});
+
 test('deleting unrelated projects and conversations remains available during Codex or Pro work',async()=>{
  for (const mode of ['busy','proBusy','background']) {
   const {w,calls,snapshot}=setup();await tick();const d=w.document;

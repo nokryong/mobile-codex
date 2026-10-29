@@ -12,6 +12,11 @@ public class TerminalSessionTest {
     public static class Child {
         public static void main(String[] args) throws Exception {
             if (args.length > 0) {
+                if (args[0].equals("closed-input")) {
+                    System.in.close();
+                    System.out.println("INPUT_CLOSED");
+                    Thread.sleep(30000); return;
+                }
                 Runtime.getRuntime().addShutdownHook(new Thread(() -> { try { Thread.sleep(30000); } catch (InterruptedException ignored) {} }));
                 System.out.println("NOT_READING");
                 if (args[0].equals("flood")) while (true) { System.out.print("x".repeat(8192)); System.out.flush(); Thread.sleep(1); }
@@ -74,7 +79,8 @@ public class TerminalSessionTest {
     }
 
     @Test public void blockedInputDoesNotPreventStateReadsOrStop() throws Exception {
-        TerminalSession terminal = new TerminalSession((name, data) -> {});
+        List<String> errors = new CopyOnWriteArrayList<>();
+        TerminalSession terminal = new TerminalSession((name, data) -> { if (name.equals("terminal.inputError")) errors.add(data.toString()); });
         ExecutorService workers = Executors.newFixedThreadPool(4);
         try {
             String id = terminal.start(child("blocked")).getString("id");
@@ -90,10 +96,53 @@ public class TerminalSessionTest {
             workers.submit(() -> { terminal.stop(id); terminal.stop(id); return null; }).get(1, TimeUnit.SECONDS);
             await(() -> !terminal.busy());
             assertTrue(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start) < 4500);
+            assertTrue("cancellation must not be reported as an input failure", errors.isEmpty());
+            assertEquals("", terminal.snapshot().optString("inputError"));
         } finally {
             terminal.stop(null); await(() -> !terminal.busy());
             workers.shutdownNow();
             assertTrue(workers.awaitTermination(5, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test public void closedInputWhileChildLivesRejectsRepeatedRepliesAndResetsForReplacement() throws Exception {
+        List<JSONObject> errors = new CopyOnWriteArrayList<>();
+        TerminalSession terminal = new TerminalSession((name, data) -> { if (name.equals("terminal.inputError")) errors.add(data); });
+        ExecutorService workers = Executors.newFixedThreadPool(4);
+        try {
+            String old = terminal.start(child("closed-input")).getString("id");
+            await(() -> terminal.snapshot().getString("output").contains("INPUT_CLOSED"));
+            assertTrue(terminal.input(old, "fixture-private-code").getBoolean("queued"));
+            await(() -> !errors.isEmpty());
+            JSONObject failed = terminal.snapshot();
+            assertTrue("stdin failure must not pretend the child exited", failed.getBoolean("running"));
+            assertEquals(old, errors.get(0).getString("id"));
+            assertFalse(errors.toString().contains("fixture-private-code"));
+            List<Future<JSONObject>> replies = new ArrayList<>();
+            for (int i = 0; i < 20; i++) replies.add(workers.submit(() -> terminal.input(old, "again")));
+            for (Future<JSONObject> reply : replies) {
+                JSONObject result = reply.get(1, TimeUnit.SECONDS);
+                assertFalse(result.getBoolean("ok"));
+                assertFalse(result.optBoolean("queued"));
+                assertEquals("input_closed", result.getString("reason"));
+                assertEquals(old, result.getString("id"));
+            }
+            assertEquals("input_closed", failed.getString("inputError"));
+            assertEquals(failed.getLong("revision"), errors.get(0).getLong("revision"));
+            assertEquals(1, errors.size());
+            assertThrows(IOException.class, () -> terminal.input("stale-id", "secret"));
+            terminal.stop(old); await(() -> !terminal.busy());
+            String fresh = terminal.start(child()).getString("id");
+            assertEquals("", terminal.snapshot().getString("inputError"));
+            assertThrows(IOException.class, () -> terminal.input(old, "old-code"));
+            terminal.input(fresh, "fixture-private-code");
+            terminal.input(fresh, "");
+            await(() -> !terminal.busy());
+            assertEquals(0, terminal.snapshot().getInt("exitCode"));
+            assertEquals(1, errors.size());
+        } finally {
+            terminal.stop(null); await(() -> !terminal.busy());
+            workers.shutdownNow(); assertTrue(workers.awaitTermination(5, TimeUnit.SECONDS));
         }
     }
 }

@@ -20,6 +20,7 @@ public final class TerminalSession {
     private String id = "";
     private long revision;
     private boolean stopping;
+    private String inputError = "";
     private Integer exitCode;
     private final StringBuilder output = new StringBuilder();
 
@@ -27,13 +28,13 @@ public final class TerminalSession {
     public synchronized boolean busy() { return process != null; }
     public synchronized JSONObject snapshot() {
         return obj("id", id, "revision", revision, "running", busy(), "stopping", stopping,
-            "output", output.toString(), "exitCode", exitCode == null ? JSONObject.NULL : exitCode);
+            "inputError", inputError, "output", output.toString(), "exitCode", exitCode == null ? JSONObject.NULL : exitCode);
     }
     public synchronized JSONObject start(ProcessBuilder builder) throws IOException {
         if (busy()) throw new IOException(t("터미널 명령이 실행 중입니다."));
         Process launched = builder.redirectErrorStream(true).start();
         process = launched; id = UUID.randomUUID().toString(); stopping = false; exitCode = null;
-        input.clear(); pendingBytes = 0;
+        input.clear(); pendingBytes = 0; inputError = "";
         output.setLength(0); revision++;
         events.event("terminal.state", snapshot());
         Thread reader = new Thread(() -> read(launched), "mobile-terminal");
@@ -45,6 +46,7 @@ public final class TerminalSession {
     public synchronized JSONObject input(String expectedId, String text) throws IOException {
         if (process == null || !process.isAlive() || stopping || !id.equals(expectedId))
             throw new IOException(t("입력을 받을 터미널이 종료되거나 변경되었습니다."));
+        if (!inputError.isEmpty()) return obj("ok", false, "reason", inputError, "id", id, "revision", revision);
         byte[] bytes = (text.replaceAll("[\\r\\n]+$", "") + "\n").getBytes(StandardCharsets.UTF_8);
         if (text.length() > 16384 || text.getBytes(StandardCharsets.UTF_8).length > 16384 || text.indexOf('\0') >= 0)
             throw new IOException(t("터미널 입력이 너무 길거나 올바르지 않습니다."));
@@ -67,13 +69,17 @@ public final class TerminalSession {
                 target.getOutputStream().flush();
                 synchronized (this) { if (process == target) pendingBytes -= bytes.length; }
             }
-        } catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); }
-        catch (IOException failure) {
-            synchronized (this) {
-                if (process == target && !stopping)
-                    events.event("terminal.inputError", obj("id", id, "reason", "input_closed"));
-            }
-        }
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt(); inputFailed(target);
+        } catch (IOException failure) { inputFailed(target); }
+    }
+    private synchronized void inputFailed(Process target) {
+        if (process != target || stopping) return;
+        inputError = "input_closed";
+        input.clear(); pendingBytes = 0; revision++;
+        // The reader and stop path remain active, but this writer can no longer consume input.
+        events.event("terminal.inputError", obj("id", id, "revision", revision, "reason", inputError));
+        events.event("terminal.state", snapshot());
     }
     public void stop(String expectedId) throws IOException {
         Process target;
