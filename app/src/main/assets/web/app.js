@@ -2174,6 +2174,11 @@
     else if (name === 'attachments.picked') acceptPickedAttachments(data, data.draftKey || '');
     else if (name === 'login.completed') { if (data.success) { login = null; close('login-dialog'); toast(t('ChatGPT 계정을 연결했습니다.')); } else $('login-help').textContent = data.error || t('로그인이 취소되었습니다. 다시 연결해 주세요.'); }
     else if (name === 'terminal.state') renderTerminal(data);
+    else if (name === 'terminal.inputError' && data.id === terminalState.id && data.revision > terminalState.revision && terminalState.running && !terminalState.stopping) {
+      terminalState.revision = data.revision;
+      terminalState.inputError = data.reason;
+      terminalControls();
+    }
     else if (name === 'terminal.output' && data.id === terminalState.id && data.revision > terminalState.revision) {
       terminalState.revision = data.revision;
       $('terminal-output').textContent = ($('terminal-output').textContent + data.text).slice(-1000000);
@@ -2424,13 +2429,15 @@
   ['edit-config', 'tools-config'].forEach(id => on(id, config)); on('config-save', async () => { await call('config.save', {content: $('config-editor').value}); configOriginal = $('config-editor').value; await call('runtime.start'); close('config-dialog'); toast(t('설정을 적용했습니다.')); });
   function terminalControls() {
     const running = terminalState.running, input = $('terminal-command');
+    const inputFailed = running && !!terminalState.inputError;
     $('terminal-submit').textContent = t(running ? '입력 전송' : '실행');
-    $('terminal-submit').disabled = terminalSending || terminalState.stopping;
+    $('terminal-submit').disabled = terminalSending || terminalState.stopping || inputFailed;
     $('terminal-stop').disabled = !running || terminalState.stopping;
-    input.disabled = terminalSending || terminalState.stopping;
+    input.disabled = terminalSending || terminalState.stopping || inputFailed;
     input.type = running ? 'password' : 'text';
     input.placeholder = t(running ? '입력 후 전송 · 빈 입력은 Enter' : '명령 입력');
     input.setAttribute('aria-label', t(running ? '프로그램 입력' : '셸 명령'));
+    if (inputFailed && !terminalState.stopping) $('terminal-status').textContent = t('터미널에 입력을 보내지 못했습니다.');
   }
   function renderTerminal(value) {
     if (typeof value.revision !== 'number' || value.revision < terminalState.revision) return;
@@ -2446,22 +2453,29 @@
   on('terminal-stop', async () => { renderTerminal(await call('terminal.stop', {id:terminalState.id})); });
   on('terminal-form', async e => {
     e.preventDefault();
-    if (terminalSending || terminalState.stopping) return;
+    if (terminalSending || terminalState.stopping || (terminalState.running && terminalState.inputError)) return;
     const text = $('terminal-command').value, session = {...terminalState};
     if (!session.running && !text.trim()) return;
     terminalSending = true; terminalControls();
     try {
       if (session.running) {
         const result = await call('terminal.input', {id:session.id, text});
-        if (result.ok === false) throw new Error(t('터미널 입력 대기열이 가득 찼습니다. 잠시 후 다시 보내 주세요.'));
+        if (terminalState.id !== session.id || !terminalState.running || terminalState.stopping) return;
+        if (result.ok === false) {
+          if (result.reason === 'input_closed') {
+            terminalState.inputError = result.reason;
+            if (result.revision > terminalState.revision) terminalState.revision = result.revision;
+          }
+          throw new Error(t(result.reason === 'input_queue_full' ? '터미널 입력 대기열이 가득 찼습니다. 잠시 후 다시 보내 주세요.' : '터미널에 입력을 보내지 못했습니다.'));
+        }
+        if (terminalState.inputError) return;
         $('terminal-status').textContent = t('입력을 전송했습니다.');
       } else renderTerminal(await call('terminal.run', {command:text}));
       $('terminal-command').value = '';
     } catch (error) {
-      $('terminal-status').textContent = errorText(error.message);
       // A stale reply must never be retried as a fresh shell command.
       try { const current = await call('terminal.state'); renderTerminal(current); } catch {}
-      $('terminal-status').textContent = errorText(error.message);
+      if (terminalState.id === session.id && !terminalState.stopping) $('terminal-status').textContent = errorText(error.message);
     } finally { terminalSending = false; terminalControls(); $('terminal-command').focus(); }
   }, 'submit');
   on('show-tools', () => show('tool-menu-dialog')); on('show-tools-panel', () => { closeToolMenu(); return loadTools(false); }); on('refresh-tools', () => loadTools(true));
