@@ -22,8 +22,8 @@ public final class EngineService extends Service {
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent != null && "stop".equals(intent.getAction())) {
             ((MobileCodexApp) getApplication()).engine().stop();
-            stopSelf();
         }
+        ((MobileCodexApp) getApplication()).engine().reconcileService();
         return START_NOT_STICKY;
     }
     @Override public void onDestroy() {

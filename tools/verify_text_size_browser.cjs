@@ -11,7 +11,7 @@ fs.mkdirSync(output,{recursive:true});
    const page=await browser.newPage({viewport:{width,height}}),errors=[];
    page.on('pageerror',error=>errors.push(error.message));
    await page.route('**/*',route=>{
-    const url=new URL(route.request().url()),file=path.resolve(web,'.'+url.pathname);
+    const url=new URL(route.request().url()),file=require('./icon_asset.cjs').iconAsset(web,url.pathname);
     return url.origin==='https://appassets.androidplatform.net'&&file.startsWith(web+path.sep)&&fs.existsSync(file)?route.fulfill({path:file}):route.abort();
    });
    await page.addInitScript(()=>{

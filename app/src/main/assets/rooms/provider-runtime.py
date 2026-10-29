@@ -256,7 +256,8 @@ def terminal(argv, env):
     from terminal_io import run_terminal
     # Sign-in URLs run to several hundred characters: a wide terminal keeps them on one
     # line, so the app can open or copy them whole.
-    return run_terminal(argv, env, lambda text: emit(kind='output', text=text), columns=500)
+    return run_terminal(argv, env, lambda text: emit(kind='output', text=text), columns=500,
+                        input_result=lambda result: emit(kind='inputResult', **result))
 
 def download_installer(url, installer, env):
     # Match the official curl-based installer. Python urllib is rejected with

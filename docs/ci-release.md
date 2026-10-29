@@ -26,6 +26,14 @@ Pull requests keep validation/build checks and never sign or publish releases.
 Published release versions remain immutable. Bump the version for a new release;
 do not replace an existing official APK to repair CI or UI changes.
 
+Production builds use `assembleRelease` with debugging and minification disabled.
+`PRODUCTION_APK` names the unsigned release APK explicitly; signing preserves the
+original certificate. Preparation checks manifest flags, exact package/ARM64/minSdk,
+checked-out version, published versionCode, signer, size and SHA-256. Publication
+rechecks the exact output APK against that manifest. Neither signing nor update
+preparation has a default debug APK path. Test APK creation does not establish
+device, upgrade, runtime or Live smoke success.
+
 A push that only fixes Android test sources can reuse a completed main-branch
 UI/source checks job. The gate compares the Git blob identities of all checked
 inputs and the exact checks-job commands, and verifies that the original JS,

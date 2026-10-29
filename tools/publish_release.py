@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Publish verified build assets as a versioned GitHub release using the Actions token."""
 import hashlib
+import argparse
 import json
 import os
 from pathlib import Path
@@ -17,7 +18,7 @@ def gh(*args):
     return result.stdout
 
 
-def validate_assets(folder: Path) -> tuple[dict, list[Path]]:
+def validate_assets(folder: Path, *, apk_path=None, build_tools=None) -> tuple[dict, list[Path]]:
     metadata = json.loads((folder / 'mobile-codex-update.json').read_text())
     version = metadata['versionName']
     if not re.fullmatch(r'\d+\.\d+\.\d+(?:-(?:alpha|beta|rc)(?:[.-]?\d+)?)?', version):
@@ -26,6 +27,18 @@ def validate_assets(folder: Path) -> tuple[dict, list[Path]]:
     if metadata['applicationId'] != 'dev.mobilecodex.app' or metadata['fileName'] != expected:
         raise ValueError('Unexpected APK identity')
     apk = folder / expected
+    if apk_path is not None and apk_path.resolve() != apk.resolve():
+        raise ValueError('Explicit APK path does not match the update manifest')
+    policy = json.loads(Path(__file__).with_name('release-policy.json').read_text())
+    if (metadata.get('debuggable') is not False or metadata.get('testOnly') is not False
+            or metadata.get('signingCertificateSha256') != policy['signingCertificateSha256']
+            or metadata.get('abi') != policy['abi'] or metadata.get('minimumSdk') != policy['minimumSdk']
+            or type(metadata.get('versionCode')) is not int or metadata['versionCode'] <= policy['minimumPreviousVersionCode']):
+        raise ValueError('Update manifest is not a compatible production APK')
+    if build_tools is not None:
+        from prepare_update_release import inspect_apk
+        if inspect_apk(apk, build_tools, expected=metadata) != metadata:
+            raise ValueError('Final APK does not match its verified manifest')
     with apk.open('rb') as stream:
         digest = hashlib.file_digest(stream, 'sha256').hexdigest()
     if digest != metadata['sha256'] or apk.stat().st_size != metadata['size']:
@@ -40,11 +53,15 @@ def validate_assets(folder: Path) -> tuple[dict, list[Path]]:
     return metadata, assets
 
 
-def publish():
+def publish(*, folder=Path('artifacts/update'), apk_path=None, build_tools=None, previous_manifest=None):
     repo, commit = os.environ['GITHUB_REPOSITORY'], os.environ['GITHUB_SHA']
     if os.environ.get('GITHUB_REF') != 'refs/heads/main' or os.environ.get('GITHUB_EVENT_NAME') not in ('push', 'workflow_dispatch'):
         raise ValueError('Releases can only be published from main push/manual builds')
-    metadata, assets = validate_assets(Path('artifacts/update'))
+    metadata, assets = validate_assets(folder, apk_path=apk_path, build_tools=build_tools)
+    if previous_manifest is not None:
+        previous = json.loads(previous_manifest.read_text())
+        if previous.get('applicationId') != metadata['applicationId'] or metadata['versionCode'] <= previous['versionCode']:
+            raise ValueError('versionCode must increase beyond the published version')
     version = metadata['versionName']; tag = 'v' + version
     # A successful full list request distinguishes an absent tag from auth/network failures.
     releases = json.loads(gh('api', '--paginate', '--slurp', f'repos/{repo}/releases?per_page=100'))
@@ -82,4 +99,10 @@ def publish():
 
 
 if __name__ == '__main__':
-    publish()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--folder', type=Path, required=True)
+    parser.add_argument('--apk', type=Path, required=True)
+    parser.add_argument('--build-tools', type=Path, required=True)
+    parser.add_argument('--previous-manifest', type=Path, required=True)
+    args = parser.parse_args()
+    publish(folder=args.folder, apk_path=args.apk, build_tools=args.build_tools, previous_manifest=args.previous_manifest)

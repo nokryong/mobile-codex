@@ -172,5 +172,5 @@ final class CharacterPacks {
     private static String packId(String documentId){try{byte[] b=MessageDigest.getInstance("SHA-256").digest(documentId.getBytes(StandardCharsets.UTF_8));StringBuilder s=new StringBuilder("custom-");for(int i=0;i<8;i++)s.append(String.format(Locale.ROOT,"%02x",b[i]));return s.toString();}catch(Exception e){return "custom-"+Integer.toHexString(documentId.hashCode());}}
     private static String message(Exception e){return e.getMessage()==null?"캐릭터팩을 읽지 못했습니다.":e.getMessage();}
     private static WebResourceResponse denied(){return new WebResourceResponse("text/plain","UTF-8",403,"Forbidden",Map.of(),new ByteArrayInputStream(new byte[0]));}
-    private WebResourceResponse builtinResponse(String key){try{int i=KEYS.indexOf(key)+1;return new WebResourceResponse("image/png",null,200,"OK",Map.of("Cache-Control","no-store","X-Content-Type-Options","nosniff"),context.getAssets().open("web/chat-icons/"+String.format(Locale.ROOT,"%02d",i)+"-"+key+".png"));}catch(Exception e){return denied();}}
+    private WebResourceResponse builtinResponse(String key){try{int i=KEYS.indexOf(key)+1;return BuiltinIcons.response(context.getAssets(),String.format(Locale.ROOT,"%02d",i)+"-"+key+".png");}catch(Exception e){return denied();}}
 }

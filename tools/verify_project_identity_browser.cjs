@@ -16,7 +16,7 @@ fs.mkdirSync(output, {recursive:true});
    await page.route('**/*', route => {
     const url = new URL(route.request().url());
     if (url.origin !== 'https://appassets.androidplatform.net') return route.abort();
-    const file = path.resolve(web, '.' + url.pathname);
+    const file = require('./icon_asset.cjs').iconAsset(web,url.pathname);
     return file.startsWith(web + path.sep) && fs.existsSync(file) ? route.fulfill({path:file}) : route.fulfill({status:404,body:''});
    });
    await page.addInitScript(() => {

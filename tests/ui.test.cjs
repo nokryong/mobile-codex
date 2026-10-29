@@ -1006,8 +1006,9 @@ test('live status uses local thinking and working icons without adding transcrip
  w.mobileCodexEvent('state',{...snapshot,busy:false,messages:[{id:'a',role:'assistant',text:'[[icon:수정완료]]\n수정을 완료했어요.'}]});assert.equal(d.getElementById('activity').hidden,true);assert.match(d.querySelector('.message .chat-character').src,/27-fixed.png$/);
 });
 test('all character URLs resolve to bundled source bytes and cannot be arbitrary file paths',()=>{
- const path=require('node:path');const dir=root+'chat-icons/';const files=fs.readdirSync(dir).filter(f=>f.endsWith('.png')), hashes=JSON.parse(fs.readFileSync('tests/chat-icons.sha256.json','utf8'));
- assert.equal(files.length,32);for(const file of files){const name=file.replace(/^\d+-/,'').replace(/\.png$/,'');assert.equal(C.chatIconUrl(name),'/chat-icons/'+file);assert.equal(require('node:crypto').createHash('sha256').update(fs.readFileSync(dir+file)).digest('hex'),hashes[file]);}
+ const dir=root+'chat-icons/',manifest=JSON.parse(fs.readFileSync(dir+'manifest.json','utf8')),hashes=JSON.parse(fs.readFileSync('tests/chat-icons-derived.sha256.json','utf8')),originals=JSON.parse(fs.readFileSync('tests/chat-icons.sha256.json','utf8'));
+ const entries=Object.entries(manifest.icons);assert.equal(entries.length,32);assert.equal(fs.readdirSync(dir).filter(f=>f.endsWith('.png')).length,0);
+ for(const [file,entry] of entries){const name=file.replace(/^\d+-/,'').replace(/\.png$/,'');assert.equal(C.chatIconUrl(name),'/chat-icons/'+file);assert.equal(entry.asset,file.replace(/\.png$/,'.webp'));assert.equal(require('node:crypto').createHash('sha256').update(fs.readFileSync(dir+entry.asset)).digest('hex'),hashes[file]);assert.equal(require('node:crypto').createHash('sha256').update(fs.readFileSync('icon-pack/gptchan/'+file)).digest('hex'),originals[file]);}
  for(const bad of ['../auth.json','https://example.test/icon.png','toString',''])assert.equal(C.chatIconUrl(bad),null);
 });
 
@@ -1677,6 +1678,16 @@ test('terminal exit clears unsent code and stale input is never executed as a co
  assert.equal(calls.filter(c=>c.action==='terminal.run').length,0);
  w.mobileCodexEvent('terminal.state',{id:'login-1',revision:1,running:true,output:'old'});
  assert.equal(d.getElementById('terminal-submit').textContent,'실행');w.close();
+});
+
+test('terminal queue rejection keeps unsent input and leaves stop available',async()=>{
+ const terminal={id:'blocked',revision:1,running:true,output:'Waiting',exitCode:null};
+ const {w,calls}=setup({'terminal.state':()=>terminal,'terminal.input':()=>({ok:false,reason:'input_queue_full'}),'terminal.stop':()=>({...terminal,stopping:true})});await tick();
+ const d=w.document;d.getElementById('show-terminal').click();await tick();
+ d.getElementById('terminal-command').value='keep this';d.getElementById('terminal-form').dispatchEvent(new w.Event('submit',{cancelable:true}));await tick();await tick();
+ assert.equal(d.getElementById('terminal-command').value,'keep this');assert.match(d.getElementById('terminal-status').textContent,/가득/);
+ assert.equal(d.getElementById('terminal-stop').disabled,false);d.getElementById('terminal-stop').click();await tick();
+ assert.equal(calls.filter(c=>c.action==='terminal.stop').length,1);w.close();
 });
 
 test('deleting unrelated projects and conversations remains available during Codex or Pro work',async()=>{

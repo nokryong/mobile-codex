@@ -186,7 +186,7 @@ public class CharacterPacksTest {
 
     @Test public void customImageFailureFallsBackToBundledAssetAndRecordsError() throws Exception {
         Map<String, byte[]> files = allImages(png(0xffff00ff)); Provider.addPack("pack-failure", "실패 팩", files, mapping("실패 팩", files.keySet())); CharacterPacks packs = new CharacterPacks(context()); packs.setTree(TREE); String id = packByName(packs.refresh(), "실패 팩").getString("id"); packs.select(id); Provider.denyOpens = true;
-        byte[] fallback = read(packs.route(customUri(id, "idle"))); byte[] bundled; try (InputStream input = context().getAssets().open("web/chat-icons/01-idle.png")) { bundled = input.readAllBytes(); } assertArrayEquals(bundled, fallback); JSONObject failed = packByName(packs.list(), "실패 팩"); assertFalse(failed.getBoolean("valid")); assertEquals("builtin", packs.list().getString("selectedPackId")); assertEquals("builtin", new CharacterPacks(context()).list().getString("selectedPackId")); assertTrue(packs.list().getString("error").length() > 0);
+        byte[] fallback = read(packs.route(customUri(id, "idle"))); byte[] bundled; try (InputStream input = BuiltinIcons.response(context().getAssets(),"01-idle.png").getData()) { bundled = input.readAllBytes(); } assertArrayEquals(bundled, fallback); JSONObject failed = packByName(packs.list(), "실패 팩"); assertFalse(failed.getBoolean("valid")); assertEquals("builtin", packs.list().getString("selectedPackId")); assertEquals("builtin", new CharacterPacks(context()).list().getString("selectedPackId")); assertTrue(packs.list().getString("error").length() > 0);
     }
 
     private static Context context() { return RuntimeEnvironment.getApplication(); }

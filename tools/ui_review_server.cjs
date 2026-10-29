@@ -36,6 +36,7 @@ function send(res, status, body = '', type = 'text/plain; charset=utf-8', method
 function safeAsset(urlPath) {
   let decoded;
   try { decoded = decodeURIComponent(urlPath.replace(/^\/assets\//, '')); } catch { return null; }
+  if (/^chat-icons\/[0-9]{2}-[a-z]+(?:-[a-z]+)*\.png$/.test(decoded)) decoded=decoded.replace(/\.png$/,'.webp');
   if (!decoded || decoded.includes('\\') || decoded.split('/').some(part => !part || part === '.' || part === '..') || !assets.has(decoded)) return null;
   const file = path.resolve(web, decoded);
   return file.startsWith(web + path.sep) && fs.statSync(file).isFile() ? {file, relative:decoded} : null;

@@ -24,7 +24,7 @@ final class ChatIconStore {
     private static final Set<String> refreshing = java.util.concurrent.ConcurrentHashMap.newKeySet();
     ChatIconStore(Context context) {
         this.context = context;
-        try { files = new HashSet<>(Arrays.asList(context.getAssets().list("web/chat-icons"))); }
+        try { files = BuiltinIcons.files(context.getAssets()).keySet(); }
         catch (IOException e) { throw new IllegalStateException("아이콘 목록을 읽지 못했습니다.", e); }
         cache = new File(context.getCacheDir(), "chat-firebase-icons");
     }
@@ -41,9 +41,9 @@ final class ChatIconStore {
                 finally { refreshing.remove(name); }
             });
         }
-        try { return png(target.isFile() ? new FileInputStream(target) : context.getAssets().open("web/chat-icons/" + name)); }
+        try { return target.isFile() ? png(new FileInputStream(target)) : BuiltinIcons.response(context.getAssets(), name); }
         catch (Exception error) {
-            try { return png(context.getAssets().open("web/chat-icons/" + name)); }
+            try { return BuiltinIcons.response(context.getAssets(), name); }
             catch (IOException ignored) { return denied(); }
         }
     }

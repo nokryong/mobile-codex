@@ -80,6 +80,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
+      PRODUCTION_APK: app/build/outputs/apk/release/app-release-unsigned.apk
       # Only trusted branches in the private test repository may access signing.
       PRIVATE_TEST_PR: ${{ github.repository == 'SeeUSoon93/mobile-codex' && github.event.repository.private == true && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
     permissions:
@@ -146,7 +147,7 @@ jobs:
           PYTHONPATH=tests python3 -m unittest test_devtools.DevtoolsPackagingTests.test_real_prepared_runtime_contract
       - name: Build and check Android app
         if: ${{ !inputs.apk_only && needs.checks.outputs.tested != 'true' }}
-        run: ./gradlew --no-daemon --build-cache assembleDebug testDebugUnitTest lintDebug assembleDebugAndroidTest
+        run: ./gradlew --no-daemon --build-cache assembleDebug testDebugUnitTest lintDebug assembleDebugAndroidTest assembleRelease testReleaseUnitTest lintRelease
       - name: Verify Android and desktop project transfer interoperability
         if: ${{ !inputs.apk_only && needs.checks.outputs.tested != 'true' }}
         run: |
@@ -155,15 +156,21 @@ jobs:
           JAVA_HOME="$JAVA_HOME" JSON_JAR="$JSON_JAR" npm run test:project-transfer
       - name: Build APK without repeating tested checks
         if: ${{ inputs.apk_only || needs.checks.outputs.tested == 'true' }}
-        run: ./gradlew --no-daemon --build-cache assembleDebug
+        run: ./gradlew --no-daemon --build-cache assembleRelease
       - name: Sign APK with the original installation key
         if: github.event_name != 'pull_request' || env.PRIVATE_TEST_PR == 'true'
         env:
           MOBILE_CODEX_SIGNING_JSON: ${{ secrets.MOBILE_CODEX_SIGNING_JSON }}
-        run: python3 tools/sign_ci_apk.py --build-tools "$ANDROID_HOME/build-tools/35.0.0"
-      - name: Prepare verified update assets
+        run: python3 tools/sign_ci_apk.py --apk "$PRODUCTION_APK" --build-tools "$ANDROID_HOME/build-tools/35.0.0"
+      - name: Read the currently published version
         if: github.event_name != 'pull_request' || env.PRIVATE_TEST_PR == 'true'
-        run: python3 tools/prepare_update_release.py --build-tools "$ANDROID_HOME/build-tools/35.0.0"
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download --repo nokryong/mobile-codex --pattern mobile-codex-update.json --dir artifacts/previous
+      - name: Prepare verified update assets
+        id: update
+        if: github.event_name != 'pull_request' || env.PRIVATE_TEST_PR == 'true'
+        run: python3 tools/prepare_update_release.py --apk "$PRODUCTION_APK" --build-tools "$ANDROID_HOME/build-tools/35.0.0" --identity app/build.gradle --previous-manifest artifacts/previous/mobile-codex-update.json --output artifacts/update
       - name: Collect corresponding tool sources on cache miss
         if: (github.event_name != 'pull_request' || env.PRIVATE_TEST_PR == 'true') && steps.sources.outputs.cache-hit != 'true'
         run: python3 tools/prepare_devtools_sources.py
@@ -171,6 +178,7 @@ jobs:
         if: env.PRIVATE_TEST_PR == 'true' && !inputs.apk_only
         env:
           GH_TOKEN: ${{ github.token }}
+          UPDATE_APK: ${{ steps.update.outputs.apk-path }}
         run: |
           python3 - <<'PY'
           import json
@@ -215,7 +223,7 @@ jobs:
           if actual.get('full_name') != repo or actual.get('private') is not True:
               raise ValueError('Private test builds cannot be published to a public or different repository.')
 
-          metadata, assets = validate_assets(Path('artifacts/update'))
+          metadata, assets = validate_assets(Path('artifacts/update'), apk_path=Path(os.environ['UPDATE_APK']), build_tools=Path(os.environ['ANDROID_HOME']) / 'build-tools/35.0.0')
           version = metadata['versionName']
           tag = f'private-pr-{number}-v{version}-run-{run_id}-{attempt}'
           notes = (f'Private test build for PR #{number}, Actions run {run_id} (attempt {attempt}).\n\n'
@@ -287,7 +295,7 @@ jobs:
         if: (github.repository == 'nokryong/mobile-codex' || github.repository == 'SeeUSoon93/mobile-codex') && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && !inputs.apk_only
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 tools/publish_release.py
+        run: python3 tools/publish_release.py --folder artifacts/update --apk "${{ steps.update.outputs.apk-path }}" --build-tools "$ANDROID_HOME/build-tools/35.0.0" --previous-manifest artifacts/previous/mobile-codex-update.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: failure()
         continue-on-error: ${{ env.PRIVATE_TEST_PR == 'true' }}

@@ -111,6 +111,7 @@ public final class Engine {
     private volatile String liveRemote = "", liveLocal = "", liveKey = "";
     private Approval pendingApproval;
     private File stateFile;
+    private SessionStore sessionStore;
     private final File workDir;
     private final CodexHome codexHome;
     /** CODEX_HOME used by the currently running app-server. Add-login uses an
@@ -121,6 +122,7 @@ public final class Engine {
     private final DevTools devTools;
     private final LinuxRuntime linux;
     private AgentBridge agentBridge;
+    private final java.util.concurrent.atomic.AtomicInteger agentRequests = new java.util.concurrent.atomic.AtomicInteger();
     /** Tool permission keyed by a unique agent turn, never shared between participants. */
     private final Map<String, JSONObject> roomLeases = new ConcurrentHashMap<>();
     private volatile Process roomCommand;
@@ -173,8 +175,9 @@ public final class Engine {
         changes = new ChangeReview(new File(context.getFilesDir(), "change-backups"), this::git);
         workDir = new File(context.getFilesDir(), "workspace"); workDir.mkdirs();
         stateFile = new File(context.getFilesDir(), "sessions.json");
-        try { sessions = new JSONArray(dev.mobilecodex.app.core.Utf8Files.read(stateFile.toPath())); } catch (Exception ignored) {}
-        restoreSessionProjects();
+        sessionStore = new SessionStore(stateFile);
+        try { sessions = sessionStore.sessions(); } catch (IOException impossible) { throw new IllegalStateException(impossible); }
+        if (!sessionStore.recoveryRequired()) restoreSessionProjects();
     }
     public void attach(Ui ui) {
         this.ui = ui;
@@ -250,7 +253,7 @@ public final class Engine {
                 "busy", runningTurns.containsKey(s.optString("id")) || s.optJSONObject("proOperation") != null || groupRunning(s.optString("id")),
                 "approvalPending", s.optBoolean("approvalPending")));
         }
-        return obj("ready", ready, "busy", busy, "status", t(status), "account", account,
+        return obj("ready", ready, "busy", busy, "status", t(status), "account", account, "sessionStorage", sessionStore.status(),
             "authState", authState, "authError", t(authError),
             "accounts", accountProfiles.list(), "rateLimits", rateLimits, "models", models, "workspace", documents.workspace(), "projects", documents.projects(), "sessions", summaries,
             "threadId", threadId, "turnId", turnId, "live", obj("key", liveKey, "threadId", liveLocal), "proBusy", (pendingConsultation != null && pendingConsultation.localThread.equals(threadId)) || (active != null && active.optJSONObject("proOperation") != null),
@@ -307,14 +310,10 @@ public final class Engine {
     }
     /** Writes an already-staged session state. Mutating RPCs use this directly so they cannot report a durable success on I/O failure. */
     private void persistSessions(JSONArray value) throws IOException {
-        File pending = new File(stateFile.getParentFile(), "sessions.json.tmp");
-        try {
-            dev.mobilecodex.app.core.Utf8Files.write(pending.toPath(), value.toString());
-            Files.move(pending.toPath(), stateFile.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-        } catch (Exception e) {
-            pending.delete();
-            throw new IOException(t("대화 기록을 저장하지 못했습니다."), e);
-        }
+        try { sessionStore.save(value); }
+        catch (IOException e) { throw new IOException(t(sessionStore.recoveryRequired()
+            ? "대화 기록을 불러오지 못했습니다. 원본을 보존했습니다. 복구 후 다시 시도해 주세요."
+            : "대화 기록을 저장하지 못했습니다."), e); }
     }
     private int pendingDeletionCount() {
         int count = 0;
@@ -325,7 +324,7 @@ public final class Engine {
         return count;
     }
     /** Test-only state-store seam for durable-write failure coverage. */
-    void setStateFileForTest(File file) { stateFile = file; }
+    void setStateFileForTest(File file) { stateFile = file; sessionStore = new SessionStore(file); }
     /** Reconcile durable sessions with current bindings without changing chat identity or contents. */
     private void restoreSessionProjects() {
         boolean changed = false, generalized = false;
@@ -519,17 +518,34 @@ public final class Engine {
     }
     public void phoneStateChanged() { io.execute(this::publish); }
     public void handle(String action, JSONObject args, Reply reply) {
+        // The terminal owns its bounded writer and stop deadline. These controls
+        // must also respond while the Codex queue is waiting on an RPC.
+        if (Set.of("terminal.input", "terminal.stop", "terminal.state").contains(action)) {
+            try {
+                JSONObject result;
+                if (action.equals("terminal.input")) result = terminal.input(args.getString("id"), args.getString("text"));
+                else { if (action.equals("terminal.stop")) terminal.stop(args.getString("id")); result = terminal.snapshot(); }
+                reply.complete(result, null);
+            } catch (Exception error) { reply.complete(null, unwrap(error)); }
+            return;
+        }
         if (action.startsWith("agents.")) {
+            agentRequests.incrementAndGet();
             try {
                 context.startForegroundService(new Intent(context, EngineService.class));
                 agentBridge().handle(action, args, (result, error) -> {
-                    if (error == null && result != null && action.equals("agents.providers.check")) {
-                        JSONArray providers = result.optJSONArray("providers");
-                        io.execute(() -> { mergeAgentProviders(providers); publish(); });
+                    try {
+                        if (error == null && result != null && action.equals("agents.providers.check")) {
+                            JSONArray providers = result.optJSONArray("providers");
+                            io.execute(() -> { mergeAgentProviders(providers); publish(); });
+                        }
+                        reply.complete(result, error);
+                    } finally {
+                        agentRequests.decrementAndGet();
+                        reconcileService();
                     }
-                    reply.complete(result, error);
                 });
-            } catch (Exception e) { reply.complete(null, e); }
+            } catch (Exception e) { agentRequests.decrementAndGet(); reconcileService(); reply.complete(null, e); }
             return;
         }
         if (action.startsWith("chat.pro.") || ((action.equals("chat.send") || action.equals("chat.steer")) && args.optBoolean("consultPro"))) {
@@ -541,9 +557,19 @@ public final class Engine {
         if (action.equals("linux.cancel")) { linux.cancel(); reply.complete(linux.status(), null); return; }
         io.execute(() -> {
             try {
+                if (sessionStore.recoveryRequired() && action.startsWith("chat.") && !action.equals("chat.stop"))
+                    throw new IOException(t("대화 기록을 저장할 수 없습니다. 복구가 필요합니다. 원본은 보존되어 있습니다."));
                 if (Set.of("terminal.run", "files.mutate", "changes.restore", "recovery.restore").contains(action) && (!roomLeases.isEmpty() || (roomCommand != null && roomCommand.isAlive())))
                     throw new IOException(t("초대한 에이전트의 작업을 중지한 뒤 파일이나 명령을 실행해 주세요."));
                 switch (action) {
+                    case "sessions.storage" -> reply.complete(sessionStore.status(), null);
+                    case "sessions.recover" -> {
+                        ensureRuntimeSettingsIdle();
+                        if (!args.optBoolean("acceptOlderSnapshot")) throw new IOException(t("이전 기록의 복원을 확인해 주세요."));
+                        sessions = sessionStore.recover(args.getString("sha256"));
+                        active = null; threadId = ""; serverThreadId = ""; draftAgents = new JSONArray();
+                        restoreSessionProjects(); publish(); reply.complete(sessionStore.status(), null);
+                    }
                     case "live.voices" -> { start(); reply.complete(call("thread/realtime/listVoices", obj()), null); }
                     case "live.start" -> { requireChatScope(args); reply.complete(startLive(args), null); }
                     case "live.stop" -> { if (args.optString("key").equals(liveKey)) stopLive(); reply.complete(obj("ok", true), null); }
@@ -660,9 +686,6 @@ public final class Engine {
                         reply.complete(obj("ok", true), null);
                     }
                     case "terminal.run" -> reply.complete(runTerminal(args.getString("command")), null);
-                    case "terminal.state" -> reply.complete(terminal.snapshot(), null);
-                    case "terminal.input" -> reply.complete(terminal.input(args.getString("id"), args.getString("text")), null);
-                    case "terminal.stop" -> { terminal.stop(args.getString("id")); reply.complete(terminal.snapshot(), null); }
                     case "files.list" -> { requireFileScope(args); reply.complete(documents.list(args.optString("path", "")), null); }
                     case "files.search" -> { requireFileScope(args); reply.complete(documents.search(args.getString("query")), null); }
                     case "files.read" -> { requireFileScope(args); reply.complete(documents.read(args.getString("path")), null); }
@@ -820,9 +843,14 @@ public final class Engine {
         io.execute(() -> { event("linux.changed", linux.status()); stopServiceIfIdle(); });
     }
     private void stopServiceIfIdle() {
-        if (roomLeases.isEmpty() && (agentBridge == null || !agentBridge.running()) && !linux.status().optBoolean("busy") && !ready && (process == null || !process.isAlive())
-                && !terminal.busy()) context.stopService(new Intent(context, EngineService.class));
+        if (!hasForegroundWork()) context.stopService(new Intent(context, EngineService.class));
     }
+    boolean hasForegroundWork() {
+        return ready || (process != null && process.isAlive()) || terminal.busy() || linux.status().optBoolean("busy")
+            || agentRequests.get() > 0 || (agentBridge != null && agentBridge.busy())
+            || !roomLeases.isEmpty() || group != null || (roomCommand != null && roomCommand.isAlive());
+    }
+    void reconcileService() { if (!io.isShutdown()) io.execute(this::stopServiceIfIdle); }
     private void clearRunningState() {
         clearLive("runtimeStopped");
         GroupRun run = group; if (run != null) cancelGroup(run);
@@ -884,28 +912,10 @@ public final class Engine {
             }, "codex-stderr"); errors.setDaemon(true); errors.start();
             final RpcClient[] launchedConnection = new RpcClient[1];
             rpc = new RpcClient(process.getInputStream(), process.getOutputStream(), new RpcClient.Listener() {
-                @Override public void notification(String method, JSONObject params) { io.execute(() -> onNotification(method, params)); }
-                @Override public void request(Object id, String method, JSONObject params) { io.execute(() -> onRequest(launchedConnection[0], id, method, params)); }
+                @Override public void notification(String method, JSONObject params) { io.execute(() -> { if (process == launched && rpc == launchedConnection[0]) onNotification(method, params); }); }
+                @Override public void request(Object id, String method, JSONObject params) { io.execute(() -> { if (process == launched && rpc == launchedConnection[0]) onRequest(launchedConnection[0], id, method, params); }); }
                 @Override public void disconnected(Throwable error) {
-                    io.execute(() -> {
-                        if (process != launched) return;
-                        int exitCode = -1;
-                        try { exitCode = launched.exitValue(); } catch (IllegalThreadStateException ignored) { }
-                        if (launched.isAlive()) launched.destroyForcibly();
-                        PhoneUseService.stopControl();
-                        process = null; rpc = null;
-                        requests.forEach((key, value) -> event("server.resolved", obj("key", key)));
-                        requests.clear();
-                        ready = false; clearRunningState(); serverThreadId = "";
-                        if (consultMcp != null) consultMcp.close(); consultMcp = null;
-                        String detail = error == null ? t("Codex 연결이 종료되었습니다.") : error.getMessage();
-                        String diagnosis = stderrTail.diagnosis();
-                        status = t("실행 엔진 연결이 종료되었습니다") + (exitCode >= 0 ? t(" (종료 코드 ") + exitCode + ")" : "") + ". " + detail
-                            + (diagnosis.isEmpty() ? "" : t(" 진단 단서: ") + diagnosis + ".") + t(" 다시 연결해 주세요.");
-                        if (pendingApproval != null) pendingApproval.decision.complete(false);
-                        publish();
-                        context.stopService(new Intent(context, EngineService.class));
-                    });
+                    io.execute(() -> codexDisconnected(launched, launchedConnection[0], error, stderrTail));
                 }
             });
             launchedConnection[0] = rpc;
@@ -932,6 +942,25 @@ public final class Engine {
                 + (diagnosis.isEmpty() ? "" : t(" (진단 단서: ") + diagnosis + ")");
             stopCodex(); throw new IOException(detail, e);
         }
+    }
+    void codexDisconnected(Process launched, RpcClient connection, Throwable error, RuntimeFailure.Tail stderrTail) {
+        if (process != launched || rpc != connection) return;
+        int exitCode = -1;
+        try { exitCode = launched.exitValue(); } catch (IllegalThreadStateException ignored) { }
+        if (launched.isAlive()) launched.destroyForcibly();
+        PhoneUseService.stopControl();
+        process = null; rpc = null;
+        requests.forEach((key, value) -> event("server.resolved", obj("key", key)));
+        requests.clear();
+        ready = false; clearRunningState(); serverThreadId = "";
+        if (consultMcp != null) consultMcp.close(); consultMcp = null;
+        String detail = error == null ? t("Codex 연결이 종료되었습니다.") : error.getMessage();
+        String diagnosis = stderrTail.diagnosis();
+        status = t("실행 엔진 연결이 종료되었습니다") + (exitCode >= 0 ? t(" (종료 코드 ") + exitCode + ")" : "") + ". " + detail
+            + (diagnosis.isEmpty() ? "" : t(" 진단 단서: ") + diagnosis + ".") + t(" 다시 연결해 주세요.");
+        if (pendingApproval != null) pendingApproval.decision.complete(false);
+        publish();
+        stopServiceIfIdle();
     }
     private JSONObject call(String method, JSONObject params) throws Exception { return call(method, params, 65); }
     private JSONObject call(String method, JSONObject params, int timeoutSeconds) throws Exception {
@@ -2228,6 +2257,7 @@ public final class Engine {
         if (current == null && observers.isEmpty()) approval.decision.complete(false);
     }
     public void stop() {
+        stopTerminalProcess();
         if (agentBridge != null) agentBridge.stopAll();
         PhoneUseService.stopControl();
         linux.cancel();
@@ -2237,6 +2267,7 @@ public final class Engine {
     }
     /** Stops Codex and the invited-agent runner, including CLI installs and sign-ins. */
     private void stopNow() {
+        stopTerminalProcess();
         GroupRun run = group; if (run != null) cancelGroup(run);
         if (agentBridge != null) { agentBridge.stopAll(); agentBridge.close(); }
         stopCodex();
@@ -2264,7 +2295,6 @@ public final class Engine {
         if (consultMcp != null) consultMcp.close(); consultMcp = null;
         requests.forEach((key, value) -> event("server.resolved", obj("key", key)));
         requests.clear();
-        stopTerminalProcess();
         clearRunningState();
         ready = false; serverThreadId = ""; status = t("연결 종료");
         persist(); publish();
@@ -2329,7 +2359,7 @@ public final class Engine {
                         GroupRun run=group;
                         if(run!=null)for(AgentTurn turn:new ArrayList<>(run.active.values()))agentRunEvent(obj("runId",turn.runId,"kind","error","message",t("에이전트 연결이 종료되었습니다.")));
                         if(roomCommand!=null)roomCommand.destroy();
-                        roomLeases.clear();reply.complete(obj(),null);
+                        roomLeases.clear(); stopServiceIfIdle(); reply.complete(obj(),null);
                     }
                     default -> throw new IOException("Unsupported room host operation");
                 }
@@ -2404,6 +2434,7 @@ public final class Engine {
         return agentBridge;
     }
     private void agentBridgeEvent(String name, JSONObject data) {
+        reconcileService();
         if (name.equals("agents.event")) { io.execute(() -> agentRunEvent(data)); return; }
         if (name.equals("agents.providers")) io.execute(() -> { mergeAgentProviders(data.optJSONArray("providers")); publish(); });
         event(name, data);

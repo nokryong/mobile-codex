@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import types
 import unittest
 from unittest.mock import patch
 
@@ -37,7 +38,9 @@ class PrivatePrApkWorkflowTests(unittest.TestCase):
         self.apk.write_bytes(b'signed APK fixture')
         digest = hashlib.sha256(self.apk.read_bytes()).hexdigest()
         self.metadata = dict(versionName='0.2.8', applicationId='dev.mobilecodex.app', fileName=self.apk.name,
-                             sha256=digest, size=self.apk.stat().st_size)
+                             sha256=digest, size=self.apk.stat().st_size, versionCode=68, minimumSdk=29, abi='arm64-v8a',
+                             debuggable=False, testOnly=False,
+                             signingCertificateSha256=['f9a8d59abf5ab33b44879ade1b9500c385b2cf03e1cb17f94936eadb85337bd7'])
         (self.update / 'mobile-codex-update.json').write_text(json.dumps(self.metadata), encoding='utf-8')
         (self.update / (self.apk.name + '.sha256')).write_text(digest + '  ' + self.apk.name, encoding='utf-8')
         (self.root / 'artifacts/devtools-corresponding-source.zip').write_bytes(b'separate source archive')
@@ -51,6 +54,7 @@ class PrivatePrApkWorkflowTests(unittest.TestCase):
                         PRIVATE_TEST_PR='true', GITHUB_REF='refs/pull/2/merge', GITHUB_RUN_ID='12345',
                         GITHUB_RUN_ATTEMPT='1', GITHUB_SHA='a' * 40, GITHUB_EVENT_PATH=str(self.event_path),
                         GITHUB_STEP_SUMMARY=str(self.root / 'summary.md'))
+        self.env.update(UPDATE_APK=str(self.apk), ANDROID_HOME='/fixture-sdk')
         self.commands = []
         self.notes = []
 
@@ -84,7 +88,7 @@ class PrivatePrApkWorkflowTests(unittest.TestCase):
         try:
             os.chdir(self.root)
             with patch.dict(os.environ, env if env is not None else self.env, clear=True), \
-                    patch.dict(sys.modules, {'publish_release': release_assets}), \
+                    patch.dict(sys.modules, {'publish_release': release_assets, 'prepare_update_release': types.SimpleNamespace(inspect_apk=lambda *a, **kw: self.metadata)}), \
                     patch.object(sys, 'path', list(sys.path)), patch('subprocess.run', side_effect=gh), \
                     patch('sys.stdout', new_callable=io.StringIO):
                 exec(compile(SCRIPT, '<private-pr-apk-workflow>', 'exec'), {'__name__': '__main__'})
@@ -103,8 +107,8 @@ class PrivatePrApkWorkflowTests(unittest.TestCase):
         self.assertIn('--prerelease', create)
         self.assertEqual('a' * 40, create[create.index('--target') + 1])
         upload = self.release_commands('upload')[0]
-        self.assertIn('artifacts/update/' + self.apk.name, upload)
-        self.assertIn('artifacts/devtools-corresponding-source.zip', upload)
+        self.assertIn(str(Path('artifacts/update') / self.apk.name), upload)
+        self.assertIn(str(Path('artifacts/devtools-corresponding-source.zip')), upload)
         self.assertEqual(1, sum(value.endswith('.apk') for value in upload))
         self.assertEqual(1, sum(value.endswith('.zip') for value in upload))
         edit = self.release_commands('edit')[0]

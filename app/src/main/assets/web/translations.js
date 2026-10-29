@@ -1,5 +1,9 @@
 /* UI messages only; user/model/file content is never translated. */
 window.MobileCodexEnglish = {
+  "터미널 입력 대기열이 가득 찼습니다. 잠시 후 다시 보내 주세요.": "Terminal input queue is full. Try again shortly.",
+  "대화 기록을 불러오지 못했습니다. 원본을 보존했습니다. 복구 후 다시 시도해 주세요.": "Chat history could not be loaded. The original is preserved. Restore it before continuing.",
+  "대화 기록을 저장할 수 없습니다. 복구가 필요합니다. 원본은 보존되어 있습니다.": "Chat history cannot be saved until recovery. The original is preserved.",
+  "이전 기록의 복원을 확인해 주세요.": "Confirm restoring the older history.",
   "음성 재생을 시작할 수 없습니다.": "Unable to start voice playback.",
   "음성 재생이 중단되었습니다. 다시 연결해 주세요.": "Voice playback stopped. Please reconnect.",
   "Live 음성 대화": "Live voice conversation",

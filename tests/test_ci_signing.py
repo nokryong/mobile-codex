@@ -39,7 +39,7 @@ class CiSigningTests(unittest.TestCase):
                 if args[1] == 'sign':
                     key = Path(args[args.index('--ks') + 1]); key_paths.append(key)
                     self.assertEqual(key.read_bytes(), b'fixture-key')
-                    self.assertEqual(key.stat().st_mode & 0o777, 0o600)
+                    if os.name != 'nt': self.assertEqual(key.stat().st_mode & 0o777, 0o600)
                     Path(args[args.index('--out') + 1]).write_bytes(b'signed')
                     return ''
                 if args[1] == 'verify':

@@ -1,0 +1,7 @@
+{
+  "applicationId": "dev.mobilecodex.app",
+  "minimumSdk": 29,
+  "abi": "arm64-v8a",
+  "minimumPreviousVersionCode": 67,
+  "signingCertificateSha256": ["f9a8d59abf5ab33b44879ade1b9500c385b2cf03e1cb17f94936eadb85337bd7"]
+}

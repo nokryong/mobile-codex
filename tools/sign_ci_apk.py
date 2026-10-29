@@ -10,7 +10,7 @@ import re
 import subprocess
 import tempfile
 
-EXPECTED_CERT_SHA256 = 'f9a8d59abf5ab33b44879ade1b9500c385b2cf03e1cb17f94936eadb85337bd7'
+EXPECTED_CERT_SHA256 = json.loads((Path(__file__).with_name('release-policy.json')).read_text())['signingCertificateSha256'][0]
 SECRET_NAME = 'MOBILE_CODEX_SIGNING_JSON'
 
 
@@ -59,7 +59,7 @@ def sign_apk(apk, build_tools, raw):
     env.pop(SECRET_NAME, None)
     env['MC_STORE_PASSWORD'] = data['storePassword']
     env['MC_KEY_PASSWORD'] = data['keyPassword']
-    signer = str(Path(build_tools) / 'apksigner')
+    signer = str(Path(build_tools) / ('apksigner.bat' if os.name == 'nt' else 'apksigner'))
     # Keep the key outside the checkout, artifacts and dependency cache. Remove
     # it on success and failure. The original APK changes only after verification.
     with tempfile.TemporaryDirectory(prefix='mobile-codex-signing-', dir=os.environ.get('RUNNER_TEMP')) as directory:
@@ -76,7 +76,7 @@ def sign_apk(apk, build_tools, raw):
                          '--v4-signing-enabled', 'false', '--out', str(pending), str(apk)], env)
             result = checked_run([signer, 'verify', '--print-certs', str(pending)], env)
             verify_certificate(result)
-            checked_run([str(Path(build_tools) / 'zipalign'), '-c', '-P', '16', '4', str(pending)], env)
+            checked_run([str(Path(build_tools) / ('zipalign.exe' if os.name == 'nt' else 'zipalign')), '-c', '-P', '16', '4', str(pending)], env)
             pending.replace(apk)
         finally:
             pending.unlink(missing_ok=True)
@@ -86,7 +86,7 @@ def sign_apk(apk, build_tools, raw):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--check-config', action='store_true')
-    parser.add_argument('--apk', type=Path, default=Path('app/build/outputs/apk/debug/app-debug.apk'))
+    parser.add_argument('--apk', type=Path)
     parser.add_argument('--build-tools', type=Path)
     args = parser.parse_args()
     try:
@@ -95,8 +95,8 @@ def main():
             read_credentials(raw)
             print('Signing secret is configured.')
         else:
-            if not args.build_tools:
-                parser.error('--build-tools is required when signing')
+            if not args.build_tools or not args.apk:
+                parser.error('--apk and --build-tools are required when signing')
             sign_apk(args.apk, args.build_tools, raw)
     except SigningError as error:
         parser.exit(1, str(error) + '\n')

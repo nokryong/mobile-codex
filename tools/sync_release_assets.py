@@ -16,7 +16,7 @@ import subprocess
 import tempfile
 import time
 
-from prepare_update_release import metadata as apk_metadata
+from prepare_update_release import inspect_apk as production_apk_metadata
 from sign_ci_apk import EXPECTED_CERT_SHA256, verify_certificate
 
 CANONICAL_REPO = 'nokryong/mobile-codex'
@@ -219,10 +219,7 @@ def validate_downloads(folder: Path, assets: dict[str, dict], names: tuple[str, 
 
 
 def inspect_apk(apk: Path, build_tools: Path) -> dict:
-    aapt = subprocess.run([str(build_tools / 'aapt2'), 'dump', 'badging', str(apk)], check=True, capture_output=True, text=True).stdout
-    signing = subprocess.run([str(build_tools / 'apksigner'), 'verify', '--print-certs', str(apk)], check=True, capture_output=True, text=True).stdout
-    verify_certificate(signing)
-    return apk_metadata(aapt, signing, apk)
+    return production_apk_metadata(apk, build_tools)
 
 
 def validate_identity(stage: Path, version: str, expected: dict, build_tools: Path):
@@ -255,7 +252,7 @@ def replace_verified_assets(stage: Path, version: str, include_local_apk: bool =
         (stage / SOURCE_ZIP, Path('artifacts') / SOURCE_ZIP),
     ]
     if include_local_apk:
-        targets.insert(0, (stage / apk, Path('app/build/outputs/apk/debug/app-debug.apk')))
+        targets.insert(0, (stage / apk, Path('app/build/outputs/apk/release/app-release.apk')))
     # Stage every replacement beside its destination first.  A failed
     # validation above therefore leaves generated files untouched.
     pending = []

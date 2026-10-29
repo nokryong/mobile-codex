@@ -22,8 +22,8 @@ const packSnapshot = { folderName: 'Character packs', folderConfigured: true, se
       await page.route('**/*', route => {
         const url = new URL(route.request().url());
         if (url.origin !== 'https://appassets.androidplatform.net') return route.abort();
-        if (url.pathname.startsWith('/packs/')) return route.fulfill({ path: path.join(web, 'chat-icons/06-done.png') });
-        const file = path.resolve(web, '.' + url.pathname);
+        if (url.pathname.startsWith('/packs/')) return route.fulfill({ path: path.join(web, 'chat-icons/06-done.webp'), contentType:'image/webp' });
+        const file = require('./icon_asset.cjs').iconAsset(web,url.pathname);
         return fs.existsSync(file) && file.startsWith(web + path.sep) ? route.fulfill({ path: file }) : route.fulfill({ status: 404, body: '' });
       });
       await page.addInitScript(({ state, theme: selectedTheme, language: selectedLanguage }) => {
@@ -36,6 +36,7 @@ const packSnapshot = { folderName: 'Character packs', folderConfigured: true, se
       await page.locator('#settings').click(); await page.locator('#settings-dialog').waitFor({ state: 'visible' }); await page.waitForTimeout(100);
       assert.equal(await page.locator('#character-pack-card').isVisible(), true); assert.equal(await page.locator('.character-pack-option').count(), 2);
       assert.match(await page.locator('.message .chat-character').getAttribute('src'), /packs\/done\.png$/); const cardMetrics = await page.locator('.character-pack-option').evaluateAll(rows => rows.map(row => ({ width: row.clientWidth, scrollWidth: row.scrollWidth, imageWidths: [...row.querySelectorAll('.character-pack-icon')].map(image => image.getBoundingClientRect().width) }))); assert.ok(cardMetrics.every(row => row.scrollWidth <= row.width)); assert.ok(cardMetrics.every(row => row.imageWidths.every(width => width >= 32 && width <= 40))); await page.locator('.character-pack-option').first().click(); await page.waitForTimeout(30); assert.equal(await page.locator('.character-pack-option').first().getAttribute('aria-pressed'), 'true'); await page.locator('.character-pack-option').nth(1).click(); await page.waitForTimeout(30); assert.equal(await page.locator('.character-pack-option').nth(1).getAttribute('aria-pressed'), 'true'); await page.locator('#character-pack-refresh').click(); await page.waitForTimeout(30); assert.match(await page.locator('.message .chat-character').getAttribute('src'), /packs\/done-1\.png$/); assert.equal(await page.locator('#character-pack-refresh').evaluate(button => document.activeElement === button), true);
+      await page.waitForFunction(() => [...document.querySelectorAll('.character-pack-icon, .message .chat-character')].every(image => image.complete && image.naturalWidth > 0));
       await page.screenshot({ path: path.join(out, `selected-${width}-${theme}-${language}.png`) });
       await page.evaluate(state => window.mobileCodexEvent('state', { ...state, characters: { folderName: '', folderConfigured: false, selectedPackId: 'builtin', packs: [{ id: 'builtin', name: 'Builtin', valid: true, icons: {} }] } }), base); await page.waitForTimeout(30);
       assert.equal(await page.locator('.character-pack-option').count(), 1); await page.screenshot({ path: path.join(out, `empty-${width}-${theme}-${language}.png`) });

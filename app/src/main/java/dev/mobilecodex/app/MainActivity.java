@@ -155,10 +155,9 @@ public final class MainActivity extends Activity implements Engine.Ui {
                             Map.of("Cache-Control", "private, max-age=86400", "X-Content-Type-Options", "nosniff"), engine.images.open(id));
                     } catch (Exception e) { return denied(); }
                 }
-                // Only this dedicated packaged PNG directory is exposed; no arbitrary asset or file paths.
+                // Stable allow-listed URLs resolve through the bundled derivative manifest.
                 if (isChatIconPath(path)) {
-                    try { return new WebResourceResponse("image/png", null, 200, "OK",
-                        Map.of("Cache-Control", "private, max-age=86400", "X-Content-Type-Options", "nosniff"), getAssets().open("web" + path)); }
+                    try { return BuiltinIcons.response(getAssets(), path.substring("/chat-icons/".length())); }
                     catch (Exception e) { return denied(); }
                 }
                 if (isPackagedLogoPath(path)) {

@@ -10,8 +10,8 @@ android {
         applicationId 'dev.mobilecodex.app'
         minSdk 29
         targetSdk 35
-        versionCode 67
-        versionName '0.3.2'
+        versionCode 68
+        versionName '0.3.3'
         buildConfigField 'String', 'SOURCE_SHA', '"' + ((System.getenv('GITHUB_SHA') ?: 'local').take(12)) + '"'
         ndk { abiFilters 'arm64-v8a' }
         testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
@@ -39,7 +39,11 @@ android {
     }
     buildTypes {
         debug { if (suppliedSigningStore) signingConfig signingConfigs.provided }
-        release { minifyEnabled false }
+        release {
+            debuggable false
+            minifyEnabled false
+            if (suppliedSigningStore) signingConfig signingConfigs.provided
+        }
     }
     testOptions { unitTests { returnDefaultValues = true; includeAndroidResources = true } }
     lint { abortOnError true }

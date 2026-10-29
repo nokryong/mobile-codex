@@ -26,7 +26,7 @@ async function open(browser, width, height, theme='light', language='en', extra=
  await page.route('**/*', route=>{
   const url=new URL(route.request().url());
   if(url.origin!=='https://appassets.androidplatform.net') return route.abort();
-  const file=path.resolve(web,'.'+url.pathname);
+  const file=require('./icon_asset.cjs').iconAsset(web,url.pathname);
   if(!file.startsWith(web+path.sep)||!fs.existsSync(file)) return route.fulfill({status:404,body:''});
   return route.fulfill({path:file});
  });

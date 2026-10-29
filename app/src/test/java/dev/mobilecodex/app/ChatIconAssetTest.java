@@ -9,10 +9,12 @@ import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.RuntimeEnvironment;
 import org.robolectric.annotation.Config;
+import org.robolectric.annotation.GraphicsMode;
 import static org.junit.Assert.*;
 
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 29, application = Application.class)
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
 public class ChatIconAssetTest {
     @Test public void everyStylesheetAndScriptLinkedFromThePagePassesTheWebViewRoute() throws Exception {
         AssetManager assets = RuntimeEnvironment.getApplication().getAssets();
@@ -53,15 +55,22 @@ public class ChatIconAssetTest {
 
     @Test public void all32PackagedIconsPassTheWebViewRouteAndOpen() throws Exception {
         AssetManager assets = RuntimeEnvironment.getApplication().getAssets();
-        String[] names = assets.list("web/chat-icons");
-        assertNotNull(names);
-        assertEquals(32, names.length);
-        for (String name : names) {
+        java.util.Map<String,String> names = BuiltinIcons.files(assets);
+        assertEquals(32, names.size());
+        for (String name : names.keySet()) {
             assertTrue(name, MainActivity.isChatIconPath("/chat-icons/" + name));
-            try (java.io.InputStream input = assets.open("web/chat-icons/" + name)) {
-                assertArrayEquals(name, new byte[]{(byte)137,80,78,71,13,10,26,10}, input.readNBytes(8));
+            WebResourceResponse response = BuiltinIcons.response(assets,name);
+            assertEquals("image/webp",response.getMimeType());
+            try (java.io.InputStream input = response.getData()) {
+                byte[] bytes=input.readAllBytes();
+                assertEquals("RIFF",new String(bytes,0,4,java.nio.charset.StandardCharsets.US_ASCII));
+                assertEquals("WEBP",new String(bytes,8,4,java.nio.charset.StandardCharsets.US_ASCII));
+                android.graphics.BitmapFactory.Options bounds=new android.graphics.BitmapFactory.Options();bounds.inJustDecodeBounds=true;
+                android.graphics.BitmapFactory.decodeByteArray(bytes,0,bytes.length,bounds);
+                assertTrue(bounds.outWidth>0);assertTrue(bounds.outHeight>0);
             }
         }
+        assertThrows(java.io.IOException.class,()->BuiltinIcons.response(assets,"../auth.json"));
     }
 
     @Test public void iconRouteRejectsTraversalAndNonPngPaths() {

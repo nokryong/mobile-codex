@@ -2452,7 +2452,8 @@
     terminalSending = true; terminalControls();
     try {
       if (session.running) {
-        await call('terminal.input', {id:session.id, text});
+        const result = await call('terminal.input', {id:session.id, text});
+        if (result.ok === false) throw new Error(t('터미널 입력 대기열이 가득 찼습니다. 잠시 후 다시 보내 주세요.'));
         $('terminal-status').textContent = t('입력을 전송했습니다.');
       } else renderTerminal(await call('terminal.run', {command:text}));
       $('terminal-command').value = '';

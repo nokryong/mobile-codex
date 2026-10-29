@@ -12,10 +12,12 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
 import java.util.UUID;
+import java.security.MessageDigest;
+import java.util.function.BooleanSupplier;
 import static dev.mobilecodex.app.core.Json.*;
 
 /** Original attachments live in private storage, independent of provider grants and drafts. */
-final class AttachmentStore {
+class AttachmentStore {
     private final Context context;
     private final File directory;
     private final ImageStore images;
@@ -37,6 +39,9 @@ final class AttachmentStore {
         }
     }
     JSONObject store(InputStream in, String name, String mime) throws Exception {
+        return store(in, name, mime, () -> false);
+    }
+    JSONObject store(InputStream in, String name, String mime, BooleanSupplier cancelled) throws Exception {
         String id = UUID.randomUUID().toString();
         File folder = new File(directory, id);
         if (!folder.mkdirs()) throw new IOException(t("첨부 파일 저장 공간을 만들 수 없습니다."));
@@ -44,17 +49,26 @@ final class AttachmentStore {
         File original = new File(folder, filename), pending = new File(folder, "content.tmp");
         try {
             long size = 0;
-            try (OutputStream out = new FileOutputStream(pending)) {
+            MessageDigest hash = MessageDigest.getInstance("SHA-256");
+            try (OutputStream out = writeFile(pending)) {
                 byte[] buffer = new byte[32768]; int count;
-                while ((count = in.read(buffer)) != -1) { out.write(buffer, 0, count); size += count; }
+                while (true) {
+                    if (cancelled.getAsBoolean() || Thread.currentThread().isInterrupted()) throw new InterruptedIOException("Attachment import cancelled");
+                    count = in.read(buffer);
+                    if (count == -1) break;
+                    if (availableBytes(folder) < count + 1048576L) throw new IOException(t("저장 공간이 부족합니다."));
+                    out.write(buffer, 0, count); hash.update(buffer, 0, count); size += count;
+                }
             }
+            if (cancelled.getAsBoolean() || Thread.currentThread().isInterrupted()) throw new InterruptedIOException("Attachment import cancelled");
             Files.move(pending.toPath(), original.toPath(), StandardCopyOption.REPLACE_EXISTING);
             JSONObject metadata = obj("id", id, "name", name == null || name.isBlank() ? filename : name,
                 "filename", filename, "mime", mime == null ? "application/octet-stream" : mime, "size", size,
-                "path", original.getAbsolutePath());
+                "path", original.getAbsolutePath(), "sha256", hex(hash.digest()));
             // Decode actual bytes rather than trusting an extension or provider MIME.
             try { metadata.put("image", images.importFile(original)); }
-            catch (IOException ignored) { /* Non-images remain ordinary original-file inputs. */ }
+            catch (ImageStore.NotImageException ignored) { /* Non-images remain ordinary original-file inputs. */ }
+            if (cancelled.getAsBoolean() || Thread.currentThread().isInterrupted()) throw new InterruptedIOException("Attachment import cancelled");
             File metaPending = new File(folder, "metadata.tmp");
             dev.mobilecodex.app.core.Utf8Files.write(metaPending.toPath(), metadata.toString());
             Files.move(metaPending.toPath(), new File(folder, "metadata.json").toPath(), StandardCopyOption.REPLACE_EXISTING);
@@ -63,6 +77,11 @@ final class AttachmentStore {
             pending.delete(); original.delete(); new File(folder, "metadata.tmp").delete(); folder.delete();
             throw e;
         }
+    }
+    protected long availableBytes(File folder) { return folder.getUsableSpace(); }
+    protected OutputStream writeFile(File file) throws IOException { return new FileOutputStream(file); }
+    private static String hex(byte[] bytes) {
+        StringBuilder result = new StringBuilder(); for (byte value : bytes) result.append(String.format("%02x", value & 255)); return result.toString();
     }
     private static String safeName(String name) {
         String cleaned = name == null ? "attachment" : name.replaceAll("[\\\\/\\p{Cntrl}:*?\"<>|]", "_");

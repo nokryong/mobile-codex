@@ -90,6 +90,7 @@ final class AgentBridge implements AutoCloseable {
                 if(current!=null)current.close();
                 if(old!=null)try{if(!old.waitFor(3,TimeUnit.SECONDS))old.destroy();}catch(InterruptedException e){Thread.currentThread().interrupt();}
                 rpc=null;process=null;setups.clear();closing=false;
+                events.event("agents.lifecycle",obj());
             }
         });
     }

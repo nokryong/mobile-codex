@@ -211,7 +211,8 @@ class SyncReleaseAssetsTests(unittest.TestCase):
                 for name in names: shutil.copyfile(files[name], destination / name)
             with self._cwd(root), patch.object(sync, 'wait_for_release', return_value=release), patch.object(sync, 'canonical_tag_tree', return_value='a' * 40), patch.object(sync, 'local_tree', return_value='a' * 40), patch.object(sync, 'download_assets', side_effect=download), patch.object(sync, 'inspect_apk', return_value=metadata):
                 sync.sync(Path('/tools'))
-            self.assertEqual(files[f'mobile-codex-{self.version}-arm64.apk'].read_bytes(), (root / 'app/build/outputs/apk/debug/app-debug.apk').read_bytes())
+            self.assertEqual(b'old apk', (root / 'app/build/outputs/apk/debug/app-debug.apk').read_bytes())
+            self.assertEqual(files[f'mobile-codex-{self.version}-arm64.apk'].read_bytes(), (root / 'app/build/outputs/apk/release/app-release.apk').read_bytes())
             self.assertEqual(files[f'mobile-codex-{self.version}-arm64.apk'].read_bytes(), (root / 'artifacts/update/mobile-codex-0.2.0-arm64.apk').read_bytes())
             self.assertEqual(files['LICENSE'].read_bytes(), (root / 'LICENSE').read_bytes())
             self.assertEqual('canonical notes', (root / 'artifacts/canonical-release-notes.md').read_text())
