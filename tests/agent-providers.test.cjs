@@ -16,6 +16,69 @@ test('auto review is offered only by a capable Claude CLI and remains model gate
  provider.id='agy';provider.cap.nativeAutoReview=true;
  await assert.rejects(provider.validate(member),/자동 검토/);
 });
+// Answers each probe with the next scripted line; undefined exits without answering.
+function probing(t,answers,id='claude') {
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'provider-probe-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+ const provider=new CliProvider(id,{root,host:async()=>({}),emit:()=>{}});provider.launches=0;
+ provider.launch=async()=>{const answer=answers[provider.launches++];
+  return spawn(process.execPath,['-e',answer===undefined?'console.error("token=abc");process.exit(3)':`console.log(${JSON.stringify(JSON.stringify({kind:'probe',...answer}))})`],{stdio:['pipe','pipe','pipe'],windowsHide:true});};
+ return provider;
+}
+const models=[{id:'m',efforts:[]}],usage=[{label:'week',remainingPercent:50}];
+const ready={state:'ready',auth:'signed_in',reason:'',models,usage,nativeAutoReview:true},slow={state:'unverified',auth:'unknown',reason:'느림',models:[]};
+
+test('a failed check keeps the last good connection and lists',{timeout:10000},async t=>{
+ const provider=probing(t,[ready,slow,undefined,{...ready,models:[],usage:[]},ready]);
+ assert.equal((await provider.check()).state,'ready');
+ for(let i=0;i<2;i++){
+  const cap=await provider.check({force:true});
+  assert.equal(cap.state,'ready');assert.equal(cap.auth,'signed_in');assert.deepEqual(cap.models,models);assert.deepEqual(cap.usage,usage);assert.equal(cap.nativeAutoReview,true);
+  assert.match(cap.reason,/마지막 연결 상태/);
+ }
+ const partial=await provider.check({force:true});
+ assert.deepEqual(partial.models,models);assert.deepEqual(partial.usage,usage);assert.equal(partial.reason,'');
+});
+test('the CLI saying signed out still ends the connection and clears its lists',{timeout:10000},async t=>{
+ const provider=probing(t,[ready,{state:'login_required',auth:'signed_out',reason:'로그인',models:[],usage:[]}]);
+ await provider.check();const cap=await provider.check({force:true});
+ assert.equal(cap.state,'login_required');assert.deepEqual(cap.models,[]);assert.deepEqual(cap.usage,[]);
+});
+test('a first failed check is unverified, and Linux not starting stays unavailable',{timeout:10000},async t=>{
+ const provider=probing(t,[slow,undefined]);
+ assert.equal((await provider.check()).state,'unverified');
+ assert.equal((await provider.check()).state,'unverified');
+ provider.launch=async()=>{throw new Error('Linux 비활성');};
+ const cap=await provider.check();assert.equal(cap.state,'unavailable');assert.equal(cap.reason,'Linux 비활성');
+});
+test('a recent good check is reused, unless forced or a turn failed',{timeout:10000},async t=>{
+ const provider=probing(t,[ready,ready,ready]);
+ await provider.check();await provider.check();assert.equal(provider.launches,1);
+ await provider.check({force:true});assert.equal(provider.launches,2);
+ await provider.check();assert.equal(provider.launches,2);
+ provider.checkedAt=0;await provider.check();assert.equal(provider.launches,3);
+});
+test('no check starts while a turn is using the account',{timeout:10000},async t=>{
+ const provider=probing(t,[ready]);await provider.check();
+ provider.sessions.set('busy',{turn:{}});
+ await provider.check({force:true});assert.equal(provider.launches,1);
+});
+test('starting a login cancels a running check without letting it overwrite the state',{timeout:15000},async t=>{
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'provider-cancel-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+ const provider=new CliProvider('claude',{root,host:async()=>({}),emit:()=>{}});t.after(()=>provider.dispose());
+ provider.launch=async()=>spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:['pipe','pipe','pipe'],windowsHide:true});
+ const check=provider.check();while(!provider.probeChild)await new Promise(r=>setTimeout(r,5));
+ const started=Date.now();await provider.setupStart('login');await check;
+ assert.ok(Date.now()-started<10000);assert.equal(provider.cap.state,'login');
+ await provider.setupStop();
+});
+test('a failed turn makes the next check real',{timeout:10000},async t=>{
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'provider-turn-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+ const provider=new CliProvider('agy',{root,host:async()=>({}),emit:()=>{}});provider.checkedAt=Date.now();
+ provider.launch=async()=>spawn(process.execPath,['-e','console.error("invalid_grant");setTimeout(()=>process.exit(1),100)'],{stdio:['pipe','pipe','pipe'],windowsHide:true});
+ t.after(()=>provider.close());
+ await assert.rejects(provider.run({room:{id:'r',runId:'a',mode:'chat'},member:{id:'g',model:'',session:{id:''}},prompt:'p',signal:new AbortController().signal,event:()=>{}}),/CLI가 종료/);
+ assert.equal(provider.checkedAt,0);
+});
 const shell=process.platform==='win32'
  ? [path.join(process.env.ProgramFiles||'C:/Program Files','Git/bin/sh.exe'),path.join(process.env.LOCALAPPDATA||'','Programs/Git/bin/sh.exe')].find(p=>fs.existsSync(p))
  : '/bin/sh';

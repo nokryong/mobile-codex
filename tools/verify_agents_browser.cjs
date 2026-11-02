@@ -159,6 +159,14 @@ async function main(){
     assert.match(claudeUsage,/이번 주 · 전체 모델재설정 Oct 17, 7pm \(UTC\)[\s\S]*남은 60% · 주간 한도/);
     await page.locator('#account-agy-usage').scrollIntoViewIfNeeded();
     await page.screenshot({path:path.join(out,`accounts-${width}.png`),animations:'disabled'});
+    // A check that got no answer is not a sign-out, and only the status button skips the cached result.
+    await page.locator('.provider-account[data-provider=claude] .card-heading button').click();
+    await page.waitForFunction(()=>window.__agentFx.calls.some(c=>c.action==='agents.providers.check'&&c.args.force===true));
+    await page.evaluate(()=>{const claude=window.__agentFx.providers.find(p=>p.id==='claude');Object.assign(claude,{state:'unverified',reason:'확인하지 못했습니다.'});
+      window.mobileCodexEvent('agents.providers',{providers:window.__agentFx.providers});});
+    await page.waitForFunction(()=>document.querySelector('#account-claude-status')?.textContent==='상태 확인 불가');
+    assert.equal(await page.locator('#account-claude-login').textContent(),'로그인');
+    await page.evaluate(()=>{Object.assign(window.__agentFx.providers.find(p=>p.id==='claude'),{state:'ready',reason:''});window.mobileCodexEvent('agents.providers',{providers:window.__agentFx.providers});});
     await page.locator('#account-agy-login').click();
     await page.waitForFunction(()=>document.querySelector('#agent-setup-output'));
     assert.deepEqual((await calls('agents.provider.login')).at(-1),{provider:'agy'});

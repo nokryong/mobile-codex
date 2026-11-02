@@ -8,7 +8,7 @@
   ];
   const EFFORTS = {none:'None', minimal:'Minimal', low:'Light', medium:'Medium', high:'High', xhigh:'Extra High', max:'Max', ultra:'Ultra'};
   const MODES = [{id:'chat', label:'대화만'}, {id:'read', label:'프로젝트 읽기'}, {id:'write', label:'프로젝트 수정'}];
-  const PROVIDER_STATE = {ready:'연결됨', missing:'CLI 설치 필요', login_required:'로그인 필요', unavailable:'실행 확인 필요', unsupported:'업데이트 필요', unchecked:'확인 전', installing:'설치 중…', login:'로그인 진행 중…'};
+  const PROVIDER_STATE = {ready:'연결됨', missing:'CLI 설치 필요', login_required:'로그인 필요', unverified:'상태 확인 불가', unavailable:'실행 확인 필요', unsupported:'업데이트 필요', unchecked:'확인 전', installing:'설치 중…', login:'로그인 진행 중…'};
   window.MobileCodexAgents = { init({call, getState, toast, show, close, closeAddMenu, closeFilePanel, openAccounts, openLinuxSettings, usageGauge, usageTime, getCharacters, characterIcon}) {
     const t = window.MobileCodexLocale?.t || (text => text);
     const $ = id => document.getElementById(id);
@@ -29,9 +29,9 @@
       for (const p of list || []) { const at = catalog.findIndex(c => c.id === p.id); if (at < 0) catalog.push(p); else catalog[at] = p; }
       renderAccounts(); renderPanel(); if (!$('invite-dialog').hidden && $('invite-dialog').open) renderInvite();
     }
-    async function refreshProviders() {
+    async function refreshProviders(force = false) {
       if (providerCheck) return providerCheck;
-      providerCheck = call('agents.providers.check').then(result => mergeProviders(result.providers)).catch(error => {
+      providerCheck = call('agents.providers.check', {force}).then(result => mergeProviders(result.providers)).catch(error => {
         for (const ui of accountCards.values()) { ui.status.textContent = t('상태 확인 실패'); ui.detail.textContent = error.message; }
         $('invite-status').textContent = error.message;
       }).finally(() => { providerCheck = null; renderAccounts(); });
@@ -234,7 +234,7 @@
         const heading = el('div', null, 'card-heading'), copy = el('span'), label = el('strong', name), state = el('small');
         label.id = 'account-' + id + '-title'; state.id = 'account-' + id + '-status'; state.setAttribute('role', 'status'); copy.append(label, state);
         card.setAttribute('aria-labelledby', label.id);
-        const refresh = btn(t('상태 확인'), refreshProviders); refresh.setAttribute('aria-label', name + ' ' + t('상태 확인')); heading.append(copy, refresh);
+        const refresh = btn(t('상태 확인'), () => refreshProviders(true)); refresh.setAttribute('aria-label', name + ' ' + t('상태 확인')); heading.append(copy, refresh);
         const detail = el('p', null, 'muted'), actions = el('div', null, 'provider-account-actions');
         const login = btn(t('로그인'), () => setup(id, 'login'), 'primary-button'), install = btn(t('CLI 설치 / 업데이트'), () => setup(id, 'install'));
         login.id = 'account-' + id + '-login'; install.id = 'account-' + id + '-install'; actions.append(login, install);

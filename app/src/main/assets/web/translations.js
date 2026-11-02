@@ -38,6 +38,7 @@ window.MobileCodexEnglish = {
   "CLI 설치 필요": "CLI installation required",
   "로그인 필요": "Sign-in required",
   "실행 확인 필요": "Runtime check required",
+  "상태 확인 불가": "Status unavailable",
   "업데이트 필요": "Update required",
   "확인 전": "Not checked",
   "설치 및 로그인 상태를 확인해 주세요.": "Check installation and sign-in status.",
