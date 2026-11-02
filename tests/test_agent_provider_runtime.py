@@ -196,6 +196,11 @@ sys.exit(runtime['terminal']([sys.executable, '-c', sys.argv[2]], dict(os.enviro
             result = self.probe_with('claude', {step: (1, '', 'network unreachable')})
             self.assertEqual((result['state'], result['auth']), ('unverified', 'unknown'))
 
+    def test_successful_help_can_describe_network_options_on_stderr(self):
+        help_text = '--input-format --output-format --conversation\nNetwork options: proxy and timeout'
+        result = self.probe_with('agy', {'--help': (0, '', help_text)})
+        self.assertEqual((result['state'], result['auth']), ('ready', 'signed_in'))
+
     def test_probe_steps_share_one_budget_below_the_node_limit(self):
         limit = int(runtime.re.search(r'const probeLimit=(\d+)', Path(runtime.__file__).with_name('providers.cjs').read_text(encoding='utf-8'))[1])
         self.assertLess(runtime.PROBE_SECONDS * 1000, limit)

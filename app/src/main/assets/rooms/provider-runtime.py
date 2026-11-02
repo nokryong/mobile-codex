@@ -79,17 +79,17 @@ def probe(provider, binary, env):
     def run(*argv, limit=STEP_SECONDS):
         started = time.monotonic()
         code, out, err = capture([binary, *argv], env, timeout=remaining(limit))
-        # Node scrubs this before it reaches the diagnostics log.
+        # Step details stay inside the runner; they are excluded from capability state.
         steps.append({'step': ' '.join(argv), 'code': code, 'ms': int((time.monotonic() - started) * 1000), 'error': err[-300:] if code else ''})
         return code, out, err
     code, version, error = run('--version')
-    if interrupted(code) or NETWORK_FAILURE.search(error):
+    if interrupted(code) or (code != 0 and NETWORK_FAILURE.search(error)):
         return {'state': 'unverified', 'auth': 'unknown', 'reason': SLOW_REASON, 'models': [], 'steps': steps}
     if code:
         return {'state': 'unavailable', 'auth': 'unknown', 'reason': 'CLI 실행 실패. Linux 라이브러리와 설치 상태를 확인해 주세요.', 'models': [], 'steps': steps}
     code, help_out, help_err = run('--help')
     help_text = help_out + '\n' + help_err  # agy prints its usage to stderr
-    if interrupted(code) or NETWORK_FAILURE.search(help_err) or not help_text.strip():
+    if interrupted(code) or (code != 0 and NETWORK_FAILURE.search(help_err)) or not help_text.strip():
         return {'state': 'unverified', 'auth': 'unknown', 'version': version.strip()[:150], 'reason': SLOW_REASON, 'models': [], 'steps': steps}
     required = ['--input-format', '--output-format', '--resume' if provider == 'claude' else '--conversation']
     if any(flag not in help_text for flag in required):
