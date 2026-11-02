@@ -90,6 +90,15 @@ final class ErrorReports {
     }
     synchronized JSONObject cancel() { ++generation; transport.cancel(); return obj("status", "cancelled"); }
 
+    static void configureReportConnection(HttpURLConnection connection) throws IOException {
+        connection.setInstanceFollowRedirects(false); connection.setConnectTimeout(10000); connection.setReadTimeout(15000);
+        connection.setRequestMethod("POST"); connection.setRequestProperty("Content-Type", "application/json"); connection.setRequestProperty("Accept", "application/json");
+        // Android's default HTTP agent contains the device model/build. Keep
+        // transport metadata as limited as the consented JSON payload.
+        connection.setRequestProperty("User-Agent", "MobileCodex-Diagnostics/1");
+        connection.setUseCaches(false); connection.setDoOutput(true);
+    }
+
     private static final class HttpTransport implements Transport {
         private volatile HttpURLConnection active;
         @Override public JSONObject post(String route, JSONObject body) throws Exception {
@@ -98,9 +107,7 @@ final class ErrorReports {
             if (!base.matches("https://[a-z0-9-]+\\.vercel\\.app")) throw new IOException("not_configured");
             HttpURLConnection connection = (HttpURLConnection) new URL(base + "/api/" + route).openConnection(); active = connection;
             try {
-                connection.setInstanceFollowRedirects(false); connection.setConnectTimeout(10000); connection.setReadTimeout(15000);
-                connection.setRequestMethod("POST"); connection.setRequestProperty("Content-Type", "application/json"); connection.setRequestProperty("Accept", "application/json");
-                connection.setUseCaches(false); connection.setDoOutput(true);
+                configureReportConnection(connection);
                 byte[] encoded = body.toString().getBytes(StandardCharsets.UTF_8);
                 if (encoded.length > 4096) throw new IOException("invalid_payload");
                 connection.setFixedLengthStreamingMode(encoded.length);

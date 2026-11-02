@@ -45,6 +45,18 @@ public class ErrorReportsTest {
         assertEquals(200,MainActivity.packagedUiResponse(assets,android.net.Uri.parse("https://appassets.androidplatform.net/reports.js")).getStatusCode());
         assertEquals(403,MainActivity.packagedUiResponse(assets,android.net.Uri.parse("https://appassets.androidplatform.net/services/diagnostic-relay/lib/github.mjs")).getStatusCode());
     }
+    @Test public void httpMetadataDoesNotExposeAndroidsDefaultDeviceFingerprint() throws Exception {
+        java.net.HttpURLConnection connection = new java.net.HttpURLConnection(new java.net.URL("https://report.example")) {
+            @Override public void connect() { }
+            @Override public void disconnect() { }
+            @Override public boolean usingProxy() { return false; }
+        };
+        connection.setRequestProperty("User-Agent","PRIVATE_DEVICE_MODEL PRIVATE_BUILD");
+        ErrorReports.configureReportConnection(connection);
+        assertEquals("MobileCodex-Diagnostics/1",connection.getRequestProperty("User-Agent"));
+        assertNull(connection.getRequestProperty("Authorization")); assertNull(connection.getRequestProperty("Cookie"));
+        assertFalse(connection.getInstanceFollowRedirects()); assertEquals(15000,connection.getReadTimeout());
+    }
     @Test public void previewFrozenAcrossNewErrorsAndRetriesReuseItsId() throws Exception {
         Transport transport=new Transport(); ErrorReports service=make(transport);
         service.capture(obj("errorCode","initialize_timeout","operation","login")); JSONObject preview=service.preview(); String id=preview.optString("reportId");
