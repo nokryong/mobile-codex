@@ -47,7 +47,7 @@ public class EngineLoginConversationTest {
         context.getSharedPreferences("projects", 0).edit().clear().commit();
         context.getSharedPreferences("workspace", 0).edit().clear().commit();
         home.mkdirs();
-        Files.writeString(new File(home, "auth.json").toPath(), obj("tokens", obj("access_token", "old-test-secret")).toString());
+        dev.mobilecodex.app.core.Utf8Files.write(new File(home, "auth.json").toPath(), obj("tokens", obj("access_token", "old-test-secret")).toString());
         originalAuth = Files.readAllBytes(new File(home, "auth.json").toPath());
         profiles = new AccountProfiles(home, context.getFilesDir());
         originalKey = profiles.saveCurrent(oldAccount).getString("key");
@@ -62,7 +62,7 @@ public class EngineLoginConversationTest {
         file.delete();
     }
     private void create(boolean selected) throws Exception {
-        if (selected) Files.writeString(sessionsFile.toPath(), array(
+        if (selected) dev.mobilecodex.app.core.Utf8Files.write(sessionsFile.toPath(), array(
             obj("id", "local-saved", "sessionVersion", 2, "codexThreadId", "remote-saved", "title", "Saved",
                 "workspace", "", "workspaceKey", "", "imageHistoryVersion", 1, "phoneToolsVersion", 1,
                 "messages", array(obj("id", "message-saved", "role", "user", "text", "Keep this conversation"))),
@@ -84,7 +84,7 @@ public class EngineLoginConversationTest {
             }
             if (method.equals("account/read")) {
                 if (pending && failStartup) throw new IOException("startup unavailable");
-                return obj("account", !auth.isFile() ? JSONObject.NULL : Files.readString(auth.toPath()).contains("new-test-secret") ? newAccount : oldAccount);
+                return obj("account", !auth.isFile() ? JSONObject.NULL : dev.mobilecodex.app.core.Utf8Files.read(auth.toPath()).contains("new-test-secret") ? newAccount : oldAccount);
             }
             if (method.equals("account/rateLimits/read")) return obj();
             if (method.equals("model/list")) return obj("data", new JSONArray());
@@ -125,7 +125,7 @@ public class EngineLoginConversationTest {
         JSONObject state = handle("state", obj());
         assertEquals("local-saved", state.getString("threadId"));
         assertEquals("Keep this conversation", state.getJSONArray("messages").getJSONObject(0).getString("text"));
-        JSONObject stored = new JSONArray(Files.readString(sessionsFile.toPath())).getJSONObject(0);
+        JSONObject stored = new JSONArray(dev.mobilecodex.app.core.Utf8Files.read(sessionsFile.toPath())).getJSONObject(0);
         assertEquals("remote-saved", stored.getString("codexThreadId"));
     }
     private void assertOriginalAccount() throws Exception {
@@ -188,10 +188,10 @@ public class EngineLoginConversationTest {
     private void assertSuccessfulLogin(boolean missingRollout) throws Exception {
         create(true); handle("auth.add", obj());
         File pending = engine.processHomeForTest();
-        Files.writeString(new File(pending, "auth.json").toPath(), obj("tokens", obj("access_token", "new-test-secret")).toString());
+        dev.mobilecodex.app.core.Utf8Files.write(new File(pending, "auth.json").toPath(), obj("tokens", obj("access_token", "new-test-secret")).toString());
         failResume = missingRollout; completed(true);
         assertEquals(home, engine.processHomeForTest()); assertFalse(pending.exists());
-        assertTrue(Files.readString(new File(home, "auth.json").toPath()).contains("new-test-secret"));
+        assertTrue(dev.mobilecodex.app.core.Utf8Files.read(new File(home, "auth.json").toPath()).contains("new-test-secret"));
         assertNotEquals(originalKey, profiles.activeKey()); assertFalse(profiles.hasPendingAddLogin());
         assertEquals("new@example.test", handle("state", obj()).getJSONObject("account").getString("email"));
         assertTrue(completions.get(0).getBoolean("success")); assertConversationPreserved();
