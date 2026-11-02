@@ -107,8 +107,13 @@ final class ErrorReports {
                 try (OutputStream output = connection.getOutputStream()) { output.write(encoded); }
                 if (connection.getResponseCode() != 200) throw new IOException("send_unconfirmed");
                 try (InputStream input = connection.getInputStream()) {
-                    byte[] encodedResponse = input.readNBytes(4097); if (encodedResponse.length > 4096) throw new IOException("invalid_response");
-                    return parse(new String(encodedResponse, StandardCharsets.UTF_8));
+                    ByteArrayOutputStream received = new ByteArrayOutputStream();
+                    byte[] chunk = new byte[1024]; int count;
+                    while ((count = input.read(chunk)) != -1) {
+                        if (received.size() + count > 4096) throw new IOException("invalid_response");
+                        received.write(chunk, 0, count);
+                    }
+                    return parse(new String(received.toByteArray(), StandardCharsets.UTF_8));
                 }
             } finally { connection.disconnect(); if (active == connection) active = null; }
         }
