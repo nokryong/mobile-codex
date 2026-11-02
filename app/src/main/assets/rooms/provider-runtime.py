@@ -16,6 +16,12 @@ import time
 
 LIMIT = 2 * 1024 * 1024
 SAFE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$')
+# Together under providers.cjs' probe limit, whatever each step costs on a slow phone.
+PROBE_SECONDS = 100
+STEP_SECONDS = 30
+SLOW_REASON = '계정 상태를 확인하지 못했습니다. 로그인이 끊긴 것은 아닐 수 있으니 잠시 뒤 상태 확인을 다시 눌러 주세요.'
+SIGNED_OUT = re.compile(r'authentication required|unauthenticated|not (?:logged|signed)[- ]?in|\bplease (?:sign|log)[- ]?in\b|\b(?:sign|log)[- ]?in (?:first|required)\b', re.I)
+NETWORK_FAILURE = re.compile(r'network|timed? ?out|unreachable|ENOTFOUND|ECONN|EAI_AGAIN|ETIMEDOUT', re.I)
 
 def emit(**value):
     print(json.dumps(value, ensure_ascii=False), flush=True)
@@ -47,24 +53,51 @@ def capture(argv, env, timeout=20):
     except subprocess.TimeoutExpired:
         return 124, '', '시간 초과'
 
+def interrupted(code):
+    """The command never finished: too slow under PRoot, or killed by a signal."""
+    return code == 124 or code < 0
+
+def claude_authenticated(code, text):
+    """True or False only when the CLI said so; None when it could not answer."""
+    if interrupted(code):
+        return None
+    try:
+        logged_in = json.loads(text).get('loggedIn')
+    except (ValueError, AttributeError):
+        return None
+    if logged_in is False:
+        return False
+    return True if logged_in is True and code == 0 else None
+
 def probe(provider, binary, env):
     if not Path(binary).is_file():
         return {'state': 'missing', 'auth': 'signed_out', 'reason': 'CLI 설치를 눌러 앱 내부 Linux에 설치해 주세요.', 'models': []}
-    code, version, error = capture([binary, '--version'], env)
+    deadline = time.monotonic() + PROBE_SECONDS
+    steps = []
+    def remaining(limit):
+        return max(1, min(limit, deadline - time.monotonic()))
+    def run(*argv, limit=STEP_SECONDS):
+        started = time.monotonic()
+        code, out, err = capture([binary, *argv], env, timeout=remaining(limit))
+        # Node scrubs this before it reaches the diagnostics log.
+        steps.append({'step': ' '.join(argv), 'code': code, 'ms': int((time.monotonic() - started) * 1000), 'error': err[-300:] if code else ''})
+        return code, out, err
+    code, version, error = run('--version')
+    if interrupted(code) or NETWORK_FAILURE.search(error):
+        return {'state': 'unverified', 'auth': 'unknown', 'reason': SLOW_REASON, 'models': [], 'steps': steps}
     if code:
-        return {'state': 'unavailable', 'auth': 'unknown', 'reason': 'CLI 실행 실패. Linux 라이브러리와 설치 상태를 확인해 주세요.', 'models': []}
-    code, help_out, help_err = capture([binary, '--help'], env)
+        return {'state': 'unavailable', 'auth': 'unknown', 'reason': 'CLI 실행 실패. Linux 라이브러리와 설치 상태를 확인해 주세요.', 'models': [], 'steps': steps}
+    code, help_out, help_err = run('--help')
     help_text = help_out + '\n' + help_err  # agy prints its usage to stderr
+    if interrupted(code) or NETWORK_FAILURE.search(help_err) or not help_text.strip():
+        return {'state': 'unverified', 'auth': 'unknown', 'version': version.strip()[:150], 'reason': SLOW_REASON, 'models': [], 'steps': steps}
     required = ['--input-format', '--output-format', '--resume' if provider == 'claude' else '--conversation']
     if any(flag not in help_text for flag in required):
-        return {'state': 'unsupported', 'auth': 'unknown', 'version': version.strip(), 'reason': '세션 스트리밍을 지원하는 CLI로 업데이트해 주세요.', 'models': []}
+        return {'state': 'unsupported', 'auth': 'unknown', 'version': version.strip(), 'reason': '세션 스트리밍을 지원하는 CLI로 업데이트해 주세요.', 'models': [], 'steps': steps}
     models, usage = [], []
     if provider == 'claude':
-        code, auth, _ = capture([binary, 'auth', 'status'], env)
-        try:
-            authenticated = code == 0 and json.loads(auth).get('loggedIn') is True
-        except ValueError:
-            authenticated = False
+        code, auth, _ = run('auth', 'status')
+        authenticated = claude_authenticated(code, auth)
         # Aliases are read from the installed CLI, never a baked-in model list.
         section = re.search(r'--model\b(.*?)(?=\n\s+--|\Z)', help_text, re.S)
         aliases = re.findall(r'[\'\"]([a-z][a-z0-9._:/-]+)[\'\"]', section.group(1) if section else '')
@@ -72,12 +105,12 @@ def probe(provider, binary, env):
         # Effort is intentionally disabled until this exact model advertises
         # supportedEffortLevels through the SDK initialize response.
         if authenticated:
-            models = claude_models(binary, env)
+            models = claude_models(binary, env, remaining(STEP_SECONDS))
             # /usage is a local command: it reports plan limits without sending a prompt.
-            code, report, _ = capture([binary, '-p', '/usage'], env, timeout=60)
+            code, report, _ = run('-p', '/usage')
             usage = parse_claude_usage(report) if code == 0 else []
     else:
-        code, listing, _ = capture([binary, 'models'], env)
+        code, listing, _ = run('models')
         if code == 0:
             for line in listing.splitlines():
                 match = re.match(r'^\s*([a-z][a-z0-9._-]+)\s+(.+)$', line)
@@ -85,11 +118,14 @@ def probe(provider, binary, env):
                     # AGY encodes reasoning in model slugs. Preserve the exact
                     # slug rather than offering unsupported per-model effort.
                     models.append({'id': match[1], 'label': match[2].strip(), 'efforts': []})
-        authenticated, usage = agy_usage(binary, env)
-    return {'state': 'ready' if authenticated else 'login_required', 'auth': 'signed_in' if authenticated else 'signed_out',
+        authenticated, usage = agy_status(*run('-p', '/usage'))
+    state, auth, reason = {True: ('ready', 'signed_in', ''),
+                           False: ('login_required', 'signed_out', '로그인을 눌러 CLI 계정 연결을 완료해 주세요.'),
+                           None: ('unverified', 'unknown', SLOW_REASON)}[authenticated]
+    return {'state': state, 'auth': auth,
             'version': version.strip()[:150], 'models': models, 'transport': 'app-linux',
             'usage': usage if authenticated else [],
-            'reason': '' if authenticated else '로그인을 눌러 CLI 계정 연결을 완료해 주세요.',
+            'reason': reason, 'steps': steps,
             'nativeAutoReview': supports_auto_review(provider, help_text),
             'nativeApproval': False, 'approval': 'mobile-mcp', 'resume': True, 'streaming': True}
 
@@ -97,7 +133,7 @@ def supports_auto_review(provider, help_text):
     section = re.search(r'--permission-mode\b(.*?)(?=\n\s+--|\Z)', help_text, re.S)
     return provider == 'claude' and bool(section and re.search(r'\bauto\b', section.group(1)))
 
-def claude_models(binary, env):
+def claude_models(binary, env, timeout=45):
     process = subprocess.Popen([binary, '-p', '--input-format', 'stream-json', '--output-format', 'stream-json',
         '--verbose', '--tools', '', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
         '--setting-sources', '', '--settings', '{"disableAllHooks":true}'],
@@ -115,7 +151,7 @@ def claude_models(binary, env):
     try:
         process.stdin.write(json.dumps({'type': 'control_request', 'request_id': 'models', 'request': {'subtype': 'initialize'}}) + '\n')
         process.stdin.flush()
-        deadline = time.monotonic() + 45
+        deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             try:
                 line = lines.get(timeout=max(0.1, deadline - time.monotonic()))
@@ -137,12 +173,17 @@ def claude_models(binary, env):
     except (OSError, KeyError):
         return []
     finally:
-        process.terminate()
+        # End of input lets the CLI exit by itself, so it can finish saving a refreshed token.
         try:
+            process.stdin.close()
             process.wait(timeout=2)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait()
+        except (OSError, subprocess.TimeoutExpired):
+            process.terminate()
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
         for stream in (process.stdin, process.stdout):
             try:
                 stream.close()
@@ -246,11 +287,18 @@ def parse_agy_usage(text):
                          'remainingPercent': min(100.0, float(match[3])), 'resetsAt': (match[4] or '')[:40]})
     return rows
 
-def agy_usage(binary, env):
-    """Whether agy is signed in, and its usage limits from the same /usage call."""
-    code, usage, _ = capture([binary, '-p', '/usage'], env)
-    signed_in = code == 0 and bool(usage.strip()) and not re.search(r'authentication required|not logged|sign in|login required', usage, re.I)
-    return signed_in, parse_agy_usage(usage) if signed_in else []
+def agy_status(code, usage, error):
+    """Whether agy is signed in, and its usage limits, from one /usage call.
+
+    None means agy could not answer: a timeout or network failure is not a sign-out."""
+    text = usage + '\n' + error
+    if interrupted(code) or NETWORK_FAILURE.search(text):
+        return None, []
+    if SIGNED_OUT.search(text):
+        return False, []
+    if code or not usage.strip():
+        return None, []
+    return True, parse_agy_usage(usage)
 
 def terminal(argv, env):
     from terminal_io import run_terminal

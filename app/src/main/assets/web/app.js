@@ -32,7 +32,7 @@
     return new Promise((resolve, reject) => {
       if (!window.Native) return reject(new Error(t('Android 앱에서 실행해 주세요.')));
       const id = String(++seq);
-      const timer = setTimeout(() => { pending.delete(id); reject(new Error(t('요청 시간이 초과되었습니다. 상태를 확인하고 다시 시도해 주세요.'))); }, ['files.mutate','recovery.restore','updates.install'].includes(action) ? 610000 : 150000);
+      const timer = setTimeout(() => { pending.delete(id); reject(new Error(t('요청 시간이 초과되었습니다. 상태를 확인하고 다시 시도해 주세요.'))); }, ['files.mutate','recovery.restore','updates.install','agents.providers.check'].includes(action) ? 610000 : 150000);
       pending.set(id, {resolve, reject, timer});
       window.Native.postMessage(JSON.stringify({id, action, args}));
     });

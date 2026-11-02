@@ -69,7 +69,8 @@ final class AgentBridge implements AutoCloseable {
                 start();
                 boolean setup=action.equals("agents.provider.install")||action.equals("agents.provider.login");
                 if(setup){if(!setups.isEmpty())throw new IOException("진행 중인 설치 또는 로그인을 먼저 마쳐 주세요.");setups.add(args.optString("provider"));}
-                rpc.request(action,args).whenComplete((result,error)->{
+                // Status checks run one CLI at a time and each is bounded by the runner.
+                rpc.request(action,args,action.equals("agents.providers.check")?300:60).whenComplete((result,error)->{
                     if(setup&&error!=null)setups.remove(args.optString("provider"));
                     reply.complete(result,error);
                 });

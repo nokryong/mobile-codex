@@ -864,16 +864,20 @@ public final class Engine {
         busy = false; turnId = "";
     }
     private void start() throws Exception {
+        start(true);
+    }
+    /** Authentication can start in an empty HOME without touching saved threads. */
+    private void start(boolean restoreConversation) throws Exception {
+        restoreConversation = restoreConversation && !loginInProgress && processHome.equals(codexHome.root());
         autoRestorePaused = false;
         if (testTransport != null) {
             ready = true;
             if (testAccountValidation) { readAccount(); readRateLimits(); }
-            retryPendingDeletions();
-            if (active != null && active.optString("workspaceKey").equals(documents.key()) && documents.workspace().optBoolean("available")) resumeRemote(false);
+            if (restoreConversation) restoreConversation();
             return;
         }
         if (ready && process != null && process.isAlive() && rpc != null && !rpc.isClosed()) {
-            retryPendingDeletions();
+            if (restoreConversation) retryPendingDeletions();
             publish();
             return;
         }
@@ -929,10 +933,7 @@ public final class Engine {
             try { models = call("model/list", obj("limit", 100, "includeHidden", false)).optJSONArray("data"); }
             catch (Exception ignored) { models = new JSONArray(); }
             if (models == null) models = new JSONArray();
-            // Tombstones must be retried before a restored active thread can be resumed.
-            retryPendingDeletions();
-            // A process restart needs an explicit server-side thread resume.
-            if (active != null && active.optString("workspaceKey").equals(documents.key()) && documents.workspace().optBoolean("available")) resumeRemote(false);
+            if (restoreConversation) restoreConversation();
             publish();
         } catch (Exception e) {
             Process failed = process; int exitCode = -1;
@@ -942,6 +943,11 @@ public final class Engine {
                 + (diagnosis.isEmpty() ? "" : t(" (진단 단서: ") + diagnosis + ")");
             stopCodex(); throw new IOException(detail, e);
         }
+    }
+    private void restoreConversation() throws Exception {
+        // Retry tombstones only in the conversation's HOME, before resuming it.
+        retryPendingDeletions();
+        if (active != null && active.optString("workspaceKey").equals(documents.key()) && documents.workspace().optBoolean("available")) resumeRemote(false);
     }
     void codexDisconnected(Process launched, RpcClient connection, Throwable error, RuntimeFailure.Tail stderrTail) {
         if (process != launched || rpc != connection) return;
@@ -1020,27 +1026,32 @@ public final class Engine {
         // Re-login must not validate a revoked token before reaching device login.
         // Use the existing isolated transaction so cancellation preserves the profile.
         if (!add && accountProfiles.hasSavedLogin() && accountProfiles.activeNeedsLogin()) add = true;
-        if (add) {
-            // Recovery must not validate the existing account first: a
-            // token_revoked account cannot reach device login otherwise.
-            // Snapshot only while a live server is available, then cross the
-            // process boundary before starting the isolated login home. Never logout.
-            boolean snapshotted = ready && processIsAlive();
-            if (snapshotted) accountProfiles.saveCurrentForAddLogin(account);
-            stopCodex();
-            JSONObject profile = accountProfiles.prepareAddLogin(account, snapshotted);
-            addAccountRestoreKey = profile.optString("key");
-            account = new JSONObject(); rateLimits = new JSONObject(); publish();
-            processHome = accountProfiles.pendingLoginHome();
-            if (processHome == null) throw new IOException(t("새 로그인 공간을 준비하지 못했습니다."));
-            start();
-        } else {
-            start();
-            addAccountRestoreKey = "";
+        try {
+            if (add) {
+                // Recovery must not validate the existing account first: a
+                // token_revoked account cannot reach device login otherwise.
+                // Snapshot only while a live server is available, then cross the
+                // process boundary before starting the isolated login home. Never logout.
+                boolean snapshotted = ready && processIsAlive();
+                if (snapshotted) accountProfiles.saveCurrentForAddLogin(account);
+                stopCodex();
+                JSONObject profile = accountProfiles.prepareAddLogin(account, snapshotted);
+                addAccountRestoreKey = profile.optString("key");
+                account = new JSONObject(); rateLimits = new JSONObject(); publish();
+                processHome = accountProfiles.pendingLoginHome();
+                if (processHome == null) throw new IOException(t("새 로그인 공간을 준비하지 못했습니다."));
+            } else {
+                addAccountRestoreKey = "";
+            }
+            loginInProgress = true;
+            start(false);
+            return call("account/login/start", obj("type", "chatgptDeviceCode"));
+        } catch (Exception error) {
+            loginInProgress = false;
+            try { restoreAccountAfterCancelledLogin(); }
+            catch (Exception restoreError) { error.addSuppressed(restoreError); }
+            throw error;
         }
-        loginInProgress = true;
-        try { return call("account/login/start", obj("type", "chatgptDeviceCode")); }
-        catch (Exception error) { loginInProgress = false; throw error; }
     }
 
     private boolean processIsAlive() {
@@ -1971,11 +1982,10 @@ public final class Engine {
                             stopCodex();
                             accountProfiles.finishAddLogin(account);
                             processHome = codexHome.root();
-                            start();
+                            start(false);
                         }
                         addAccountRestoreKey = ""; status = t("연결됨");
                         try { JSONArray data = call("model/list", obj("limit", 100)).optJSONArray("data"); if (data != null) models = data; } catch (Exception ignored) {}
-                        if (active != null && active.optString("workspaceKey").equals(documents.key()) && documents.workspace().optBoolean("available")) resumeRemote(false);
                     } catch (Exception loginError) {
                         if (adding) {
                             try {
@@ -1997,6 +2007,10 @@ public final class Engine {
                         suppressStatePublish = previousSuppression;
                         if (adding) publish();
                     }
+                    // Authentication already committed. A missing rollout must not
+                    // turn a successful login into a failed credential transaction.
+                    try { restoreConversation(); }
+                    catch (Exception restoreError) { event("error", obj("message", unwrap(restoreError).getMessage())); }
                 } else {
                     event("error", obj("message", p.optString("error", t("로그인이 취소되었습니다."))));
                     try { restoreAccountAfterCancelledLogin(); } catch (Exception restoreError) { event("error", obj("message", t("이전 계정을 복원하지 못했습니다: ") + unwrap(restoreError).getMessage())); }

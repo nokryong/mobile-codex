@@ -51,7 +51,11 @@ async function action(method,p={}) {
   const provider=()=>{if(!providers[p.provider])throw new Error('에이전트를 선택해 주세요.');return providers[p.provider];};
   switch(method) {
     case 'agents.providers':return {providers:Object.values(providers).map(p=>p.cap)};
-    case 'agents.providers.check':return {providers:await Promise.all(Object.values(providers).map(p=>p.check()))};
+    case 'agents.providers.check': {
+      // One at a time: PRoot CLIs started together slow each other past their time limits.
+      const checked=[];for(const item of Object.values(providers))checked.push(await item.check({force:p.force===true}));
+      return {providers:checked};
+    }
     case 'agents.run':return start(p);
     case 'agents.stop':return stop(p.runId);
     case 'agents.stopAll':for(const controller of runs.values())controller.abort();return {ok:true};

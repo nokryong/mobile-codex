@@ -158,9 +158,58 @@ sys.exit(runtime['terminal']([sys.executable, '-c', sys.argv[2]], dict(os.enviro
             {'label': 'Claude and GPT models', 'limit': 'Weekly Limit Remaining', 'remainingPercent': 100.0, 'resetsAt': '2026-10-22T02:52:21Z'}])
 
     def test_agy_usage_is_empty_when_signed_out_and_ignores_other_lines(self):
-        with patch.object(runtime, 'capture', return_value=(1, 'Authentication required. Please sign in.\n', '')):
-            self.assertEqual(runtime.agy_usage('agy', {}), (False, []))
+        self.assertEqual(runtime.agy_status(1, 'Authentication required. Please sign in.\n', ''), (False, []))
         self.assertEqual(runtime.parse_agy_usage('Remaining credits: lots\nnot a usage row\n'), [])
+
+    def test_agy_failures_that_say_nothing_about_the_account_are_not_a_sign_out(self):
+        for code, out, err in [(124, '', '시간 초과'), (-9, '', ''), (1, '', 'boom'), (0, '  \n', ''),
+                               (1, '', 'Could not sign in: network unreachable'), (1, '', 'connect ETIMEDOUT'),
+                               (1, '', 'Could not sign in: service unavailable')]:
+            self.assertEqual(runtime.agy_status(code, out, err), (None, []), (code, out, err))
+        self.assertEqual(runtime.agy_status(1, '', 'Please log in first'), (False, []))
+        self.assertEqual(runtime.agy_status(1, '', 'catalog in use'), (None, []))
+
+    def probe_with(self, provider, answers):
+        table = {'--version': (0, '1.0\n', ''), 'auth': (0, json.dumps({'loggedIn': True}), ''), 'models': (0, '', ''), '-p': (0, 'Gemini\tWeekly\t50%\tsoon\n', ''),
+                 '--help': (0, '--input-format --output-format --resume --conversation', ''), **answers}
+        with tempfile.NamedTemporaryFile() as binary, patch.object(runtime, 'claude_models', return_value=[]), \
+             patch.object(runtime, 'capture', side_effect=lambda argv, env, timeout=20: table[argv[1]]):
+            return runtime.probe(provider, binary.name, {})
+
+    def test_a_slow_cli_is_unverified_rather_than_signed_out_or_outdated(self):
+        slow = (124, '', '시간 초과')
+        cases = [('claude', {'auth': slow}), ('agy', {'-p': slow}), ('claude', {'--version': slow}), ('agy', {'--help': slow})]
+        for provider, answers in cases:
+            result = self.probe_with(provider, answers)
+            self.assertEqual((result['state'], result['auth']), ('unverified', 'unknown'), (provider, answers))
+            self.assertIn('시간 초과', ''.join(step['error'] for step in result['steps']))
+
+    def test_only_the_cli_itself_can_report_a_claude_sign_out(self):
+        for answer, state in [((1, json.dumps({'loggedIn': False}), ''), 'login_required'), ((0, json.dumps({'loggedIn': True}), ''), 'ready'),
+                              ((1, 'not json', 'crash'), 'unverified'), ((0, '[]', ''), 'unverified')]:
+            self.assertEqual(self.probe_with('claude', {'auth': answer})['state'], state, answer)
+
+    def test_interrupted_auth_and_network_failures_never_report_signed_out(self):
+        self.assertIsNone(runtime.claude_authenticated(124, '{"loggedIn":false}'))
+        self.assertIsNone(runtime.claude_authenticated(-9, '{"loggedIn":false}'))
+        for step in ('--version', '--help'):
+            result = self.probe_with('claude', {step: (1, '', 'network unreachable')})
+            self.assertEqual((result['state'], result['auth']), ('unverified', 'unknown'))
+
+    def test_probe_steps_share_one_budget_below_the_node_limit(self):
+        limit = int(runtime.re.search(r'const probeLimit=(\d+)', Path(runtime.__file__).with_name('providers.cjs').read_text(encoding='utf-8'))[1])
+        self.assertLess(runtime.PROBE_SECONDS * 1000, limit)
+        seen = []
+        def capture(argv, env, timeout=20):
+            seen.append(timeout)
+            return {'--version': (0, '1', ''), '--help': (0, '--input-format --output-format --resume', ''), 'auth': (0, '{"loggedIn":true}', ''), '-p': (0, '', '')}[argv[1]]
+        clock = iter(range(0, 1000, 40))
+        with tempfile.NamedTemporaryFile() as binary, patch.object(runtime, 'capture', side_effect=capture), \
+             patch.object(runtime, 'claude_models', return_value=[]) as models, patch.object(runtime.time, 'monotonic', side_effect=lambda: next(clock)):
+            runtime.probe('claude', binary.name, {})
+        self.assertLessEqual(max(seen), runtime.STEP_SECONDS)
+        self.assertEqual(seen[-1], 1)  # Out of budget: the last step gets only a token second.
+        self.assertLessEqual(models.call_args[0][2], runtime.STEP_SECONDS)
 
     def test_claude_models_waits_for_a_slow_cli(self):
         # Under PRoot the CLI can take seconds before its first line.

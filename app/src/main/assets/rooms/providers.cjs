@@ -7,6 +7,8 @@ const {randomBytes}=require('node:crypto');
 const {normalize}=require('./provider-events.cjs');
 
 const limit=2*1024*1024;
+const probeLimit=120000; // Above PROBE_SECONDS in provider-runtime.py, which bounds its own steps.
+const probeFresh=300000; // Every probe starts several CLIs that share one credential file.
 function lines(stream, receive, failure) {
   let pending='';stream.setEncoding('utf8');
   stream.on('data',chunk=>{pending+=chunk;if(Buffer.byteLength(pending)>limit){failure(new Error('CLI 출력 제한을 초과했습니다.'));return;}
@@ -54,7 +56,7 @@ function settleOnExit(child) {
 }
 
 class CliProvider {
-  constructor(id,{root,host,emit}) {this.id=id;this.root=root;this.host=host;this.emit=emit;this.sessions=new Map();this.setup=null;this.cap={id,name:id==='agy'?'Antigravity':'Claude Code',state:'unchecked',auth:'unknown',models:[],resume:true,streaming:true,approval:'mobile-mcp',nativeApproval:false};}
+  constructor(id,{root,host,emit}) {this.id=id;this.root=root;this.host=host;this.emit=emit;this.sessions=new Map();this.setup=null;this.checkedAt=0;this.cap={id,name:id==='agy'?'Antigravity':'Claude Code',state:'unchecked',auth:'unknown',models:[],resume:true,streaming:true,approval:'mobile-mcp',nativeApproval:false};}
   async launch(action,config={},key='setup') {
     if(this.disposed)throw new Error('공급자 연결이 종료되었습니다.');
     const dir=path.join(this.root,'work',this.id,key);fs.mkdirSync(dir,{recursive:true,mode:0o700});
@@ -65,23 +67,41 @@ class CliProvider {
     // Own process group, so a stop reaches PRoot's children too.
     return settleOnExit(spawn(launch.argv[0],launch.argv.slice(1),{cwd:dir,env:process.env,stdio:['pipe','pipe','pipe'],windowsHide:true,detached:groups}));
   }
-  async check() {
+  async check({force=false}={}) {
     if(this.setup||this.preparing||this.disposed)return this.cap;
     if(this.checking)return this.checking;
+    // A running turn already uses the account; a second CLI would only compete for its token.
+    if(this.cap.state==='ready'&&([...this.sessions.values()].some(s=>s.turn)||(!force&&Date.now()-this.checkedAt<probeFresh)))return this.cap;
     this.checking=this.probe().finally(()=>{this.checking=null;});return this.checking;
   }
   async probe() {
     let child,timer;
     try {
-      child=await this.launch('probe');this.probeChild=child;const data=await new Promise((resolve,reject)=>{
-        let result;timer=setTimeout(()=>reject(new Error('준비 상태 확인 시간이 초과됐습니다.')),45000);
+      child=await this.launch('probe');this.probeChild=child;
+      if(this.preparing)throw new Error('설치 또는 로그인으로 확인을 중단했습니다.');
+      const data=await new Promise((resolve,reject)=>{
+        let result;timer=setTimeout(()=>reject(new Error('준비 상태 확인 시간이 초과됐습니다.')),probeLimit);
         lines(child.stdout,e=>{if(e.kind==='probe')result=e;},reject);child.stderr.resume();
         child.once('error',reject);child.once('close',code=>{clearTimeout(timer);result?resolve(result):reject(new Error('CLI 확인에 실패했습니다 ('+code+'). Linux 도구를 설치·활성화해 주세요.'));});child.stdin.end();
       });
-      this.cap={...this.cap,...data,id:this.id,nativeAutoReview:data.nativeAutoReview===true,autoReviewUnavailableModels:[]};delete this.cap.kind;
-    }catch(e){this.cap={...this.cap,state:'unavailable',reason:e.message,auth:'unknown',models:[],nativeAutoReview:false};}
+      this.settle(data);
+    }catch(e){
+      // Once the CLI could start, a failed check says nothing about the account. Not starting
+      // at all means Linux itself is unavailable. A login that cancelled this check owns the state.
+      if(!this.preparing&&!this.disposed)this.settle({state:child?'unverified':'unavailable',auth:'unknown',reason:e.message,models:[]});
+    }
     finally{clearTimeout(timer);await terminate(child);if(this.probeChild===child)this.probeChild=null;}
     this.emit('agents.providers',{providers:[this.cap]});return this.cap;
+  }
+  settle({kind,steps,...data}) {
+    if(data.state==='unverified'&&this.cap.state==='ready') {
+      this.cap={...this.cap,reason:'상태를 다시 확인하지 못해 마지막 연결 상태를 표시합니다. '+data.reason};return;
+    }
+    this.checkedAt=data.state==='ready'?Date.now():0;
+    // Only a signed-in or unanswered check may keep the lists from the last good one.
+    const keep=['ready','unverified'].includes(data.state);
+    this.cap={...this.cap,...data,id:this.id,nativeAutoReview:data.nativeAutoReview===true,autoReviewUnavailableModels:[],
+      models:keep&&!data.models?.length?this.cap.models:data.models||[],usage:keep&&!data.usage?.length?this.cap.usage:data.usage||[]};
   }
   async validate(member) {
     if(this.setup||this.preparing||this.disposed)throw new Error('공급자의 설치·로그인 또는 종료를 먼저 마쳐 주세요.');
@@ -99,7 +119,7 @@ class CliProvider {
     if([...this.sessions.values()].some(s=>s.turn))throw new Error('공급자의 발언을 먼저 중지해 주세요.');
     this.preparing=true;
     let child;
-    try{if(this.checking)await this.checking;await this.close();child=await this.launch(action);this.setup=child;}
+    try{if(this.checking){terminate(this.probeChild);await this.checking;}await this.close();child=await this.launch(action);this.setup=child;}
     finally{this.preparing=false;}
     this.cap.state=action==='install'?'installing':'login';
     this.emit('agents.setup',{provider:this.id,kind:'started',action,text:action==='install'?'Linux 도구 갱신과 CLI 설치를 시작합니다.\n':'CLI 로그인을 시작합니다.\n'});
@@ -164,6 +184,8 @@ class CliProvider {
     return new Promise((resolve,reject)=>{
       let settled=false;
       const finish=(error,value)=>{if(settled)return;settled=true;clearTimeout(timer);signal.removeEventListener('abort',cancel);s.turn=null;
+        // A failed turn may be the first sign of a lost login: don't answer the next check from cache.
+        if(error&&!signal.aborted)this.checkedAt=0;
         if(!error)s.idleTimer=setTimeout(()=>this.end(s),300000).unref();error?reject(error):resolve(value);};
       const cancel=()=>this.end(s).then(()=>finish(new Error('발언이 중지되었습니다.')));
       const timer=setTimeout(()=>this.end(s).then(()=>finish(new Error('응답 시간이 10분을 초과했습니다.'))),600000);
