@@ -134,7 +134,7 @@
   }
   function close(id) { $(id).close(); }
   function dismiss(id) {
-    if (id === 'report-dialog' && reportsUi?.isSending()) { reportsUi.cancel(); return; }
+    if (id === 'report-dialog' && reportsUi) { reportsUi.cancel(); return; }
     const dirty = (id === 'editor-dialog' && openedFile && $('editor').value !== openedFile.content)
       || (id === 'config-dialog' && $('config-editor').value !== configOriginal)
       || (id === 'settings-dialog' && instructionsLoaded && $('instructions-editor').value !== instructionsOriginal);

@@ -46,7 +46,6 @@
     } else { ++epoch; close('report-dialog'); }
   }
   $('report-send').addEventListener('click', send);
-  $('report-cancel').addEventListener('click', cancel);
   $('report-open').addEventListener('click', open);
   $('report-login-open').addEventListener('click', open);
   $('report-error-open').addEventListener('click', open);
