@@ -924,3 +924,7 @@ dialog > .toast { position: sticky; top: 0; bottom: auto; left: auto; z-index: 2
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
   .session-progress-indicator { border-right-color: currentColor; opacity: .5; }
 }
+/* Diagnostic consent uses the existing dialog and button visual system. */
+.report-payload { white-space:pre-wrap; overflow-wrap:anywhere; max-height:38dvh; overflow:auto; font-size:12px; }
+.report-actions { display:flex; flex-wrap:wrap; gap:8px; }
+.report-error { align-self:center; margin:8px 16px; }

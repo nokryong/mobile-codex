@@ -49,7 +49,7 @@ public final class MainActivity extends Activity implements Engine.Ui {
         String path = uri.getPath();
         if (!"https".equals(uri.getScheme()) || !HOST.equals(uri.getHost()) || path == null
                 || !(path.equals("/index.html") || path.equals("/app.css") || path.equals("/visual-system.css") || path.equals("/spacing.css")
-                || path.equals("/app.js") || path.equals("/ui-core.js") || path.equals("/translations.js") || path.equals("/locale.js") || path.equals("/agents-ui.js") || path.equals("/agents.css") || path.equals("/live.js") || path.equals("/live.css"))) {
+                || path.equals("/app.js") || path.equals("/ui-core.js") || path.equals("/translations.js") || path.equals("/locale.js") || path.equals("/agents-ui.js") || path.equals("/agents.css") || path.equals("/live.js") || path.equals("/live.css") || path.equals("/reports.js"))) {
             return deniedResponse();
         }
         String mime = path.endsWith(".css") ? "text/css" : path.endsWith(".js") ? "application/javascript" : "text/html";
@@ -368,6 +368,11 @@ public final class MainActivity extends Activity implements Engine.Ui {
         super.onConfigurationChanged(configuration); applyTheme(theme);
     }
     @Override public void event(String name, JSONObject data) {
+        if ("diagnostics.available".equals(name)) {
+            try { ((MobileCodexApp) getApplication()).reports().capture(data); }
+            catch (Exception ignored) { return; } // Reporting must not replace the original failure.
+            event("reports.available", obj("available", true)); return;
+        }
         runOnUiThread(() -> {
             if (isDestroyed()) return;
             if ("live.audio".equals(name) && "ended".equals(data.optString("phase")) && liveAudioKey.equals(data.optString("key"))) endLiveAudio();
@@ -586,6 +591,16 @@ public final class MainActivity extends Activity implements Engine.Ui {
                 requestId = id;
                 JSONObject args = message.optJSONObject("args"); if (args == null) args = new JSONObject();
                 JSONObject parameters = args;
+                if (action.startsWith("reports.")) {
+                    ErrorReports reports = ((MobileCodexApp) getApplication()).reports();
+                    switch (action) {
+                        case "reports.preview" -> respond(id, reports.preview(), null);
+                        case "reports.send" -> reports.send(parameters.optString("reportId"), parameters.optBoolean("consent"), value -> respond(id, value, null));
+                        case "reports.cancel" -> respond(id, reports.cancel(), null);
+                        default -> respond(id, obj("status", "failed"), null);
+                    }
+                    return;
+                }
                 if (action.equals("live.microphone")) {
                     runOnUiThread(() -> {
                         if (!foreground || livePermissionRequest != null || liveAudioConnection != null || liveMicrophoneAllowed || LiveAudioService.active() != null) { respond(id, null, new IllegalStateException(t("음성 연결을 시작할 수 없습니다."))); return; }

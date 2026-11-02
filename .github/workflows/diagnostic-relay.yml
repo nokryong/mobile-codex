@@ -1,0 +1,26 @@
+name: Verify production diagnostic relay
+on:
+  workflow_dispatch:
+    inputs:
+      production_url:
+        description: 'Approved production Vercel alias; creates one clearly marked synthetic diagnostic issue'
+        type: string
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: diagnostic-relay-live-check
+  cancel-in-progress: false
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22.23.4'
+      - name: Verify one synthetic report and an idempotent retry
+        env:
+          REPORT_RELAY_URL: ${{ inputs.production_url }}
+        run: node tools/verify_diagnostic_relay.mjs "$REPORT_RELAY_URL"
