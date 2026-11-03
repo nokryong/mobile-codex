@@ -29,4 +29,26 @@ public class DiagnosticReportTest {
         assertEquals(-1,snapshot.optLong("responseMs")); assertEquals("initialize_sent",snapshot.optString("stage"));
         assertFalse(snapshot.has("message")); assertFalse(snapshot.has("stdout"));
     }
+    @Test public void missingMeasurementsAreNotMeasuredZeros() {
+        JSONObject absent = report(obj()), zero = report(new StartupDiagnostics().snapshot("start_failure", "active", false, 0, "none"));
+        assertEquals(2, absent.getInt("schema"));
+        for (String key : new String[]{"elapsedMs", "stdoutBytes", "stdoutLines", "stderrBytes", "invalidJson", "unmatchedIds", "processAlive"}) {
+            assertTrue(key, absent.has(key) && absent.isNull(key));
+            assertFalse(key, zero.isNull(key));
+        }
+        assertEquals(0, zero.getLong("stdoutBytes")); assertFalse(zero.getBoolean("processAlive"));
+        assertEquals(-1, absent.getLong("spawnMs")); assertEquals(-1, absent.getInt("exitCode"));
+    }
+    @Test public void measuredReportMatchesSharedRelayAndPreviewFixture() throws Exception {
+        try (var input = getClass().getResourceAsStream("/diagnostic-v2.json")) {
+            assertNotNull(input);
+            JSONObject fixture = new JSONObject(new String(input.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8));
+            JSONObject actual = report(obj("operation", "login"));
+            actual.put("reportId", fixture.getString("reportId"));
+            assertTrue(actual.similar(fixture));
+        }
+    }
+    private static JSONObject report(JSONObject source) {
+        return DiagnosticReport.build(source, "0.3.6", 35, "arm64", "other", "phone", "unknown", "unknown");
+    }
 }

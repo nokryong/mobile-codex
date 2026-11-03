@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const base = '../services/diagnostic-relay/lib/';
 const sample = (extra = {}) => ({schema:1, reportId:crypto.randomUUID(), appVersion:'0.3.6', runtime:'codex_01621', errorCode:'initialize_timeout', operation:'login', stage:'initialize_sent', homeKind:'pending', elapsedMs:60000, spawnMs:0, writeMs:0, firstByteMs:-1, responseMs:-1, processAlive:true, exitCode:-1, stdoutBytes:0, stdoutLines:0, invalidJson:0, unmatchedIds:0, stderrBytes:32, stderrCategory:'none', androidApi:35, abi:'arm64', manufacturer:'samsung', deviceClass:'phone', ramClass:'le8gb', pageSize:'4k', ...extra});
+const missingMeasurements = require('../app/src/test/resources/diagnostic-v2.json');
 class MemoryStore {
   constructor(){ this.values = new Map(); this.rates = new Map(); }
   async get(key){return this.values.get(key) || null;}
@@ -26,6 +27,31 @@ async function fixture() {
   async function send(report,ip){return request('reports',await payload(report,ip),ip);}
   return {store,github,issues,comments,handle,request,payload,send};
 }
+test('v2 native fixture preserves unavailable values through the mocked relay and public issue', async()=>{
+  const fx=await fixture(), report={...missingMeasurements};
+  assert.equal((await fx.send(report)).status,200);
+  assert.deepEqual(fx.issues[0].report,report);
+  const {publicBody}=await import(base+'schema.mjs');
+  const body=publicBody(fx.issues[0].report,'fixture');
+  assert.match(body,/"stdoutBytes": null/); assert.match(body,/"processAlive": null/);
+});
+test('v1 validation and grouping stay compatible; v2 retains measured zeros and rejects invalid values', async()=>{
+  const {reportPayload,signature,hash}=await import(base+'schema.mjs');
+  const parse=report=>reportPayload(JSON.stringify({...report,challengeId:'a'.repeat(48),proof:0})).report;
+  const old=sample(); assert.deepEqual(parse(old),old);
+  assert.equal(signature(old),hash(JSON.stringify([old.appVersion,old.runtime,old.errorCode,old.operation,old.stage,old.androidApi,old.abi,old.pageSize])));
+  assert.notEqual(signature(old),signature({...old,schema:2}));
+  assert.notEqual(signature(old),signature({...old,operation:'chat'}));
+  const zero={...old,schema:2,elapsedMs:0,processAlive:false,stderrBytes:0};
+  assert.deepEqual(parse(zero),zero);
+  for(const key of ['elapsedMs','processAlive','stdoutBytes','stdoutLines','invalidJson','unmatchedIds','stderrBytes']) {
+    assert.throws(()=>parse({...old,[key]:null}));
+    assert.equal(parse({...zero,[key]:null})[key],null);
+  }
+  for(const extra of [{schema:3},{stdoutBytes:-1},{stdoutBytes:'0'},{stdoutBytes:{}},{processAlive:0},{stderrCategory:null},{operation:null},{stdout:null}])
+    assert.throws(()=>parse({...zero,...extra}));
+  assert.throws(()=>parse({...zero,spawnMs:null}));
+});
 test('relay rejects private/free-form/nested/duplicate payloads before storage or GitHub',async()=>{
   const {parseFlat,reportPayload}=await import(base+'schema.mjs');
   for(const text of ['{"reportId":"x","reportId":"y"}','{"token":"secret"}','{"schema":1,"nested":{}}','{"schema":1,}','{"schema":1,"body":"@someone"}']) assert.throws(()=>reportPayload(text));

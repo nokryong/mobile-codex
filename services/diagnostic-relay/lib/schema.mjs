@@ -9,7 +9,7 @@ const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{1
 const oneOf = values => value => typeof value === 'string' && values.includes(value);
 const integer = (min, max) => value => Number.isSafeInteger(value) && value >= min && value <= max;
 const fields = {
-  schema: value => value === 1,
+  schema: value => value === 1 || value === 2,
   reportId: value => typeof value === 'string' && uuid.test(value),
   appVersion: oneOf(['0.3.5', '0.3.6']),
   runtime: oneOf(['codex_01621']),
@@ -41,6 +41,13 @@ const transport = {
   challengeId: value => typeof value === 'string' && /^[a-f0-9]{48}$/.test(value),
   proof: integer(0, 100000000)
 };
+// v2 keeps the same 27 fields; null means no measurement was collected.
+// Preserve v1's validation and acceptance for already released APKs.
+const nullableMeasurements = ['elapsedMs', 'processAlive', 'stdoutBytes', 'stdoutLines', 'invalidJson', 'unmatchedIds', 'stderrBytes'];
+function reportFields(schema) {
+  if (schema !== 2) return fields;
+  return {...fields, ...Object.fromEntries(nullableMeasurements.map(key => [key, value => value === null || fields[key](value)]))};
+}
 
 // Deliberately a flat scalar format. Reject duplicate keys, escaping, nested
 // objects, arbitrary Unicode/free text and huge inputs before JSON.parse.
@@ -50,7 +57,7 @@ export function parseFlat(text) {
   if (!source.startsWith('{') || !source.endsWith('}')) throw new Rejected(400, 'invalid_schema');
   const inner = source.slice(1, -1), result = Object.create(null);
   let offset = 0;
-  const token = /\s*"([A-Za-z][A-Za-z0-9]*)"\s*:\s*("[A-Za-z0-9._-]*"|-?(?:0|[1-9][0-9]*)|true|false)\s*(,|$)/y;
+  const token = /\s*"([A-Za-z][A-Za-z0-9]*)"\s*:\s*("[A-Za-z0-9._-]*"|-?(?:0|[1-9][0-9]*)|true|false|null)\s*(,|$)/y;
   while (offset < inner.length) {
     token.lastIndex = offset;
     const match = token.exec(inner);
@@ -66,14 +73,17 @@ export function validate(object, definition) {
   return object;
 }
 export function reportPayload(text) {
-  const incoming = validate(parseFlat(text), {...fields, ...transport});
+  const parsed = parseFlat(text);
+  const incoming = validate(parsed, {...reportFields(parsed.schema), ...transport});
   const report = Object.fromEntries(Object.keys(fields).map(key => [key, incoming[key]]));
   return {report, challengeId: incoming.challengeId, proof: incoming.proof};
 }
 export function challengePayload(text) { return validate(parseFlat(text), {reportId: fields.reportId}); }
 export function signature(report) {
   // Group by failure and compatibility class, never by a person/device ID.
-  return hash(JSON.stringify([report.appVersion, report.runtime, report.errorCode, report.operation, report.stage, report.androidApi, report.abi, report.pageSize]));
+  const compatibility = [report.appVersion, report.runtime, report.errorCode, report.operation, report.stage, report.androidApi, report.abi, report.pageSize];
+  if (report.schema === 2) compatibility.unshift(2);
+  return hash(JSON.stringify(compatibility));
 }
 export function sampleHash(report) {
   return hash(JSON.stringify(Object.entries(report).filter(([key]) => key !== 'reportId')));

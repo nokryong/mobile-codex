@@ -19,11 +19,18 @@ import static dev.mobilecodex.app.core.Json.*;
 
 /** Owns one local app-server process, outside Activity/WebView lifecycle. */
 public final class Engine {
-    private volatile JSONObject failureDiagnostic;
-    private StartupDiagnostics startupDiagnostics;
+    // Only used on the engine queue; each action/notification gets a fresh identity.
+    private Object diagnosticOperation = new Object();
     private void publishDiagnostic(JSONObject value, String action) {
-        try { failureDiagnostic = ErrorReports.withOperation(value, action); event("diagnostics.available", failureDiagnostic); }
+        try { event("diagnostics.available", ErrorReports.withOperation(value, action)); }
         catch (Exception ignored) { /* Diagnostic handling must preserve the original failure. */ }
+    }
+    private void error(String action, JSONObject data) {
+        error(action, data, null);
+    }
+    private void error(String action, JSONObject data, Throwable failure) {
+        publishDiagnostic(DiagnosticFailure.snapshot(failure, diagnosticOperation), action);
+        event("error", data);
     }
     /** State events are frequent and cross the WebView bridge, so only expose a bounded tail. */
     private static final int SNAPSHOT_MESSAGE_LIMIT = 40;
@@ -234,7 +241,6 @@ public final class Engine {
     void setTestAccountValidation(boolean value) { testAccountValidation = value; }
     File processHomeForTest() { return processHome; }
     private void event(String name, JSONObject data) {
-        if ("error".equals(name)) publishDiagnostic(ErrorReports.genericDiagnostic(), "chat.send");
         Ui current = ui; if (current != null) current.event(name, data); for (Ui observer : observers) if (observer != current) observer.event(name, data);
     }
     private JSONObject requestUiParams(PendingRequest request) {
@@ -315,7 +321,7 @@ public final class Engine {
     private void publish() { if (!suppressStatePublish) event("state", snapshot()); }
     private void persist() {
         try { persistSessions(sessions); }
-        catch (IOException e) { event("error", obj("message", t("대화 기록을 저장하지 못했습니다."))); }
+        catch (IOException e) { error("sessions.save", obj("message", t("대화 기록을 저장하지 못했습니다."))); }
     }
     /** Writes an already-staged session state. Mutating RPCs use this directly so they cannot report a durable success on I/O failure. */
     private void persistSessions(JSONArray value) throws IOException {
@@ -565,7 +571,8 @@ public final class Engine {
         // Installation cancellation must not queue behind a long Codex RPC.
         if (action.equals("linux.cancel")) { linux.cancel(); reply.complete(linux.status(), null); return; }
         io.execute(() -> {
-            failureDiagnostic = null;
+            Object previousOperation = diagnosticOperation;
+            diagnosticOperation = new Object();
             try {
                 if (sessionStore.recoveryRequired() && action.startsWith("chat.") && !action.equals("chat.stop"))
                     throw new IOException(t("대화 기록을 저장할 수 없습니다. 복구가 필요합니다. 원본은 보존되어 있습니다."));
@@ -782,8 +789,10 @@ public final class Engine {
                     default -> throw new IOException(t("지원하지 않는 요청입니다: ") + action);
                 }
             } catch (Throwable e) {
-                publishDiagnostic(failureDiagnostic == null ? ErrorReports.genericDiagnostic() : failureDiagnostic, action);
+                publishDiagnostic(DiagnosticFailure.snapshot(e, diagnosticOperation), action);
                 reply.complete(null, unwrap(e));
+            } finally {
+                diagnosticOperation = previousOperation;
             }
         });
     }
@@ -917,7 +926,7 @@ public final class Engine {
         builder.environment().put("CODEX_SELF_EXE", binary.getAbsolutePath());
         context.startForegroundService(new Intent(context, EngineService.class));
         RuntimeFailure.Tail stderrTail = new RuntimeFailure.Tail();
-        StartupDiagnostics diagnostic = new StartupDiagnostics(); startupDiagnostics = diagnostic;
+        StartupDiagnostics diagnostic = new StartupDiagnostics();
         try {
             process = builder.start();
             diagnostic.spawned();
@@ -955,11 +964,12 @@ public final class Engine {
             Process failed = process; int exitCode = -1;
             try { if (failed != null) exitCode = failed.exitValue(); } catch (IllegalThreadStateException ignored) { }
             String errorCode = "initialize_sent".equals(diagnostic.stage()) && unwrap(e) instanceof TimeoutException ? "initialize_timeout" : "start_failure";
-            failureDiagnostic = diagnostic.snapshot(errorCode, loginInProgress ? "pending" : "active", failed != null && failed.isAlive(), exitCode, stderrTail.category());
+            // The local counters and process belong to this exact failed launch.
+            JSONObject measured = diagnostic.snapshot(errorCode, loginInProgress ? "pending" : "active", failed != null && failed.isAlive(), exitCode, stderrTail.category());
             String diagnosis = stderrTail.diagnosis();
             String detail = t("Codex를 시작하지 못했습니다") + (exitCode >= 0 ? t(" (종료 코드 ") + exitCode + ")" : "") + ": " + unwrap(e).getMessage()
                 + (diagnosis.isEmpty() ? "" : t(" (진단 단서: ") + diagnosis + ")");
-            stopCodex(); throw new IOException(detail, e);
+            stopCodex(); throw new DiagnosticFailure(detail, e, diagnosticOperation, measured);
         }
     }
     private void restoreConversation() throws Exception {
@@ -971,9 +981,10 @@ public final class Engine {
         if (process != launched || rpc != connection) return;
         int exitCode = -1;
         try { exitCode = launched.exitValue(); } catch (IllegalThreadStateException ignored) { }
-        if (startupDiagnostics != null) {
-            publishDiagnostic(startupDiagnostics.snapshot("transport_closed", loginInProgress ? "pending" : "active", launched.isAlive(), exitCode, stderrTail.category()), "runtime.start");
-        }
+        // A later disconnect is not a measurement of the startup operation.
+        publishDiagnostic(obj("errorCode", "transport_closed", "stage", "running", "homeKind", loginInProgress ? "pending" : "active",
+            "processAlive", launched.isAlive(), "exitCode", exitCode, "stderrCategory", stderrTail.category()),
+            loginInProgress ? "auth.login" : hasRunningTurns() ? "chat.send" : "runtime.disconnected");
         if (launched.isAlive()) launched.destroyForcibly();
         PhoneUseService.stopControl();
         process = null; rpc = null;
@@ -1069,10 +1080,8 @@ public final class Engine {
             return call("account/login/start", obj("type", "chatgptDeviceCode"));
         } catch (Exception error) {
             loginInProgress = false;
-            JSONObject loginDiagnostic = failureDiagnostic;
             try { restoreAccountAfterCancelledLogin(); }
             catch (Exception restoreError) { error.addSuppressed(restoreError); }
-            finally { failureDiagnostic = loginDiagnostic; }
             throw error;
         }
     }
@@ -1602,7 +1611,7 @@ public final class Engine {
             } catch (Exception error) {
                 status = "failed"; text = t("Pro 문의 결과를 저장하지 못했습니다. 자동으로 다시 보내지 않습니다.");
                 try { message.put("status", status).put("text", text); } catch (Exception ignored) {}
-                event("error", obj("threadId", pending.localThread, "message", text));
+                error("chat.send", obj("threadId", pending.localThread, "message", text));
             }
         }
         try { pending.responder.respond(ToolCatalog.result("completed".equals(status), text)); }
@@ -1980,12 +1989,14 @@ public final class Engine {
                 persistSessions(remaining);
                 replaceSessions(remaining);
             } catch (IOException e) {
-                event("error", obj("message", t("대화 기록을 저장하지 못했습니다.")));
+                error("sessions.save", obj("message", t("대화 기록을 저장하지 못했습니다.")));
                 return;
             }
         }
     }
     private void onNotification(String method, JSONObject p) {
+        Object previousOperation = diagnosticOperation;
+        diagnosticOperation = new Object();
         try {
             if (method.startsWith("thread/realtime/")) { liveNotification(method, p); return; }
             if (method.equals("account/login/completed")) {
@@ -2015,14 +2026,14 @@ public final class Engine {
                                 stopCodex();
                                 accountProfiles.restorePreparedAddLogin(true);
                             } catch (Exception restoreError) {
-                                event("error", obj("message", t("이전 계정을 복원하지 못했습니다: ") + unwrap(restoreError).getMessage()));
+                                error("auth.login", obj("message", t("이전 계정을 복원하지 못했습니다: ") + unwrap(restoreError).getMessage()));
                             }
                             addAccountRestoreKey = "";
                             processHome = codexHome.root();
                             account = new JSONObject(); rateLimits = new JSONObject();
                             try { start(); } catch (Exception ignored) { }
                         }
-                        event("error", obj("message", unwrap(loginError).getMessage()));
+                        error("auth.login", obj("message", unwrap(loginError).getMessage()), loginError);
                         JSONObject failed = new JSONObject(p.toString()); failed.put("success", false);
                         failed.put("error", unwrap(loginError).getMessage());
                         event("login.completed", failed); publish(); return;
@@ -2033,10 +2044,10 @@ public final class Engine {
                     // Authentication already committed. A missing rollout must not
                     // turn a successful login into a failed credential transaction.
                     try { restoreConversation(); }
-                    catch (Exception restoreError) { event("error", obj("message", unwrap(restoreError).getMessage())); }
+                    catch (Exception restoreError) { error("chat.resume", obj("message", unwrap(restoreError).getMessage()), restoreError); }
                 } else {
-                    event("error", obj("message", p.optString("error", t("로그인이 취소되었습니다."))));
-                    try { restoreAccountAfterCancelledLogin(); } catch (Exception restoreError) { event("error", obj("message", t("이전 계정을 복원하지 못했습니다: ") + unwrap(restoreError).getMessage())); }
+                    error("auth.login", obj("message", p.optString("error", t("로그인이 취소되었습니다."))));
+                    try { restoreAccountAfterCancelledLogin(); } catch (Exception restoreError) { error("auth.login", obj("message", t("이전 계정을 복원하지 못했습니다: ") + unwrap(restoreError).getMessage())); }
                 }
                 event("login.completed", p); publish(); return;
             }
@@ -2108,7 +2119,7 @@ public final class Engine {
                 JSONObject error = turn == null ? null : turn.optJSONObject("error");
                 boolean failed = !interrupted && ("failed".equals(completionStatus) || error != null);
                 if (currentThread && (interrupted || failed)) status = interrupted ? t("작업 중지됨") : t("작업 실패");
-                if (failed) event("error", obj("threadId", eventThreadId, "message", error == null ? t("작업 실패") : error.optString("message", t("작업 실패"))));
+                if (failed) error("chat.send", obj("threadId", eventThreadId, "message", error == null ? t("작업 실패") : error.optString("message", t("작업 실패"))));
                 taskNotification(interrupted ? "interrupted" : failed ? "failed" : "completed",
                     interrupted ? t("작업 중지됨") : failed ? t("작업 실패") : t("답변 완료"),
                     interrupted ? t("Codex 작업이 중지되었습니다.") : failed ? t("Codex 작업이 실패했습니다.") : t("Codex가 작업을 마쳤습니다."), eventThreadId, "");
@@ -2131,14 +2142,17 @@ public final class Engine {
                 drainAgentConsents();
             } else if (method.equals("error")) {
                 JSONObject error = p.optJSONObject("error");
-                event("error", obj("threadId", eventThreadId, "message", error == null ? t("Codex 요청 오류") : error.optString("message", t("Codex 요청 오류"))));
+                error("chat.send", obj("threadId", eventThreadId, "message", error == null ? t("Codex 요청 오류") : error.optString("message", t("Codex 요청 오류"))));
             } else {
                 event("agent.event", obj("method", method, "params", p));
             }
         } catch (Exception e) {
             String remoteFailedThread = p.optString("threadId");
             String failedThread = remoteFailedThread.isBlank() ? threadId : localIdForCodexThread(remoteFailedThread);
-            event("error", obj("threadId", failedThread, "message", unwrap(e).getMessage()));
+            error(method.startsWith("account/") ? "auth.refresh" : method.startsWith("thread/") || method.startsWith("turn/") || method.startsWith("item/") || method.equals("error") ? "chat.send" : "other",
+                obj("threadId", failedThread, "message", unwrap(e).getMessage()), e);
+        } finally {
+            diagnosticOperation = previousOperation;
         }
     }
     private JSONObject readImage(String path) throws Exception {
@@ -2640,7 +2654,7 @@ public final class Engine {
             run.codexRunning = true;
         } catch (Exception e) {
             run.codexRunning = false;
-            event("error", obj("threadId", run.local, "message", t("Codex가 이어서 답하지 못했습니다: ") + unwrap(e).getMessage()));
+            error("chat.send", obj("threadId", run.local, "message", t("Codex가 이어서 답하지 못했습니다: ") + unwrap(e).getMessage()));
         }
     }
     private static String lastMessageId(JSONArray messages) {
@@ -2720,7 +2734,7 @@ public final class Engine {
                 }
                 default -> {}
             }
-        } catch (Exception e) { event("error", obj("threadId", run.local, "message", unwrap(e).getMessage())); }
+        } catch (Exception e) { error("chat.send", obj("threadId", run.local, "message", unwrap(e).getMessage())); }
     }
     private void endAgentTurn(GroupRun run, AgentTurn turn) {
         roomLeases.remove(turn.runId); run.active.remove(turn.runId);
@@ -2744,7 +2758,7 @@ public final class Engine {
             String running = runningTurns.getOrDefault(run.local, "");
             JSONObject owner = session(run.local);
             if (!running.isBlank() && owner != null) try { call("turn/interrupt", obj("threadId", owner.optString("codexThreadId"), "turnId", running)); }
-            catch (Exception e) { event("error", obj("threadId", run.local, "message", unwrap(e).getMessage())); }
+            catch (Exception e) { error("chat.send", obj("threadId", run.local, "message", unwrap(e).getMessage())); }
         }
         for (AgentTurn turn : new ArrayList<>(run.active.values())) {
             stopAgent(turn.runId);

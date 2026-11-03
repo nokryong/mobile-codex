@@ -43,6 +43,20 @@ Set the APK endpoint only to the verified production `https://*.vercel.app` alia
    device model/serial, Android ID, installation ID or environment is read into it.
    Times are relative, rounded to 100 ms and capped at ten minutes. The report ID
    is a random per-error retry receipt, never an installation/device identifier.
+   Schema 2 keeps those field names and uses `null` for uncollected elapsed time,
+   process-alive state and transport counters. A measured zero stays `0` (and a
+   measured dead process stays `false`). Timing/exit fields retain their existing
+   `-1` unavailable sentinel. Schema 1 remains accepted with its original ranges
+   and grouping keys; schema 2 groups separately. No operation/process identity
+   used for matching measurements is serialized.
+   Startup measurements are frozen with the failed launch exception and accepted
+   only by the same engine action or notification. Successful startup, later
+   failures and replacement processes cannot supply those measurements. A later
+   disconnect reports only its current process state, without startup counters.
+   **Rollout order:** the relay must support schema 2 before an APK containing
+   this collector is released. The currently deployed schema-1-only relay will
+   reject schema 2; do not fall back to fabricated zeros. This PR does not deploy
+   the relay or release an APK.
 2. Explicit Send: `POST /api/challenge`, JSON `{ "reportId": "<UUID-v4>" }`.
    Returns a random challenge, 16-bit SHA-256 work requirement, five-minute expiry.
 3. `POST /api/reports`: the exact diagnostic fields plus `challengeId` and integer

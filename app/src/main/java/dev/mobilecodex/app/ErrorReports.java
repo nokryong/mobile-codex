@@ -34,7 +34,7 @@ final class ErrorReports {
     static JSONObject genericDiagnostic() { return obj("errorCode", "operation_failed", "stage", "unknown", "homeKind", "unknown"); }
     static JSONObject withOperation(JSONObject value, String action) {
         JSONObject result = parse(value.toString());
-        String operation = Set.of("auth.login", "auth.add", "auth.relogin").contains(action) || action.startsWith("auth.") ? "login" : action.startsWith("runtime.") ? "start" : action.startsWith("chat.") ? "chat" : "other";
+        String operation = Set.of("auth.login", "auth.add", "auth.relogin").contains(action) || action.startsWith("auth.") ? "login" : action.equals("runtime.start") ? "start" : action.startsWith("chat.") ? "chat" : "other";
         try { result.put("operation", operation); } catch (Exception impossible) { throw new IllegalStateException(impossible); }
         return result;
     }
