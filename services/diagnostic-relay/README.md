@@ -7,8 +7,9 @@ timeout. No automatic upload runs on an error. The APK contains no server key.
 ## Deployment gate
 
 **Not production-ready until the configured production endpoint passes live E2E.**
-The app's `BuildConfig.REPORT_RELAY_URL` is deliberately empty while hosting and
-credentials are unavailable. Do not merge/release this feature in that state.
+The app uses the verified production endpoint
+`https://mobile-codex-diagnostic-relay.vercel.app`. Keep live reporting checks as
+a release gate whenever server configuration or this contract changes.
 
 Deploy this directory as a dedicated Vercel project using Node 22. The `api/`
 files use the documented Web Request/Response function interface, without extra
