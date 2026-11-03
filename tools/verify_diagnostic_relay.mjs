@@ -16,8 +16,10 @@ async function send() {
   return post('reports', {...report,challengeId:challenge.challengeId,proof});
 }
 const health = await fetch(base + '/api/health', {redirect:'error',signal:AbortSignal.timeout(10000)});
+console.log(JSON.stringify({healthHttpStatus:health.status}));
 if (!health.ok || !(await health.json()).ready) throw Error('Relay not ready');
 const first = await send();
 if (!/^https:\/\/github\.com\/nokryong\/mobile-codex\/issues\/[1-9][0-9]*$/.test(first.url || '')) throw Error('Invalid public issue result');
+console.log(JSON.stringify({syntheticIssue:first.url,submitted:true}));
 const retry = await send(); if (retry.url !== first.url || !retry.grouped) throw Error('Idempotency check failed');
 console.log(JSON.stringify({verified:true,syntheticIssue:first.url,idempotent:true}));
