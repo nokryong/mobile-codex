@@ -104,3 +104,23 @@ test('Redis adapter uses atomic TTL primitives and never an in-memory fallback',
   await store.consume('b',{reportId:'x'});assert.match(calls[1][1],/DEL/);
   assert.throws(()=>new RedisStore('http://untrusted.local','token'));
 });
+test('production configuration accepts a complete Vercel REST pair without reading other integration keys',async()=>{
+  const {productionRelay}=await import(base+'relay.mjs');const original=global.fetch,calls=[];
+  global.fetch=async(url,options)=>{calls.push({url,authorization:options.headers.authorization});return Response.json({result:null});};
+  try {
+    const configurations=[
+      {REPORT_GITHUB_TOKEN:'test-github',KV_REST_API_URL:'https://integration.upstash.io',KV_REST_API_TOKEN:'test-integration'},
+      {REPORT_GITHUB_TOKEN:'test-github',UPSTASH_REDIS_REST_URL:'https://legacy.upstash.io',UPSTASH_REDIS_REST_TOKEN:'test-legacy',KV_REST_API_URL:'https://integration.upstash.io',KV_REST_API_TOKEN:'test-integration'},
+      {REPORT_GITHUB_TOKEN:'test-github',UPSTASH_REDIS_REST_URL:'https://incomplete.upstash.io',KV_REST_API_URL:'https://integration.upstash.io',KV_REST_API_TOKEN:'test-integration'}
+    ];
+    for(const values of configurations){
+      const environment=new Proxy(values,{get(target,key){assert.ok(!['KV_URL','REDIS_URL','KV_REST_API_READ_ONLY_TOKEN'].includes(key));return target[key];}});
+      assert.equal((await productionRelay(environment)(new Request('https://relay.test/api/health'),'health')).status,200);
+    }
+    assert.deepEqual(calls.map(call=>call.url),['https://integration.upstash.io','https://legacy.upstash.io','https://integration.upstash.io']);
+    assert.deepEqual(calls.map(call=>call.authorization),['Bearer test-integration','Bearer test-legacy','Bearer test-integration']);
+    const incomplete={REPORT_GITHUB_TOKEN:'test-github',KV_REST_API_URL:'https://integration.upstash.io',KV_REST_API_READ_ONLY_TOKEN:'wrong-scope'};
+    assert.equal((await productionRelay(incomplete)(new Request('https://relay.test/api/health'),'health')).status,503);
+    assert.equal(calls.length,3);
+  }finally{global.fetch=original;}
+});

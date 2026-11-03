@@ -118,7 +118,10 @@ export function createRelay({store, github, now = Date.now} = {}) {
   };
 }
 export function productionRelay(environment = process.env) {
-  if (!environment.REPORT_GITHUB_TOKEN || !environment.UPSTASH_REDIS_REST_URL || !environment.UPSTASH_REDIS_REST_TOKEN) return createRelay();
-  try { return createRelay({store:new RedisStore(environment.UPSTASH_REDIS_REST_URL, environment.UPSTASH_REDIS_REST_TOKEN), github:new GitHubReporter(environment.REPORT_GITHUB_TOKEN)}); }
+  const legacy = environment.UPSTASH_REDIS_REST_URL && environment.UPSTASH_REDIS_REST_TOKEN;
+  const url = legacy ? environment.UPSTASH_REDIS_REST_URL : environment.KV_REST_API_URL;
+  const token = legacy ? environment.UPSTASH_REDIS_REST_TOKEN : environment.KV_REST_API_TOKEN;
+  if (!environment.REPORT_GITHUB_TOKEN || !url || !token) return createRelay();
+  try { return createRelay({store:new RedisStore(url, token), github:new GitHubReporter(environment.REPORT_GITHUB_TOKEN)}); }
   catch { return createRelay(); }
 }

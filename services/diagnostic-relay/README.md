@@ -18,13 +18,17 @@ APK, GitHub Actions output, source file, API response, or public issue.
 
 The deployment requires these **server-only, sensitive production variables**:
 
-* `REPORT_GITHUB_TOKEN`: an expiring nokryong fine-grained token limited to this
+* `REPORT_GITHUB_TOKEN`: a nokryong fine-grained token limited to this
   repository, **Issues read/write** and default **Metadata read**. No Contents,
   Actions, Administration or organization permission is needed. New creation,
   storage or access expansion requires separate action-time approval.
 * `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN`: a dedicated durable Redis
   database, with read/write access only to that database. Free plan, no automatic
   paid upgrade. A new integration/credential needs approval before provisioning.
+
+Vercel Marketplace's `KV_REST_API_URL` and `KV_REST_API_TOKEN` are also supported.
+A complete legacy pair takes precedence; otherwise the complete Marketplace REST
+pair is used. `KV_URL`, `REDIS_URL` and read-only tokens are not used.
 
 An inaccessible deployment or absent configuration fails with 503. It must never
 fall back to in-memory state. `/api/health` verifies configuration and Redis
@@ -108,6 +112,9 @@ Publish the signed APK only after those gates. Update issue #15 only after the
 server and release are live. This feature must not be described as fixing its
 unknown cause. Roll back by redeploying the previous server source; preserve
 Redis receipts to avoid replay. Never downgrade APK signatures or reset app data.
+
+The live-check workflow also runs when a same-repository PR is marked ready for
+review, allowing the single synthetic report check before merging/releasing.
 
 References: [Vercel Functions](https://vercel.com/docs/functions/quickstart),
 [trusted headers](https://vercel.com/docs/headers/request-headers),
