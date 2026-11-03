@@ -23,10 +23,19 @@ public final class RpcClient implements AutoCloseable {
     private final ScheduledExecutorService timer = Executors.newSingleThreadScheduledExecutor();
     private final Object transportLock = new Object();
     private volatile boolean closed;
+    private final StartupDiagnostics diagnostics;
     private volatile IOException closeError = new IOException(t("Codex 연결이 종료되었습니다."));
 
     public RpcClient(InputStream input, OutputStream output, Listener listener) {
-        this.input = new BufferedReader(new InputStreamReader(input, StandardCharsets.UTF_8));
+        this(input, output, listener, new StartupDiagnostics());
+    }
+    public RpcClient(InputStream input, OutputStream output, Listener listener, StartupDiagnostics diagnostics) {
+        this.diagnostics = diagnostics;
+        InputStream counted = new FilterInputStream(input) {
+            @Override public int read() throws IOException { int value = in.read(); if (value >= 0) diagnostics.bytes(1); return value; }
+            @Override public int read(byte[] bytes, int offset, int length) throws IOException { int count = in.read(bytes, offset, length); diagnostics.bytes(count); return count; }
+        };
+        this.input = new BufferedReader(new InputStreamReader(counted, StandardCharsets.UTF_8));
         this.output = new OutputStreamWriter(output, StandardCharsets.UTF_8);
         this.listener = listener;
     }
@@ -76,7 +85,7 @@ public final class RpcClient implements AutoCloseable {
         IOException failure = null;
         synchronized (transportLock) {
             if (closed) throw closedException();
-            try { output.write(value.toString()); output.write('\n'); output.flush(); }
+            try { output.write(value.toString()); output.write('\n'); output.flush(); diagnostics.written(); }
             catch (IOException e) { failure = new IOException(t("Codex 통신이 끊겼습니다."), e); }
         }
         if (failure != null) { disconnect(failure); throw failure; }
@@ -87,11 +96,12 @@ public final class RpcClient implements AutoCloseable {
             while (!closed) {
                 String line = limitedLine();
                 if (line == null) break;
+                diagnostics.line();
                 if (!line.isBlank()) {
                     JSONObject message;
                     // Ignore unframed output, but do not hide failures in protocol handling.
                     try { message = Json.parse(line); }
-                    catch (RuntimeException invalidJson) { continue; }
+                    catch (RuntimeException invalidJson) { diagnostics.invalid(); continue; }
                     accept(message);
                 }
             }
@@ -119,7 +129,7 @@ public final class RpcClient implements AutoCloseable {
             return;
         }
         CompletableFuture<JSONObject> target = pending.remove(String.valueOf(id));
-        if (target == null) return;
+        if (target == null) { diagnostics.unmatched(); return; }
         JSONObject error = msg.optJSONObject("error");
         if (error != null) target.completeExceptionally(new IOException(error.optString("message", t("Codex 요청 실패"))));
         else {

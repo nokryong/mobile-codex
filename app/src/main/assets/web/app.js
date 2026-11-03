@@ -7,6 +7,7 @@
   const pending = new Map(), requestQueue = new Map();
   let agentUi = null;
   let liveUi = null;
+  let reportsUi = null;
   let terminalState = {id:'', revision:-1, running:false, stopping:false}, terminalSending = false;
   const dialogs = [], frame = fn => (window.requestAnimationFrame || (cb => setTimeout(cb, 0)))(fn);
   let following = true, draftScope = '', draftConsultAccount = '', sending = null, configOriginal = '', sidebarFocus = null, openedImage = null;
@@ -133,6 +134,7 @@
   }
   function close(id) { $(id).close(); }
   function dismiss(id) {
+    if (id === 'report-dialog' && reportsUi) { reportsUi.cancel(); return; }
     const dirty = (id === 'editor-dialog' && openedFile && $('editor').value !== openedFile.content)
       || (id === 'config-dialog' && $('config-editor').value !== configOriginal)
       || (id === 'settings-dialog' && instructionsLoaded && $('instructions-editor').value !== instructionsOriginal);
@@ -2156,7 +2158,9 @@
     }
     show('request-dialog');
   }
+  reportsUi = window.MobileCodexReports?.({document, call, t, show, close});
   window.mobileCodexEvent = (name, data) => {
+    if (name === 'reports.available') { reportsUi?.available(); return; }
     if (name.startsWith('live.')) { liveUi?.event(name, data); return; }
     if (name.startsWith('agents.')) { agentUi?.event(name, data); return; }
     if (name === 'response') { const p = pending.get(data.id); if (p) { clearTimeout(p.timer); pending.delete(data.id); data.error ? p.reject(new Error(data.error)) : p.resolve(data.result || {}); } return; }

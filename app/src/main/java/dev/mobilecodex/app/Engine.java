@@ -19,6 +19,12 @@ import static dev.mobilecodex.app.core.Json.*;
 
 /** Owns one local app-server process, outside Activity/WebView lifecycle. */
 public final class Engine {
+    private volatile JSONObject failureDiagnostic;
+    private StartupDiagnostics startupDiagnostics;
+    private void publishDiagnostic(JSONObject value, String action) {
+        try { failureDiagnostic = ErrorReports.withOperation(value, action); event("diagnostics.available", failureDiagnostic); }
+        catch (Exception ignored) { /* Diagnostic handling must preserve the original failure. */ }
+    }
     /** State events are frequent and cross the WebView bridge, so only expose a bounded tail. */
     private static final int SNAPSHOT_MESSAGE_LIMIT = 40;
     public interface Ui {
@@ -227,7 +233,10 @@ public final class Engine {
     void setTestAgentTransport(TestAgentTransport value) { testAgentTransport = value; }
     void setTestAccountValidation(boolean value) { testAccountValidation = value; }
     File processHomeForTest() { return processHome; }
-    private void event(String name, JSONObject data) { Ui current = ui; if (current != null) current.event(name, data); for (Ui observer : observers) if (observer != current) observer.event(name, data); }
+    private void event(String name, JSONObject data) {
+        if ("error".equals(name)) publishDiagnostic(ErrorReports.genericDiagnostic(), "chat.send");
+        Ui current = ui; if (current != null) current.event(name, data); for (Ui observer : observers) if (observer != current) observer.event(name, data);
+    }
     private JSONObject requestUiParams(PendingRequest request) {
         try {
             JSONObject result = new JSONObject(request.params.toString());
@@ -556,6 +565,7 @@ public final class Engine {
         // Installation cancellation must not queue behind a long Codex RPC.
         if (action.equals("linux.cancel")) { linux.cancel(); reply.complete(linux.status(), null); return; }
         io.execute(() -> {
+            failureDiagnostic = null;
             try {
                 if (sessionStore.recoveryRequired() && action.startsWith("chat.") && !action.equals("chat.stop"))
                     throw new IOException(t("대화 기록을 저장할 수 없습니다. 복구가 필요합니다. 원본은 보존되어 있습니다."));
@@ -772,6 +782,7 @@ public final class Engine {
                     default -> throw new IOException(t("지원하지 않는 요청입니다: ") + action);
                 }
             } catch (Throwable e) {
+                publishDiagnostic(failureDiagnostic == null ? ErrorReports.genericDiagnostic() : failureDiagnostic, action);
                 reply.complete(null, unwrap(e));
             }
         });
@@ -906,12 +917,14 @@ public final class Engine {
         builder.environment().put("CODEX_SELF_EXE", binary.getAbsolutePath());
         context.startForegroundService(new Intent(context, EngineService.class));
         RuntimeFailure.Tail stderrTail = new RuntimeFailure.Tail();
+        StartupDiagnostics diagnostic = new StartupDiagnostics(); startupDiagnostics = diagnostic;
         try {
             process = builder.start();
+            diagnostic.spawned();
             Process launched = process;
             Thread errors = new Thread(() -> {
                 // Drain stderr to avoid deadlock. Keep only a bounded private tail for allow-listed diagnostics.
-                try (InputStream stderr = launched.getErrorStream()) { byte[] buffer = new byte[4096]; int count; while ((count = stderr.read(buffer)) != -1) stderrTail.append(buffer, count); }
+                try (InputStream stderr = launched.getErrorStream()) { byte[] buffer = new byte[4096]; int count; while ((count = stderr.read(buffer)) != -1) { diagnostic.stderr(count); stderrTail.append(buffer, count); } }
                 catch (IOException ignored) {}
             }, "codex-stderr"); errors.setDaemon(true); errors.start();
             final RpcClient[] launchedConnection = new RpcClient[1];
@@ -921,11 +934,13 @@ public final class Engine {
                 @Override public void disconnected(Throwable error) {
                     io.execute(() -> codexDisconnected(launched, launchedConnection[0], error, stderrTail));
                 }
-            });
+            }, diagnostic);
             launchedConnection[0] = rpc;
             rpc.start();
+            diagnostic.initializing();
             call("initialize", obj("clientInfo", obj("name", "mobile_codex", "title", "Mobile Codex", "version", "0.1.11"),
                 "capabilities", obj("experimentalApi", true)));
+            diagnostic.initialized();
             rpc.notify("initialized", new JSONObject());
             ready = true; status = t("연결됨");
             readAccount();
@@ -934,10 +949,13 @@ public final class Engine {
             catch (Exception ignored) { models = new JSONArray(); }
             if (models == null) models = new JSONArray();
             if (restoreConversation) restoreConversation();
+            diagnostic.ready();
             publish();
         } catch (Exception e) {
             Process failed = process; int exitCode = -1;
             try { if (failed != null) exitCode = failed.exitValue(); } catch (IllegalThreadStateException ignored) { }
+            String errorCode = "initialize_sent".equals(diagnostic.stage()) && unwrap(e) instanceof TimeoutException ? "initialize_timeout" : "start_failure";
+            failureDiagnostic = diagnostic.snapshot(errorCode, loginInProgress ? "pending" : "active", failed != null && failed.isAlive(), exitCode, stderrTail.category());
             String diagnosis = stderrTail.diagnosis();
             String detail = t("Codex를 시작하지 못했습니다") + (exitCode >= 0 ? t(" (종료 코드 ") + exitCode + ")" : "") + ": " + unwrap(e).getMessage()
                 + (diagnosis.isEmpty() ? "" : t(" (진단 단서: ") + diagnosis + ")");
@@ -953,6 +971,9 @@ public final class Engine {
         if (process != launched || rpc != connection) return;
         int exitCode = -1;
         try { exitCode = launched.exitValue(); } catch (IllegalThreadStateException ignored) { }
+        if (startupDiagnostics != null) {
+            publishDiagnostic(startupDiagnostics.snapshot("transport_closed", loginInProgress ? "pending" : "active", launched.isAlive(), exitCode, stderrTail.category()), "runtime.start");
+        }
         if (launched.isAlive()) launched.destroyForcibly();
         PhoneUseService.stopControl();
         process = null; rpc = null;
@@ -1048,8 +1069,10 @@ public final class Engine {
             return call("account/login/start", obj("type", "chatgptDeviceCode"));
         } catch (Exception error) {
             loginInProgress = false;
+            JSONObject loginDiagnostic = failureDiagnostic;
             try { restoreAccountAfterCancelledLogin(); }
             catch (Exception restoreError) { error.addSuppressed(restoreError); }
+            finally { failureDiagnostic = loginDiagnostic; }
             throw error;
         }
     }

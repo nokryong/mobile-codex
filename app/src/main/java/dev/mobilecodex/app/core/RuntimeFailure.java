@@ -10,12 +10,21 @@ public final class RuntimeFailure {
     public static final int MAX_TAIL_BYTES = 1024;
 
     public static String classify(String stderrTail) {
+        return switch (category(stderrTail)) {
+            case "native_link" -> t("네이티브 종속성 오류");
+            case "panic" -> t("런타임 내부 오류");
+            case "memory" -> t("메모리 부족");
+            case "config" -> t("설정 형식 오류");
+            default -> "";
+        };
+    }
+    public static String category(String stderrTail) {
         String value = stderrTail == null ? "" : stderrTail.toLowerCase(Locale.ROOT);
-        if (value.contains("cannot link executable") || value.contains("cannot locate symbol")) return t("네이티브 종속성 오류");
-        if (value.contains("panicked at") || value.contains("thread 'main' panicked")) return t("런타임 내부 오류");
-        if (value.contains("out of memory") || value.contains("outofmemory") || value.contains("memory allocation")) return t("메모리 부족");
-        if (value.contains("config parse") || value.contains("failed to parse config") || value.contains("toml parse")) return t("설정 형식 오류");
-        return "";
+        if (value.contains("cannot link executable") || value.contains("cannot locate symbol")) return "native_link";
+        if (value.contains("panicked at") || value.contains("thread 'main' panicked")) return "panic";
+        if (value.contains("out of memory") || value.contains("outofmemory") || value.contains("memory allocation")) return "memory";
+        if (value.contains("config parse") || value.contains("failed to parse config") || value.contains("toml parse")) return "config";
+        return "none";
     }
 
     /** Bounded, in-memory-only stderr tail. It is classified but never logged, persisted, or exposed. */
@@ -32,6 +41,7 @@ public final class RuntimeFailure {
             value = next;
         }
         public synchronized String diagnosis() { return classify(new String(value, StandardCharsets.UTF_8)); }
+        public synchronized String category() { return RuntimeFailure.category(new String(value, StandardCharsets.UTF_8)); }
         int bufferedBytesForTest() { return value.length; }
     }
 }
