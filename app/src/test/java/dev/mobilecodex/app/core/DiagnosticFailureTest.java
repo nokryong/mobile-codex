@@ -8,7 +8,7 @@ import static dev.mobilecodex.app.core.Json.*;
 import static org.junit.Assert.*;
 
 public class DiagnosticFailureTest {
-    @Test public void onlyTheSameFailedOperationCanUseItsStartupMeasurements() {
+    @Test public void onlyTheSameFailedOperationCanUseItsStartupMeasurements() throws Exception {
         Object login = new Object();
         JSONObject measured = obj("errorCode", "initialize_timeout", "stage", "initialize_sent", "stdoutBytes", 12);
         Throwable failure = new DiagnosticFailure("private error /path token", new IOException("private cause"), login, measured);
@@ -19,7 +19,7 @@ public class DiagnosticFailureTest {
         assertFalse(laterChat.toString().contains("private"));
         assertFalse(DiagnosticFailure.snapshot(new IOException("later failure"), login).has("stdoutBytes"));
     }
-    @Test public void replacementProcessAndRollbackCannotOverwriteTheOriginalFailure() {
+    @Test public void replacementProcessAndRollbackCannotOverwriteTheOriginalFailure() throws Exception {
         Object operation = new Object();
         StartupDiagnostics first = new StartupDiagnostics(); first.bytes(12);
         Throwable original = new DiagnosticFailure("first execution", null, operation, first.snapshot("start_failure", "pending", false, 1, "none"));

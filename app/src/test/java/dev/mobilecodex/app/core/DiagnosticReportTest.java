@@ -29,7 +29,7 @@ public class DiagnosticReportTest {
         assertEquals(-1,snapshot.optLong("responseMs")); assertEquals("initialize_sent",snapshot.optString("stage"));
         assertFalse(snapshot.has("message")); assertFalse(snapshot.has("stdout"));
     }
-    @Test public void missingMeasurementsAreNotMeasuredZeros() {
+    @Test public void missingMeasurementsAreNotMeasuredZeros() throws Exception {
         JSONObject absent = report(obj()), zero = report(new StartupDiagnostics().snapshot("start_failure", "active", false, 0, "none"));
         assertEquals(2, absent.getInt("schema"));
         for (String key : new String[]{"elapsedMs", "stdoutBytes", "stdoutLines", "stderrBytes", "invalidJson", "unmatchedIds", "processAlive"}) {
@@ -45,7 +45,15 @@ public class DiagnosticReportTest {
             JSONObject fixture = new JSONObject(new String(input.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8));
             JSONObject actual = report(obj("operation", "login"));
             actual.put("reportId", fixture.getString("reportId"));
-            assertTrue(actual.similar(fixture));
+            assertEquals(fixture.length(), actual.length());
+            for (var keys = fixture.keys(); keys.hasNext();) {
+                String key = keys.next();
+                Object expected = fixture.get(key), observed = actual.get(key);
+                if (expected instanceof Number) {
+                    assertTrue(key, observed instanceof Number);
+                    assertEquals(key, expected.toString(), observed.toString());
+                } else assertEquals(key, expected, observed);
+            }
         }
     }
     private static JSONObject report(JSONObject source) {
