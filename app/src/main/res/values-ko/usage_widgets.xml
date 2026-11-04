@@ -1,0 +1,7 @@
+<resources>
+    <string name="codex_usage_widget">Codex 사용 한도</string>
+    <string name="claude_usage_widget">Claude 사용 한도</string>
+    <string name="gemini_usage_widget">Gemini 사용 한도</string>
+    <string name="usage_widget_description">남은 사용량과 초기화 시간</string>
+    <string name="usage_widget_refresh">사용량 새로고침</string>
+</resources>

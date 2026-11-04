@@ -49,6 +49,19 @@
             </intent-filter>
         </activity>
         <receiver android:name=".CodexNotificationReceiver" android:exported="false" />
+        <receiver android:name=".UsageWidgetProvider$Codex" android:exported="false" android:label="@string/codex_usage_widget">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/codex_usage_widget" />
+        </receiver>
+        <receiver android:name=".UsageWidgetProvider$Claude" android:exported="false" android:label="@string/claude_usage_widget">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/claude_usage_widget" />
+        </receiver>
+        <receiver android:name=".UsageWidgetProvider$Gemini" android:exported="false" android:label="@string/gemini_usage_widget">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/gemini_usage_widget" />
+        </receiver>
+        <service android:name=".UsageWidgetJobService" android:permission="android.permission.BIND_JOB_SERVICE" android:exported="true" />
         <activity android:name=".VoiceInputActivity" android:exported="false"
             android:excludeFromRecents="true" android:taskAffinity="" android:enableOnBackInvokedCallback="true" tools:targetApi="33" android:theme="@android:style/Theme.Material.Light.Dialog.NoActionBar" />
         <service android:name=".PhoneUseService" android:exported="true"

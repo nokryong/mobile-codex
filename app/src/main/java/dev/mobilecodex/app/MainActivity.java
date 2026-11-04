@@ -216,6 +216,13 @@ public final class MainActivity extends Activity implements Engine.Ui {
     @Override protected void onPause() { foreground = false; getSharedPreferences("notifications", 0).edit().putBoolean("foreground", false).commit(); if (dictation != null && !dictation.waitingPermission()) dictation.cancel(); super.onPause(); }
     @Override protected void onNewIntent(Intent intent) { super.onNewIntent(intent); setIntent(intent); handleNotificationIntent(intent); }
     private void handleNotificationIntent(Intent intent) {
+        if (intent != null && UsageWidgetProvider.OPEN.equals(intent.getAction())) {
+            if (loaded) {
+                event("widget.open", obj("provider", intent.getStringExtra("provider")));
+                intent.setAction(null);
+            }
+            return;
+        }
         if (intent == null || !CodexNotificationReceiver.ACTION.equals(intent.getAction())) return;
         String thread = intent.getStringExtra("threadId"); if (thread == null) thread = "";
         final String target = thread;

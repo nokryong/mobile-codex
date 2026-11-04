@@ -40,6 +40,13 @@ function start(t,runScript='run'){
  });
  return {child,call,events,hosts,waitEvent};
 }
+test('a widget refresh checks only its requested provider',{timeout:20000},async t=>{
+ const s=start(t);
+ const result=await s.call('agents.providers.check',{provider:'claude'});
+ assert.deepEqual(result.providers.map(p=>p.id),['claude']);
+ assert.deepEqual(s.hosts.filter(h=>h.method==='host.launch').map(h=>h.params.provider),['claude']);
+ await assert.rejects(s.call('agents.providers.check',{provider:'unknown'}),/에이전트를 선택/);
+});
 test('an agent turn streams deltas, then reports its native session',{timeout:20000},async t=>{
  const s=start(t);
  assert.deepEqual(await s.call('agents.run',{runId:'run-1',sessionId:'local-1',memberId:'claude',provider:'claude',model:'m1',mode:'chat',prompt:'hello'}),{ok:true});

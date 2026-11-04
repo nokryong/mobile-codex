@@ -42,6 +42,7 @@ public final class Engine {
         Approval(String title, String message) { this.title = title; this.message = message; }
     }
     private final Context context;
+    private final UsageWidgetStore usageWidgets;
     public final DocumentStore documents;
     final ImageStore images;
     final AttachmentStore attachments;
@@ -164,6 +165,7 @@ public final class Engine {
 
     public Engine(Context context) {
         this.context = context;
+        usageWidgets = new UsageWidgetStore(context);
         permissionMode = context.getSharedPreferences("settings", 0).getString("permissions", "workspace-write");
         approvalMode = context.getSharedPreferences("settings", 0).getString("approvalMode", "auto-review");
         documents = new DocumentStore(context);
@@ -312,7 +314,48 @@ public final class Engine {
         }
         return obj("hasMore", start > 0, "beforeId", beforeId, "total", total);
     }
-    private void publish() { if (!suppressStatePublish) event("state", snapshot()); }
+    private void publish() {
+        if (!suppressStatePublish) {
+            // Staged logins/switches are private until their credential transaction commits.
+            if (!loginInProgress && addAccountRestoreKey.isBlank()) usageWidgets.codex(accountProfiles.activeKey(), authState, rateLimits);
+            event("state", snapshot());
+        }
+    }
+    /** A JobService owns the execution window; quota refresh never sends a model prompt. */
+    void refreshUsageWidget(String provider, Reply reply) {
+        io.execute(() -> {
+            if (provider.equals("codex")) {
+                boolean temporary = !ready;
+                try {
+                    if (autoRestorePaused || loginInProgress || hasRunningTurns() || accountProfiles.hasPendingAddLogin()) {
+                        reply.complete(obj(), null); return;
+                    }
+                    if (!accountProfiles.hasSavedLogin()) {
+                        usageWidgets.codex("", "signed_out", obj());
+                    } else if (temporary) start(false, false);
+                    else readRateLimits();
+                    publish(); reply.complete(obj(), null);
+                } catch (Exception error) { reply.complete(null, error); }
+                finally { if (temporary && ui == null && observers.isEmpty()) releaseWidgetRuntime(); }
+            } else {
+                try {
+                    agentBridge().handle("agents.providers.check", obj("provider", provider), (result, error) -> {
+                        io.execute(() -> {
+                            if (error == null && result != null) { mergeAgentProviders(result.optJSONArray("providers")); publish(); }
+                            reply.complete(result, error);
+                        });
+                    });
+                } catch (Exception error) { reply.complete(null, error); }
+            }
+        });
+    }
+    /** Release only the transport started by a quota job, preserving phone consent and chats. */
+    private void releaseWidgetRuntime() {
+        Process previous = process; RpcClient connection = rpc;
+        process = null; rpc = null; ready = false;
+        if (connection != null) connection.close();
+        if (previous != null && previous.isAlive()) previous.destroy();
+    }
     private void persist() {
         try { persistSessions(sessions); }
         catch (IOException e) { event("error", obj("message", t("대화 기록을 저장하지 못했습니다."))); }
@@ -879,6 +922,9 @@ public final class Engine {
     }
     /** Authentication can start in an empty HOME without touching saved threads. */
     private void start(boolean restoreConversation) throws Exception {
+        start(restoreConversation, true);
+    }
+    private void start(boolean restoreConversation, boolean foregroundRuntime) throws Exception {
         restoreConversation = restoreConversation && !loginInProgress && processHome.equals(codexHome.root());
         autoRestorePaused = false;
         if (testTransport != null) {
@@ -915,7 +961,7 @@ public final class Engine {
         if (retiredProBridgeConfigured(config)) builder.command().addAll(List.of("-c", "mcp_servers.mobile_codex_pro.enabled=false"));
         linux.configureEnvironment(builder.environment());
         builder.environment().put("CODEX_SELF_EXE", binary.getAbsolutePath());
-        context.startForegroundService(new Intent(context, EngineService.class));
+        if (foregroundRuntime) context.startForegroundService(new Intent(context, EngineService.class));
         RuntimeFailure.Tail stderrTail = new RuntimeFailure.Tail();
         StartupDiagnostics diagnostic = new StartupDiagnostics(); startupDiagnostics = diagnostic;
         try {
@@ -945,7 +991,7 @@ public final class Engine {
             ready = true; status = t("연결됨");
             readAccount();
             readRateLimits();
-            try { models = call("model/list", obj("limit", 100, "includeHidden", false)).optJSONArray("data"); }
+            if (foregroundRuntime) try { models = call("model/list", obj("limit", 100, "includeHidden", false)).optJSONArray("data"); }
             catch (Exception ignored) { models = new JSONArray(); }
             if (models == null) models = new JSONArray();
             if (restoreConversation) restoreConversation();
@@ -959,7 +1005,8 @@ public final class Engine {
             String diagnosis = stderrTail.diagnosis();
             String detail = t("Codex를 시작하지 못했습니다") + (exitCode >= 0 ? t(" (종료 코드 ") + exitCode + ")" : "") + ": " + unwrap(e).getMessage()
                 + (diagnosis.isEmpty() ? "" : t(" (진단 단서: ") + diagnosis + ")");
-            stopCodex(); throw new IOException(detail, e);
+            if (foregroundRuntime) stopCodex(); else releaseWidgetRuntime();
+            throw new IOException(detail, e);
         }
     }
     private void restoreConversation() throws Exception {
@@ -2480,6 +2527,7 @@ public final class Engine {
         if (providers == null) return;
         for (int i = 0; i < providers.length(); i++) {
             JSONObject provider = providers.optJSONObject(i); if (provider == null) continue;
+            usageWidgets.provider(provider);
             int at = -1;
             for (int j = 0; j < agentProviders.length(); j++) if (agentProviders.optJSONObject(j).optString("id").equals(provider.optString("id"))) at = j;
             try { if (at < 0) agentProviders.put(provider); else agentProviders.put(at, provider); } catch (Exception ignored) {}

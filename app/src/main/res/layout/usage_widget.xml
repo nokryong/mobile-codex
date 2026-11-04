@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent" android:layout_height="match_parent">
+    <ImageView android:id="@+id/usage_battery" android:layout_width="match_parent"
+        android:layout_height="match_parent" android:scaleType="fitXY"
+        android:src="@drawable/usage_widget_preview" android:contentDescription="@string/usage_widget_description" />
+    <ImageButton android:id="@+id/usage_refresh" android:layout_width="44dp" android:layout_height="44dp"
+        android:layout_gravity="top|end" android:padding="14dp" android:background="@android:color/transparent"
+        android:src="@drawable/usage_widget_refresh" android:contentDescription="@string/usage_widget_refresh" />
+</FrameLayout>
