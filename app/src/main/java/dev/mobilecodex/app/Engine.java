@@ -52,6 +52,8 @@ public final class Engine {
     private final Set<Ui> observers = new CopyOnWriteArraySet<>();
     private final ChangeReview changes;
     private Process process;
+    // Only this exact process may be released by a widget-only refresh.
+    private Process widgetProcess;
     private RpcClient rpc;
     private TestTransport testTransport;
     private TestAgentTransport testAgentTransport;
@@ -190,6 +192,8 @@ public final class Engine {
     public void attach(Ui ui) {
         this.ui = ui;
         io.execute(() -> {
+            if (this.ui == ui) promoteWidgetRuntime();
+            else if (this.ui == null && observers.isEmpty()) releaseWidgetRuntime();
             publish();
             if (pendingApproval != null && !pendingApproval.decision.isDone()) ui.approval(pendingApproval);
             if (pendingConsultation != null) ui.event("pro.consult", (JSONObject) uiJsonCopy(pendingConsultation.prepared));
@@ -229,7 +233,7 @@ public final class Engine {
             publish(); throw error;
         } finally { lastAccountCheckElapsed = SystemClock.elapsedRealtime(); }
     }
-    public void observe(Ui observer) { observers.add(observer); io.execute(() -> { if (observers.contains(observer)) { observer.event("state", snapshot()); if (pendingApproval != null && !pendingApproval.decision.isDone()) observer.approval(pendingApproval); if (pendingConsultation != null) observer.event("pro.consult", (JSONObject) uiJsonCopy(pendingConsultation.prepared)); requests.forEach((key, request) -> observer.event("server.request", obj("key", key, "method", request.method, "params", requestUiParams(request)))); } }); }
+    public void observe(Ui observer) { observers.add(observer); io.execute(() -> { if (observers.contains(observer)) { promoteWidgetRuntime(); observer.event("state", snapshot()); if (pendingApproval != null && !pendingApproval.decision.isDone()) observer.approval(pendingApproval); if (pendingConsultation != null) observer.event("pro.consult", (JSONObject) uiJsonCopy(pendingConsultation.prepared)); requests.forEach((key, request) -> observer.event("server.request", obj("key", key, "method", request.method, "params", requestUiParams(request)))); } else if (ui == null && observers.isEmpty()) releaseWidgetRuntime(); }); }
     public void unobserve(Ui observer) { observers.remove(observer); }
     void setTestTransport(TestTransport value) { testTransport = value; }
     void setTestAgentTransport(TestAgentTransport value) { testAgentTransport = value; }
@@ -334,6 +338,7 @@ public final class Engine {
                         usageWidgets.codex("", "signed_out", obj());
                     } else if (temporary) start(false, false);
                     else readRateLimits();
+                    if (temporary && (ui != null || !observers.isEmpty())) promoteWidgetRuntime();
                     publish(); reply.complete(obj(), null);
                 } catch (Exception error) { reply.complete(null, error); }
                 finally { if (temporary && ui == null && observers.isEmpty()) releaseWidgetRuntime(); }
@@ -351,10 +356,20 @@ public final class Engine {
     }
     /** Release only the transport started by a quota job, preserving phone consent and chats. */
     private void releaseWidgetRuntime() {
+        if (widgetProcess == null || process != widgetProcess) return;
         Process previous = process; RpcClient connection = rpc;
-        process = null; rpc = null; ready = false;
+        widgetProcess = null; process = null; rpc = null; ready = false;
         if (connection != null) connection.close();
         if (previous != null && previous.isAlive()) previous.destroy();
+    }
+    /** A visible consumer or ordinary start takes ownership of a widget-started transport once. */
+    private void promoteWidgetRuntime() {
+        if (widgetProcess == null || process != widgetProcess || !ready || !process.isAlive() || rpc == null || rpc.isClosed()) return;
+        context.startForegroundService(new Intent(context, EngineService.class));
+        widgetProcess = null;
+        try { models = call("model/list", obj("limit", 100, "includeHidden", false)).optJSONArray("data"); }
+        catch (Exception ignored) { models = new JSONArray(); }
+        if (models == null) models = new JSONArray();
     }
     private void persist() {
         try { persistSessions(sessions); }
@@ -927,6 +942,7 @@ public final class Engine {
     private void start(boolean restoreConversation, boolean foregroundRuntime) throws Exception {
         restoreConversation = restoreConversation && !loginInProgress && processHome.equals(codexHome.root());
         autoRestorePaused = false;
+        if (foregroundRuntime) promoteWidgetRuntime();
         if (testTransport != null) {
             ready = true;
             if (testAccountValidation) { readAccount(); readRateLimits(); }
@@ -941,7 +957,7 @@ public final class Engine {
         // A stdout disconnect can race with queued UI RPCs. Never reuse its closed writer or
         // leave the old child around while replacing it.
         Process staleProcess = process; RpcClient staleRpc = rpc;
-        process = null; rpc = null; ready = false;
+        widgetProcess = null; process = null; rpc = null; ready = false;
         if (staleRpc != null) staleRpc.close();
         if (staleProcess != null && staleProcess.isAlive()) staleProcess.destroyForcibly();
         if (!Arrays.asList(Build.SUPPORTED_ABIS).contains("arm64-v8a"))
@@ -966,6 +982,7 @@ public final class Engine {
         StartupDiagnostics diagnostic = new StartupDiagnostics(); startupDiagnostics = diagnostic;
         try {
             process = builder.start();
+            widgetProcess = foregroundRuntime ? null : process;
             diagnostic.spawned();
             Process launched = process;
             Thread errors = new Thread(() -> {
@@ -1023,7 +1040,7 @@ public final class Engine {
         }
         if (launched.isAlive()) launched.destroyForcibly();
         PhoneUseService.stopControl();
-        process = null; rpc = null;
+        widgetProcess = null; process = null; rpc = null;
         requests.forEach((key, value) -> event("server.resolved", obj("key", key)));
         requests.clear();
         ready = false; clearRunningState(); serverThreadId = "";
@@ -2365,7 +2382,7 @@ public final class Engine {
         loginInProgress = false;
         PhoneUseService.stopControl();
         if (pendingApproval != null) pendingApproval.decision.complete(false);
-        Process old = process; process = null;
+        Process old = process; widgetProcess = null; process = null;
         if (old != null) {
             old.destroyForcibly();
             // Account switching replaces auth.json immediately after this
