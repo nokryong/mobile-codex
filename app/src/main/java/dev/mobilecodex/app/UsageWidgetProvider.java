@@ -15,7 +15,7 @@ import android.view.View;
 import android.widget.RemoteViews;
 import dev.mobilecodex.app.core.UsageWidgetData;
 
-/** Three independently addable widget providers sharing one battery renderer. */
+/** Three independently addable widget providers sharing one usage renderer. */
 public abstract class UsageWidgetProvider extends AppWidgetProvider {
     static final String OPEN = "dev.mobilecodex.app.OPEN_USAGE_WIDGET";
     private static final String REFRESH = "dev.mobilecodex.app.REFRESH_USAGE_WIDGET";

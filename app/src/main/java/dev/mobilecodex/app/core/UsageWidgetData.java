@@ -24,11 +24,17 @@ public record UsageWidgetData(String status, long updatedAt, List<Limit> limits)
             for (var keys = buckets.keys(); keys.hasNext();) {
                 String id = keys.next();
                 JSONObject limits = buckets.optJSONObject(id);
-                if (limits != null) codexWindows(rows, limits, limits.optString("limitName", limits.optString("normalModelSlug", id)));
+                if (limits != null) codexWindows(rows, limits, limitName(limits, id));
                 if (rows.size() >= 8) break;
             }
         } else if (response != null && response.optJSONObject("rateLimits") != null) codexWindows(rows, response.optJSONObject("rateLimits"), "");
         return new UsageWidgetData(rows.isEmpty() ? "unknown" : "ready", now, rows);
+    }
+    private static String limitName(JSONObject limits, String fallback) {
+        // Android's optString renders an explicit JSON null as the text "null".
+        for (String key : List.of("limitName", "normalModelSlug"))
+            if (!limits.isNull(key) && !limits.optString(key).isBlank()) return limits.optString(key);
+        return fallback;
     }
     private static void codexWindows(List<Limit> rows, JSONObject limits, String prefix) {
         for (String key : List.of("primary", "secondary")) {
