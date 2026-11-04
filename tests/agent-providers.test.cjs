@@ -4,6 +4,17 @@ const fs=require('node:fs'),os=require('node:os'),path=require('node:path'),http
 const {spawn}=require('node:child_process');
 const {CliProvider}=require('../app/src/main/assets/rooms/providers.cjs');
 
+test('quota observation time survives failed checks and is cleared on sign-out',()=>{
+ const provider=new CliProvider('claude',{root:'.',host:async()=>({}),emit:()=>{}});
+ provider.settle({state:'ready',auth:'signed_in',usage:[{label:'week',remainingPercent:25}]});
+ const observed=provider.cap.usageUpdatedAt;assert.ok(observed>0);
+ provider.settle({state:'unverified',auth:'unknown',usage:[]});
+ assert.equal(provider.cap.usageUpdatedAt,observed);assert.equal(provider.cap.usage[0].remainingPercent,25);
+ provider.settle({state:'ready',auth:'signed_in',usage:[]});assert.equal(provider.cap.usageUpdatedAt,observed);
+ provider.settle({state:'login_required',auth:'signed_out',usage:[]});
+ assert.equal(provider.cap.usageUpdatedAt,0);assert.deepEqual(provider.cap.usage,[]);
+});
+
 test('auto review is offered only by a capable Claude CLI and remains model gated',async()=>{
  const provider=new CliProvider('claude',{root:'.',host:async()=>({}),emit:()=>{}});
  provider.cap={state:'ready',models:[{id:'m',efforts:[]}],nativeAutoReview:true};

@@ -33,5 +33,6 @@ final class AppLanguage {
         if (!Set.of("system", "en", "ko").contains(value)) throw new IllegalArgumentException("Unsupported language");
         if (!context.getSharedPreferences("appearance", 0).edit().putString("language", value).commit()) throw new java.io.IOException("Unable to save language setting");
         configure(context);
+        UsageWidgetProvider.updateAll(context);
     }
 }

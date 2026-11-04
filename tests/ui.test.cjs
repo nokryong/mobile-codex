@@ -35,6 +35,23 @@ function setup(overrides = {}, options = {}) {
   w.eval(fs.readFileSync(root+'ui-core.js','utf8')); w.eval(fs.readFileSync(root+'app.js','utf8'));
   return {w,calls,responses,snapshot,frames};
 }
+test('a Codex widget opens usage settings and keeps the existing chat draft',async()=>{
+ const {w,calls}=setup();await tick();
+ w.document.getElementById('prompt').value='unsent draft';calls.length=0;
+ w.mobileCodexEvent('widget.open',{provider:'codex'});await tick();
+ assert.equal(w.document.getElementById('settings-dialog').open,true);
+ assert.equal(w.document.getElementById('prompt').value,'unsent draft');
+ assert.ok(calls.some(c=>c.action==='rpc'&&c.args.method==='account/rateLimits/read'));
+ assert.equal(calls.some(c=>c.action==='chat.resume'||c.action==='chat.new'),false);
+});
+test('an invited-provider widget opens account settings without fetching Codex quota',async()=>{
+ for(const provider of ['claude','agy']) {
+  const {w,calls}=setup();await tick();calls.length=0;
+  w.mobileCodexEvent('widget.open',{provider});await tick();
+  assert.equal(w.document.getElementById('settings-dialog').open,true);
+  assert.equal(calls.some(c=>c.action==='auth.refresh'||c.action==='rpc'),false);
+ }
+});
 test('text size restores natively, saves explicitly and preserves the conversation and draft',async()=>{
  let saved=130;
  const {w,calls,snapshot}=setup({'ui.textSize':m=>({percent:saved=m.args.percent})},{textSize:saved});await tick();

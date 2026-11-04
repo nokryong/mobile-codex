@@ -1,0 +1,6 @@
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:minWidth="110dp" android:minHeight="110dp" android:minResizeWidth="68dp" android:minResizeHeight="68dp"
+    android:targetCellWidth="2" android:targetCellHeight="2" android:resizeMode="horizontal|vertical"
+    android:updatePeriodMillis="1800000" android:initialLayout="@layout/usage_widget"
+    android:initialKeyguardLayout="@layout/usage_widget"
+    android:previewImage="@drawable/usage_widget_preview" android:description="@string/usage_widget_description" android:widgetCategory="home_screen|keyguard" />

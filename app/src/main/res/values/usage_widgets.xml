@@ -1,0 +1,7 @@
+<resources>
+    <string name="codex_usage_widget">Codex usage</string>
+    <string name="claude_usage_widget">Claude usage</string>
+    <string name="gemini_usage_widget">Gemini usage</string>
+    <string name="usage_widget_description">Remaining usage and reset time</string>
+    <string name="usage_widget_refresh">Refresh usage</string>
+</resources>

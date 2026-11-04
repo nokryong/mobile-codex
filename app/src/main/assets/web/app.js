@@ -2193,6 +2193,13 @@
     else if (name === 'viewport') { document.body.classList.toggle('keyboard-open', !!data.keyboardVisible); viewportChanged(); }
     else if (name === 'theme') document.documentElement.dataset.theme = data.theme === 'dark' ? 'dark' : 'light';
     else if (name === 'notification.open') { const resume = data.threadId ? call('chat.resume', {id:data.threadId}) : Promise.resolve(); resume.then(() => nextRequest()).catch(error => toast(error.message)); }
+    else if (name === 'widget.open') {
+      if (data.provider === 'claude' || data.provider === 'agy') {
+        selectSettingsTab('account'); show('settings-dialog'); sidebar(false);
+        document.querySelector('.provider-account[data-provider="' + data.provider + '"]')?.scrollIntoView({block:'start'});
+        agentUi?.refreshProviders();
+      } else openAccountSettings();
+    }
     else if (name === 'notifications.changed') { window.refreshNotificationSettings?.(); }
     else if (name === 'back') window.mobileCodexBack();
   };

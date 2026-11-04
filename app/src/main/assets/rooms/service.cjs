@@ -14,6 +14,7 @@ const host=(method,params)=>new Promise((resolve,reject)=>{
 const root=process.argv[2];
 const providers={claude:new CliProvider('claude',{root,host,emit}),agy:new CliProvider('agy',{root,host,emit})};
 const runs=new Map();
+let providerChecks=Promise.resolve();
 
 function start(p) {
   const provider=providers[p.provider];if(!provider)throw new Error('지원하지 않는 에이전트입니다.');
@@ -53,8 +54,12 @@ async function action(method,p={}) {
     case 'agents.providers':return {providers:Object.values(providers).map(p=>p.cap)};
     case 'agents.providers.check': {
       // One at a time: PRoot CLIs started together slow each other past their time limits.
-      const checked=[];for(const item of Object.values(providers))checked.push(await item.check({force:p.force===true}));
-      return {providers:checked};
+      const selected=p.provider?[provider()]:Object.values(providers);
+      const task=providerChecks.then(async()=>{
+        const checked=[];for(const item of selected)checked.push(await item.check({force:p.force===true}));
+        return {providers:checked};
+      });
+      providerChecks=task.catch(()=>{});return task;
     }
     case 'agents.run':return start(p);
     case 'agents.stop':return stop(p.runId);

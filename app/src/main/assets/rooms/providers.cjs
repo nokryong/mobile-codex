@@ -98,10 +98,12 @@ class CliProvider {
       this.cap={...this.cap,reason:'상태를 다시 확인하지 못해 마지막 연결 상태를 표시합니다. '+data.reason};return;
     }
     this.checkedAt=data.state==='ready'?Date.now():0;
+    // Retained quota rows keep their original observation time after a failed probe.
+    const usageUpdatedAt=data.state==='ready'&&data.usage?.length?Date.now():this.cap.usageUpdatedAt||0;
     // Only a signed-in or unanswered check may keep the lists from the last good one.
     const keep=['ready','unverified'].includes(data.state);
     this.cap={...this.cap,...data,id:this.id,nativeAutoReview:data.nativeAutoReview===true,autoReviewUnavailableModels:[],
-      models:keep&&!data.models?.length?this.cap.models:data.models||[],usage:keep&&!data.usage?.length?this.cap.usage:data.usage||[]};
+      models:keep&&!data.models?.length?this.cap.models:data.models||[],usage:keep&&!data.usage?.length?this.cap.usage:data.usage||[],usageUpdatedAt:keep?usageUpdatedAt:0};
   }
   async validate(member) {
     if(this.setup||this.preparing||this.disposed)throw new Error('공급자의 설치·로그인 또는 종료를 먼저 마쳐 주세요.');
