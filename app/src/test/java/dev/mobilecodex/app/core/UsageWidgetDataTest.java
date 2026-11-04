@@ -13,6 +13,11 @@ public class UsageWidgetDataTest {
         assertEquals(53, data.limits().get(0).remaining(), 0);
         assertEquals("Model budget · week", data.limits().get(0).label());
     }
+    @Test public void codexNullLimitNameFallsBackInsteadOfShowingNull() throws Exception {
+        var bucket = obj("primary", obj("usedPercent", 95, "windowDurationMins", 10080));
+        bucket.put("limitName", org.json.JSONObject.NULL).put("normalModelSlug", org.json.JSONObject.NULL);
+        assertEquals("codex · week", UsageWidgetData.codex(obj("rateLimitsByLimitId", obj("codex", bucket)), 123).limits().get(0).label());
+    }
     @Test public void codexUsesTheMostRestrictiveUnexpiredWindow() {
         UsageWidgetData data = UsageWidgetData.codex(obj("rateLimits", obj(
             "primary", obj("usedPercent", 12, "windowDurationMins", 300, "resetsAt", 2000000000L),
@@ -40,7 +45,7 @@ public class UsageWidgetDataTest {
         assertEquals(1234, data.updatedAt()); assertEquals(1893456000000L, data.limits().get(0).resetsAt());
         assertEquals(data, UsageWidgetData.read(data.json().toString()));
         assertFalse(data.json().toString().contains("private"));
-        source.put("auth", "signed_out"); assertTrue(UsageWidgetData.provider(source).limits().isEmpty());
+        assertTrue(UsageWidgetData.provider(obj("auth", "signed_out", "usage", source.optJSONArray("usage"))).limits().isEmpty());
     }
     @Test public void outOfRangeValuesAreClampedAndModelGroupLabelsAreRetained() {
         UsageWidgetData data = UsageWidgetData.provider(obj("usage", new JSONArray()
