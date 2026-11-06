@@ -67,8 +67,11 @@ public class EngineDiagnosticTest {
         handle("auth.login");
         notification("account/login/completed", obj("success", false, "error", "private login token /path"));
         assertEquals("login", diagnostics.get(0).getString("operation"));
+        assertEquals("login_failed", diagnostics.get(0).getString("errorCode"));
         notification("error", obj("error", obj("message", "private conversation")));
         assertEquals("chat", diagnostics.get(1).getString("operation"));
+        notification("error", obj("error", obj("message", "private conversation", "codexErrorInfo", "usageLimitExceeded")));
+        assertEquals("usage_limit", diagnostics.get(2).getString("errorCode"));
         assertFalse(diagnostics.toString().contains("private"));
     }
     @Test public void startupFailureDoesNotSupplyMeasurementsToTheNextActionOrNotification() throws Exception {

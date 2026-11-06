@@ -21,8 +21,11 @@ public final class DiagnosticReport {
     private static long time(JSONObject source, String key) { return Math.max(-1, Math.min(600000, source.optLong(key, -1))) / 100 * 100; }
     public static JSONObject build(JSONObject source, String version, int api, String abi, String manufacturer, String deviceClass, String ramClass, String pageSize) {
         JSONObject value = obj("schema", 2, "reportId", UUID.randomUUID().toString(),
-            "appVersion", choice(version, "0.3.6", "0.3.5", "0.3.6"), "runtime", "codex_01621",
-            "errorCode", choice(source.optString("errorCode"), "operation_failed", "initialize_timeout", "start_failure", "transport_closed"),
+            "appVersion", version != null && version.matches("(0|[1-9][0-9]{0,2})\\.(0|[1-9][0-9]{0,2})\\.(0|[1-9][0-9]{0,2})") ? version : "unknown", "runtime", "codex_01621",
+            "errorCode", choice(source.optString("errorCode"), "operation_failed", "initialize_timeout", "start_failure", "transport_closed",
+                "request_timeout", "permission_denied", "invalid_response", "storage_failure", "io_failure", "login_failed",
+                "rpc_invalid_request", "rpc_method_missing", "rpc_internal", "rpc_rejected", "turn_failed", "context_limit", "usage_limit",
+                "upstream_connection", "upstream_auth", "upstream_bad_request", "upstream_internal", "sandbox_failure"),
             "operation", choice(source.optString("operation"), "other", "login", "start", "chat"),
             "stage", choice(source.optString("stage"), "unknown", "before_spawn", "spawned", "initialize_sent", "initialized", "ready", "running"),
             "homeKind", choice(source.optString("homeKind"), "unknown", "active", "pending"),

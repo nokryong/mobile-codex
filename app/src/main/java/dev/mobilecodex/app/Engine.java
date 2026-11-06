@@ -29,7 +29,12 @@ public final class Engine {
         error(action, data, null);
     }
     private void error(String action, JSONObject data, Throwable failure) {
-        publishDiagnostic(DiagnosticFailure.snapshot(failure, diagnosticOperation), action);
+        JSONObject diagnostic = DiagnosticFailure.snapshot(failure, diagnosticOperation);
+        if (failure == null) {
+            String code = action.equals("auth.login") ? "login_failed" : action.equals("sessions.save") ? "storage_failure" : "operation_failed";
+            diagnostic = obj("errorCode", code, "stage", "unknown", "homeKind", "unknown");
+        }
+        publishDiagnostic(diagnostic, action);
         event("error", data);
     }
     /** State events are frequent and cross the WebView bridge, so only expose a bounded tail. */
@@ -49,6 +54,7 @@ public final class Engine {
         Approval(String title, String message) { this.title = title; this.message = message; }
     }
     private final Context context;
+    private final UsageWidgetStore usageWidgets;
     public final DocumentStore documents;
     final ImageStore images;
     final AttachmentStore attachments;
@@ -58,6 +64,8 @@ public final class Engine {
     private final Set<Ui> observers = new CopyOnWriteArraySet<>();
     private final ChangeReview changes;
     private Process process;
+    // Only this exact process may be released by a widget-only refresh.
+    private Process widgetProcess;
     private RpcClient rpc;
     private TestTransport testTransport;
     private TestAgentTransport testAgentTransport;
@@ -171,6 +179,7 @@ public final class Engine {
 
     public Engine(Context context) {
         this.context = context;
+        usageWidgets = new UsageWidgetStore(context);
         permissionMode = context.getSharedPreferences("settings", 0).getString("permissions", "workspace-write");
         approvalMode = context.getSharedPreferences("settings", 0).getString("approvalMode", "auto-review");
         documents = new DocumentStore(context);
@@ -195,6 +204,8 @@ public final class Engine {
     public void attach(Ui ui) {
         this.ui = ui;
         io.execute(() -> {
+            if (this.ui == ui) promoteWidgetRuntime();
+            else if (this.ui == null && observers.isEmpty()) releaseWidgetRuntime();
             publish();
             if (pendingApproval != null && !pendingApproval.decision.isDone()) ui.approval(pendingApproval);
             if (pendingConsultation != null) ui.event("pro.consult", (JSONObject) uiJsonCopy(pendingConsultation.prepared));
@@ -234,7 +245,7 @@ public final class Engine {
             publish(); throw error;
         } finally { lastAccountCheckElapsed = SystemClock.elapsedRealtime(); }
     }
-    public void observe(Ui observer) { observers.add(observer); io.execute(() -> { if (observers.contains(observer)) { observer.event("state", snapshot()); if (pendingApproval != null && !pendingApproval.decision.isDone()) observer.approval(pendingApproval); if (pendingConsultation != null) observer.event("pro.consult", (JSONObject) uiJsonCopy(pendingConsultation.prepared)); requests.forEach((key, request) -> observer.event("server.request", obj("key", key, "method", request.method, "params", requestUiParams(request)))); } }); }
+    public void observe(Ui observer) { observers.add(observer); io.execute(() -> { if (observers.contains(observer)) { promoteWidgetRuntime(); observer.event("state", snapshot()); if (pendingApproval != null && !pendingApproval.decision.isDone()) observer.approval(pendingApproval); if (pendingConsultation != null) observer.event("pro.consult", (JSONObject) uiJsonCopy(pendingConsultation.prepared)); requests.forEach((key, request) -> observer.event("server.request", obj("key", key, "method", request.method, "params", requestUiParams(request)))); } else if (ui == null && observers.isEmpty()) releaseWidgetRuntime(); }); }
     public void unobserve(Ui observer) { observers.remove(observer); }
     void setTestTransport(TestTransport value) { testTransport = value; }
     void setTestAgentTransport(TestAgentTransport value) { testAgentTransport = value; }
@@ -318,7 +329,59 @@ public final class Engine {
         }
         return obj("hasMore", start > 0, "beforeId", beforeId, "total", total);
     }
-    private void publish() { if (!suppressStatePublish) event("state", snapshot()); }
+    private void publish() {
+        if (!suppressStatePublish) {
+            // Staged logins/switches are private until their credential transaction commits.
+            if (!loginInProgress && addAccountRestoreKey.isBlank()) usageWidgets.codex(accountProfiles.activeKey(), authState, rateLimits);
+            event("state", snapshot());
+        }
+    }
+    /** A JobService owns the execution window; quota refresh never sends a model prompt. */
+    void refreshUsageWidget(String provider, Reply reply) {
+        io.execute(() -> {
+            if (provider.equals("codex")) {
+                boolean temporary = !ready;
+                try {
+                    if (autoRestorePaused || loginInProgress || hasRunningTurns() || accountProfiles.hasPendingAddLogin()) {
+                        reply.complete(obj(), null); return;
+                    }
+                    if (!accountProfiles.hasSavedLogin()) {
+                        usageWidgets.codex("", "signed_out", obj());
+                    } else if (temporary) start(false, false);
+                    else readRateLimits();
+                    if (temporary && (ui != null || !observers.isEmpty())) promoteWidgetRuntime();
+                    publish(); reply.complete(obj(), null);
+                } catch (Exception error) { reply.complete(null, error); }
+                finally { if (temporary && ui == null && observers.isEmpty()) releaseWidgetRuntime(); }
+            } else {
+                try {
+                    agentBridge().handle("agents.providers.check", obj("provider", provider), (result, error) -> {
+                        io.execute(() -> {
+                            if (error == null && result != null) { mergeAgentProviders(result.optJSONArray("providers")); publish(); }
+                            reply.complete(result, error);
+                        });
+                    });
+                } catch (Exception error) { reply.complete(null, error); }
+            }
+        });
+    }
+    /** Release only the transport started by a quota job, preserving phone consent and chats. */
+    private void releaseWidgetRuntime() {
+        if (widgetProcess == null || process != widgetProcess) return;
+        Process previous = process; RpcClient connection = rpc;
+        widgetProcess = null; process = null; rpc = null; ready = false;
+        if (connection != null) connection.close();
+        if (previous != null && previous.isAlive()) previous.destroy();
+    }
+    /** A visible consumer or ordinary start takes ownership of a widget-started transport once. */
+    private void promoteWidgetRuntime() {
+        if (widgetProcess == null || process != widgetProcess || !ready || !process.isAlive() || rpc == null || rpc.isClosed()) return;
+        context.startForegroundService(new Intent(context, EngineService.class));
+        widgetProcess = null;
+        try { models = call("model/list", obj("limit", 100, "includeHidden", false)).optJSONArray("data"); }
+        catch (Exception ignored) { models = new JSONArray(); }
+        if (models == null) models = new JSONArray();
+    }
     private void persist() {
         try { persistSessions(sessions); }
         catch (IOException e) { error("sessions.save", obj("message", t("대화 기록을 저장하지 못했습니다."))); }
@@ -888,8 +951,12 @@ public final class Engine {
     }
     /** Authentication can start in an empty HOME without touching saved threads. */
     private void start(boolean restoreConversation) throws Exception {
+        start(restoreConversation, true);
+    }
+    private void start(boolean restoreConversation, boolean foregroundRuntime) throws Exception {
         restoreConversation = restoreConversation && !loginInProgress && processHome.equals(codexHome.root());
         autoRestorePaused = false;
+        if (foregroundRuntime) promoteWidgetRuntime();
         if (testTransport != null) {
             ready = true;
             if (testAccountValidation) { readAccount(); readRateLimits(); }
@@ -904,7 +971,7 @@ public final class Engine {
         // A stdout disconnect can race with queued UI RPCs. Never reuse its closed writer or
         // leave the old child around while replacing it.
         Process staleProcess = process; RpcClient staleRpc = rpc;
-        process = null; rpc = null; ready = false;
+        widgetProcess = null; process = null; rpc = null; ready = false;
         if (staleRpc != null) staleRpc.close();
         if (staleProcess != null && staleProcess.isAlive()) staleProcess.destroyForcibly();
         if (!Arrays.asList(Build.SUPPORTED_ABIS).contains("arm64-v8a"))
@@ -924,11 +991,12 @@ public final class Engine {
         if (retiredProBridgeConfigured(config)) builder.command().addAll(List.of("-c", "mcp_servers.mobile_codex_pro.enabled=false"));
         linux.configureEnvironment(builder.environment());
         builder.environment().put("CODEX_SELF_EXE", binary.getAbsolutePath());
-        context.startForegroundService(new Intent(context, EngineService.class));
+        if (foregroundRuntime) context.startForegroundService(new Intent(context, EngineService.class));
         RuntimeFailure.Tail stderrTail = new RuntimeFailure.Tail();
         StartupDiagnostics diagnostic = new StartupDiagnostics();
         try {
             process = builder.start();
+            widgetProcess = foregroundRuntime ? null : process;
             diagnostic.spawned();
             Process launched = process;
             Thread errors = new Thread(() -> {
@@ -954,7 +1022,7 @@ public final class Engine {
             ready = true; status = t("연결됨");
             readAccount();
             readRateLimits();
-            try { models = call("model/list", obj("limit", 100, "includeHidden", false)).optJSONArray("data"); }
+            if (foregroundRuntime) try { models = call("model/list", obj("limit", 100, "includeHidden", false)).optJSONArray("data"); }
             catch (Exception ignored) { models = new JSONArray(); }
             if (models == null) models = new JSONArray();
             if (restoreConversation) restoreConversation();
@@ -964,12 +1032,12 @@ public final class Engine {
             Process failed = process; int exitCode = -1;
             try { if (failed != null) exitCode = failed.exitValue(); } catch (IllegalThreadStateException ignored) { }
             String errorCode = "initialize_sent".equals(diagnostic.stage()) && unwrap(e) instanceof TimeoutException ? "initialize_timeout" : "start_failure";
-            // The local counters and process belong to this exact failed launch.
             JSONObject measured = diagnostic.snapshot(errorCode, loginInProgress ? "pending" : "active", failed != null && failed.isAlive(), exitCode, stderrTail.category());
             String diagnosis = stderrTail.diagnosis();
             String detail = t("Codex를 시작하지 못했습니다") + (exitCode >= 0 ? t(" (종료 코드 ") + exitCode + ")" : "") + ": " + unwrap(e).getMessage()
                 + (diagnosis.isEmpty() ? "" : t(" (진단 단서: ") + diagnosis + ")");
-            stopCodex(); throw new DiagnosticFailure(detail, e, diagnosticOperation, measured);
+            if (foregroundRuntime) stopCodex(); else releaseWidgetRuntime();
+            throw new DiagnosticFailure(detail, e, diagnosticOperation, measured);
         }
     }
     private void restoreConversation() throws Exception {
@@ -981,13 +1049,12 @@ public final class Engine {
         if (process != launched || rpc != connection) return;
         int exitCode = -1;
         try { exitCode = launched.exitValue(); } catch (IllegalThreadStateException ignored) { }
-        // A later disconnect is not a measurement of the startup operation.
         publishDiagnostic(obj("errorCode", "transport_closed", "stage", "running", "homeKind", loginInProgress ? "pending" : "active",
             "processAlive", launched.isAlive(), "exitCode", exitCode, "stderrCategory", stderrTail.category()),
             loginInProgress ? "auth.login" : hasRunningTurns() ? "chat.send" : "runtime.disconnected");
         if (launched.isAlive()) launched.destroyForcibly();
         PhoneUseService.stopControl();
-        process = null; rpc = null;
+        widgetProcess = null; process = null; rpc = null;
         requests.forEach((key, value) -> event("server.resolved", obj("key", key)));
         requests.clear();
         ready = false; clearRunningState(); serverThreadId = "";
@@ -1611,7 +1678,7 @@ public final class Engine {
             } catch (Exception error) {
                 status = "failed"; text = t("Pro 문의 결과를 저장하지 못했습니다. 자동으로 다시 보내지 않습니다.");
                 try { message.put("status", status).put("text", text); } catch (Exception ignored) {}
-                error("chat.send", obj("threadId", pending.localThread, "message", text));
+                error("sessions.save", obj("threadId", pending.localThread, "message", text));
             }
         }
         try { pending.responder.respond(ToolCatalog.result("completed".equals(status), text)); }
@@ -2119,7 +2186,7 @@ public final class Engine {
                 JSONObject error = turn == null ? null : turn.optJSONObject("error");
                 boolean failed = !interrupted && ("failed".equals(completionStatus) || error != null);
                 if (currentThread && (interrupted || failed)) status = interrupted ? t("작업 중지됨") : t("작업 실패");
-                if (failed) error("chat.send", obj("threadId", eventThreadId, "message", error == null ? t("작업 실패") : error.optString("message", t("작업 실패"))));
+                if (failed) error("chat.send", obj("threadId", eventThreadId, "message", error == null ? t("작업 실패") : error.optString("message", t("작업 실패"))), new DiagnosticFailure.RpcFailure("", error));
                 taskNotification(interrupted ? "interrupted" : failed ? "failed" : "completed",
                     interrupted ? t("작업 중지됨") : failed ? t("작업 실패") : t("답변 완료"),
                     interrupted ? t("Codex 작업이 중지되었습니다.") : failed ? t("Codex 작업이 실패했습니다.") : t("Codex가 작업을 마쳤습니다."), eventThreadId, "");
@@ -2142,7 +2209,7 @@ public final class Engine {
                 drainAgentConsents();
             } else if (method.equals("error")) {
                 JSONObject error = p.optJSONObject("error");
-                error("chat.send", obj("threadId", eventThreadId, "message", error == null ? t("Codex 요청 오류") : error.optString("message", t("Codex 요청 오류"))));
+                error("chat.send", obj("threadId", eventThreadId, "message", error == null ? t("Codex 요청 오류") : error.optString("message", t("Codex 요청 오류"))), new DiagnosticFailure.RpcFailure("", error));
             } else {
                 event("agent.event", obj("method", method, "params", p));
             }
@@ -2332,7 +2399,7 @@ public final class Engine {
         loginInProgress = false;
         PhoneUseService.stopControl();
         if (pendingApproval != null) pendingApproval.decision.complete(false);
-        Process old = process; process = null;
+        Process old = process; widgetProcess = null; process = null;
         if (old != null) {
             old.destroyForcibly();
             // Account switching replaces auth.json immediately after this
@@ -2494,6 +2561,7 @@ public final class Engine {
         if (providers == null) return;
         for (int i = 0; i < providers.length(); i++) {
             JSONObject provider = providers.optJSONObject(i); if (provider == null) continue;
+            usageWidgets.provider(provider);
             int at = -1;
             for (int j = 0; j < agentProviders.length(); j++) if (agentProviders.optJSONObject(j).optString("id").equals(provider.optString("id"))) at = j;
             try { if (at < 0) agentProviders.put(provider); else agentProviders.put(at, provider); } catch (Exception ignored) {}
@@ -2654,7 +2722,7 @@ public final class Engine {
             run.codexRunning = true;
         } catch (Exception e) {
             run.codexRunning = false;
-            error("chat.send", obj("threadId", run.local, "message", t("Codex가 이어서 답하지 못했습니다: ") + unwrap(e).getMessage()));
+            error("chat.send", obj("threadId", run.local, "message", t("Codex가 이어서 답하지 못했습니다: ") + unwrap(e).getMessage()), e);
         }
     }
     private static String lastMessageId(JSONArray messages) {
@@ -2734,7 +2802,7 @@ public final class Engine {
                 }
                 default -> {}
             }
-        } catch (Exception e) { error("chat.send", obj("threadId", run.local, "message", unwrap(e).getMessage())); }
+        } catch (Exception e) { error("chat.send", obj("threadId", run.local, "message", unwrap(e).getMessage()), e); }
     }
     private void endAgentTurn(GroupRun run, AgentTurn turn) {
         roomLeases.remove(turn.runId); run.active.remove(turn.runId);
@@ -2758,7 +2826,7 @@ public final class Engine {
             String running = runningTurns.getOrDefault(run.local, "");
             JSONObject owner = session(run.local);
             if (!running.isBlank() && owner != null) try { call("turn/interrupt", obj("threadId", owner.optString("codexThreadId"), "turnId", running)); }
-            catch (Exception e) { error("chat.send", obj("threadId", run.local, "message", unwrap(e).getMessage())); }
+            catch (Exception e) { error("chat.send", obj("threadId", run.local, "message", unwrap(e).getMessage()), e); }
         }
         for (AgentTurn turn : new ArrayList<>(run.active.values())) {
             stopAgent(turn.runId);

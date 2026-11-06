@@ -4,6 +4,12 @@ import org.junit.Test;
 import static dev.mobilecodex.app.core.Json.obj;
 import static org.junit.Assert.*;
 public class DiagnosticReportTest {
+    @Test public void reportsActualVersionsAndOnlyFixedErrorCategories() {
+        for (String version : new String[]{"0.3.7", "0.3.8", "1.20.300"})
+            assertEquals(version, DiagnosticReport.build(obj("errorCode", "usage_limit"),version,35,"arm64","other","phone","unknown","unknown").optString("appVersion"));
+        JSONObject invalid = DiagnosticReport.build(obj("errorCode", "secret"),"private-version",35,"arm64","other","phone","unknown","unknown");
+        assertEquals("unknown", invalid.optString("appVersion")); assertEquals("operation_failed", invalid.optString("errorCode"));
+    }
     @Test public void copiesOnlyFixedFieldsAndCoarseDeviceBuckets() {
         JSONObject source = obj("errorCode", "initialize_timeout", "stage", "initialize_sent", "operation", "login", "stdoutBytes", 12,
             "token", "secret", "message", "private chat", "path", "/private/account", "stderrCategory", "private log", "spawnMs", -1);

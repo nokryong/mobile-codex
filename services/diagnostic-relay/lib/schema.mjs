@@ -46,7 +46,12 @@ const transport = {
 const nullableMeasurements = ['elapsedMs', 'processAlive', 'stdoutBytes', 'stdoutLines', 'invalidJson', 'unmatchedIds', 'stderrBytes'];
 function reportFields(schema) {
   if (schema !== 2) return fields;
-  return {...fields, ...Object.fromEntries(nullableMeasurements.map(key => [key, value => value === null || fields[key](value)]))};
+  return {...fields,
+    appVersion: value => typeof value === 'string' && /^(?:unknown|(?:0|[1-9][0-9]{0,2})\.(?:0|[1-9][0-9]{0,2})\.(?:0|[1-9][0-9]{0,2}))$/.test(value),
+    errorCode: value => fields.errorCode(value) || oneOf(['request_timeout', 'permission_denied', 'invalid_response', 'storage_failure', 'io_failure', 'login_failed',
+      'rpc_invalid_request', 'rpc_method_missing', 'rpc_internal', 'rpc_rejected', 'turn_failed', 'context_limit', 'usage_limit',
+      'upstream_connection', 'upstream_auth', 'upstream_bad_request', 'upstream_internal', 'sandbox_failure'])(value),
+    ...Object.fromEntries(nullableMeasurements.map(key => [key, value => value === null || fields[key](value)]))};
 }
 
 // Deliberately a flat scalar format. Reject duplicate keys, escaping, nested

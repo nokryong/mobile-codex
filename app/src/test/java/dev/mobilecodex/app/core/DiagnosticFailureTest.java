@@ -8,6 +8,20 @@ import static dev.mobilecodex.app.core.Json.*;
 import static org.junit.Assert.*;
 
 public class DiagnosticFailureTest {
+    @Test public void classifiesErrorsWithoutSerializingTheirMessagesOrRemoteData() throws Exception {
+        Object operation = new Object();
+        assertEquals("request_timeout", DiagnosticFailure.snapshot(new CompletionException(new java.util.concurrent.TimeoutException("secret")), operation).getString("errorCode"));
+        assertEquals("permission_denied", DiagnosticFailure.snapshot(new SecurityException("secret"), operation).getString("errorCode"));
+        assertEquals("io_failure", DiagnosticFailure.snapshot(new IOException("secret"), operation).getString("errorCode"));
+        for (Object info : new Object[]{"usageLimitExceeded", obj("usageLimitExceeded", obj("token", "secret"))}) {
+            JSONObject error = obj("message", "secret /path", "codexErrorInfo", info);
+            JSONObject result = DiagnosticFailure.snapshot(new DiagnosticFailure.RpcFailure("secret", error), operation);
+            assertEquals("usage_limit", result.getString("errorCode")); assertFalse(result.toString().contains("secret"));
+        }
+        assertEquals("rpc_internal", DiagnosticFailure.remoteCategory(obj("code", -32603, "data", "secret")));
+        assertEquals("rpc_rejected", DiagnosticFailure.remoteCategory(obj("code", 4294934693L)));
+        assertEquals("turn_failed", DiagnosticFailure.remoteCategory(obj("codexErrorInfo", "secret")));
+    }
     @Test public void onlyTheSameFailedOperationCanUseItsStartupMeasurements() throws Exception {
         Object login = new Object();
         JSONObject measured = obj("errorCode", "initialize_timeout", "stage", "initialize_sent", "stdoutBytes", 12);

@@ -119,9 +119,11 @@ repo root, Android unit/lint/build checks, and `node tools/verify_reports_browse
 Production Redis TTL/atomic behavior, production GitHub authentication and actual
 Android transport still need live verification; in-memory test stores are mocks.
 
-After approved provisioning: deploy backend, check health, run the single
-synthetic E2E with `tools/verify_diagnostic_relay.mjs`, verify the actual issue and
-repeat receipt returns the same link, close that clearly marked test issue, then
+After approved provisioning: deploy backend, check health, run
+`tools/verify_diagnostic_relay.mjs` to submit schema 2 with null measurements,
+retry it idempotently, and submit schema 1 (three submissions, at most two marked
+synthetic issues). The script checks exact public payloads and absence of a
+duplicate v2 sample. Close the clearly marked test issues, then
 set the real APK endpoint, bump app version/code once, and run exact-head CI.
 Publish the signed APK only after those gates. Update issue #15 only after the
 server and release are live. This feature must not be described as fixing its
@@ -129,7 +131,14 @@ unknown cause. Roll back by redeploying the previous server source; preserve
 Redis receipts to avoid replay. Never downgrade APK signatures or reset app data.
 
 The live-check workflow also runs when a same-repository PR is marked ready for
-review, allowing the single synthetic report check before merging/releasing.
+review, allowing this synthetic report check before merging/releasing. Do not
+repeat it in the same hour after consuming the three-submission network cap.
+
+Schema 2 also accepts fixed failure categories and bounded numeric app versions
+(three components of at most three digits, or `unknown`). Schema 1 retains its
+original version/error allow-lists. The field count remains 27; arbitrary error
+messages, upstream data and custom version strings are rejected. Engine error
+classification follows the [pinned Codex protocol](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/app-server-protocol/schema/typescript/v2/CodexErrorInfo.ts).
 
 References: [Vercel Functions](https://vercel.com/docs/functions/quickstart),
 [trusted headers](https://vercel.com/docs/headers/request-headers),

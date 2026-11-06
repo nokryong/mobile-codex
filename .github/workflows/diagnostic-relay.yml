@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       production_url:
-        description: 'Approved production Vercel alias; creates one clearly marked synthetic diagnostic issue'
+        description: 'Approved production alias; verifies v2 and legacy reports (up to two synthetic issues)'
         type: string
         required: true
 permissions:
@@ -23,7 +23,7 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22.23.4'
-      - name: Verify one synthetic report and an idempotent retry
+      - name: Verify schema 2 nulls, idempotent retry, public payload and schema 1
         env:
           REPORT_RELAY_URL: ${{ inputs.production_url || 'https://mobile-codex-diagnostic-relay.vercel.app' }}
         run: node tools/verify_diagnostic_relay.mjs "$REPORT_RELAY_URL"
