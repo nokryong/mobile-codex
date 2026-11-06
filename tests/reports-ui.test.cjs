@@ -2,6 +2,13 @@ const test=require('node:test'),assert=require('node:assert/strict');
 const create=require('../app/src/main/assets/web/reports.js');
 function fixture(call){const elements=new Map();const document={getElementById(id){if(!elements.has(id))elements.set(id,{textContent:'',hidden:false,disabled:false,dataset:{},addEventListener(){}});return elements.get(id);}};let visible=false;const ui=create({document,call,t:x=>x,show(){visible=true;},close(){visible=false;}});return{ui,e:id=>document.getElementById(id),visible:()=>visible};}
 const preview={status:'preview',reportId:'ephemeral-report-id',payload:{errorCode:'initialize_timeout',stdoutBytes:0}};
+test('schema 2 preview displays null measurements exactly and sends only the consented receipt',async()=>{
+ const payload=require('../app/src/test/resources/diagnostic-v2.json'),calls=[];
+ const fx=fixture(async(action,args)=>{calls.push({action,args});return action==='reports.preview'?{status:'preview',reportId:payload.reportId,payload}:{status:'sent',url:'https://github.com/nokryong/mobile-codex/issues/100'};});
+ await fx.ui.open(); assert.equal(fx.e('report-payload').textContent,JSON.stringify(payload,null,2));
+ assert.match(fx.e('report-payload').textContent,/"stdoutBytes": null/);
+ await fx.ui.send(); assert.deepEqual(calls[1],{action:'reports.send',args:{reportId:payload.reportId,consent:true}});
+});
 test('preview does not send, exact payload uses textContent and cancellation before consent sends nothing',async()=>{
  const calls=[],fx=fixture(async(action,args)=>{calls.push({action,args});return preview;});await fx.ui.open();assert.equal(fx.e('report-payload').textContent,JSON.stringify(preview.payload,null,2));await fx.ui.cancel();assert.equal(fx.visible(),false);assert.deepEqual(calls.map(c=>c.action),['reports.preview']);
 });

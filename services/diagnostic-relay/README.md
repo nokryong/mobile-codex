@@ -43,6 +43,20 @@ Set the APK endpoint only to the verified production `https://*.vercel.app` alia
    device model/serial, Android ID, installation ID or environment is read into it.
    Times are relative, rounded to 100 ms and capped at ten minutes. The report ID
    is a random per-error retry receipt, never an installation/device identifier.
+   Schema 2 keeps those field names and uses `null` for uncollected elapsed time,
+   process-alive state and transport counters. A measured zero stays `0` (and a
+   measured dead process stays `false`). Timing/exit fields retain their existing
+   `-1` unavailable sentinel. Schema 1 remains accepted with its original ranges
+   and grouping keys; schema 2 groups separately. No operation/process identity
+   used for matching measurements is serialized.
+   Startup measurements are frozen with the failed launch exception and accepted
+   only by the same engine action or notification. Successful startup, later
+   failures and replacement processes cannot supply those measurements. A later
+   disconnect reports only its current process state, without startup counters.
+   **Rollout order:** the relay must support schema 2 before an APK containing
+   this collector is released. The currently deployed schema-1-only relay will
+   reject schema 2; do not fall back to fabricated zeros. This PR does not deploy
+   the relay or release an APK.
 2. Explicit Send: `POST /api/challenge`, JSON `{ "reportId": "<UUID-v4>" }`.
    Returns a random challenge, 16-bit SHA-256 work requirement, five-minute expiry.
 3. `POST /api/reports`: the exact diagnostic fields plus `challengeId` and integer
@@ -105,9 +119,11 @@ repo root, Android unit/lint/build checks, and `node tools/verify_reports_browse
 Production Redis TTL/atomic behavior, production GitHub authentication and actual
 Android transport still need live verification; in-memory test stores are mocks.
 
-After approved provisioning: deploy backend, check health, run the single
-synthetic E2E with `tools/verify_diagnostic_relay.mjs`, verify the actual issue and
-repeat receipt returns the same link, close that clearly marked test issue, then
+After approved provisioning: deploy backend, check health, run
+`tools/verify_diagnostic_relay.mjs` to submit schema 2 with null measurements,
+retry it idempotently, and submit schema 1 (three submissions, at most two marked
+synthetic issues). The script checks exact public payloads and absence of a
+duplicate v2 sample. Close the clearly marked test issues, then
 set the real APK endpoint, bump app version/code once, and run exact-head CI.
 Publish the signed APK only after those gates. Update issue #15 only after the
 server and release are live. This feature must not be described as fixing its
@@ -115,7 +131,14 @@ unknown cause. Roll back by redeploying the previous server source; preserve
 Redis receipts to avoid replay. Never downgrade APK signatures or reset app data.
 
 The live-check workflow also runs when a same-repository PR is marked ready for
-review, allowing the single synthetic report check before merging/releasing.
+review, allowing this synthetic report check before merging/releasing. Do not
+repeat it in the same hour after consuming the three-submission network cap.
+
+Schema 2 also accepts fixed failure categories and bounded numeric app versions
+(three components of at most three digits, or `unknown`). Schema 1 retains its
+original version/error allow-lists. The field count remains 27; arbitrary error
+messages, upstream data and custom version strings are rejected. Engine error
+classification follows the [pinned Codex protocol](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/app-server-protocol/schema/typescript/v2/CodexErrorInfo.ts).
 
 References: [Vercel Functions](https://vercel.com/docs/functions/quickstart),
 [trusted headers](https://vercel.com/docs/headers/request-headers),

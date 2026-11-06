@@ -593,7 +593,10 @@ public class EngineOfflineSessionTest {
 
         Engine renamed = new Engine(context); handle(renamed, "chat.resume", obj("id", "s1")); renamed.setStateFileForTest(new File(parentFile, "sessions.json"));
         try { handle(renamed, "chat.rename", obj("id", "s1", "title", "Changed")); fail("expected durable write failure"); }
-        catch (ExecutionException expected) { assertTrue(expected.getCause().getMessage().contains("저장")); }
+        catch (ExecutionException expected) {
+            assertTrue(expected.getCause().getMessage().contains("저장"));
+            assertEquals("storage_failure", dev.mobilecodex.app.core.DiagnosticFailure.snapshot(expected.getCause(), new Object()).getString("errorCode"));
+        }
         assertEquals("Original", session(handle(renamed, "state", new JSONObject()).getJSONArray("sessions"), "s1").getString("title"));
         assertEquals("s1", handle(renamed, "state", new JSONObject()).getString("threadId"));
         assertEquals("draft", handle(renamed, "state", new JSONObject()).getJSONArray("messages").getJSONObject(0).getString("text"));
@@ -601,7 +604,10 @@ public class EngineOfflineSessionTest {
 
         Engine deleted = new Engine(context); handle(deleted, "chat.resume", obj("id", "s1")); deleted.setStateFileForTest(new File(parentFile, "sessions.json"));
         try { handle(deleted, "chat.delete", obj("id", "s1")); fail("expected durable write failure"); }
-        catch (ExecutionException expected) { assertTrue(expected.getCause().getMessage().contains("저장")); }
+        catch (ExecutionException expected) {
+            assertTrue(expected.getCause().getMessage().contains("저장"));
+            assertEquals("storage_failure", dev.mobilecodex.app.core.DiagnosticFailure.snapshot(expected.getCause(), new Object()).getString("errorCode"));
+        }
         JSONObject state = handle(deleted, "state", new JSONObject());
         assertNotNull(session(state.getJSONArray("sessions"), "s1"));
         assertEquals(0, state.getInt("pendingDeletionCount"));

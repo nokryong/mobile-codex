@@ -131,7 +131,7 @@ public final class RpcClient implements AutoCloseable {
         CompletableFuture<JSONObject> target = pending.remove(String.valueOf(id));
         if (target == null) { diagnostics.unmatched(); return; }
         JSONObject error = msg.optJSONObject("error");
-        if (error != null) target.completeExceptionally(new IOException(error.optString("message", t("Codex 요청 실패"))));
+        if (error != null) target.completeExceptionally(new DiagnosticFailure.RpcFailure(error.optString("message", t("Codex 요청 실패")), error));
         else {
             JSONObject result = msg.optJSONObject("result");
             target.complete(result == null ? new JSONObject() : result);
