@@ -26,6 +26,7 @@ public final class DiagnosticFailure extends IOException {
         cause = failure;
         for (int depth = 0; cause != null && depth < 16; depth++, cause = cause.getCause()) {
             if (cause instanceof RpcFailure remote) return generic(remote.category);
+            if (cause instanceof StorageFailure) return generic("storage_failure");
             if (cause instanceof java.util.concurrent.TimeoutException || cause instanceof java.net.SocketTimeoutException) return generic("request_timeout");
             if (cause instanceof SecurityException) return generic("permission_denied");
             if (cause instanceof org.json.JSONException) return generic("invalid_response");
@@ -36,6 +37,9 @@ public final class DiagnosticFailure extends IOException {
     }
     private static JSONObject generic(String code) {
         return obj("errorCode", code, "stage", "unknown", "homeKind", "unknown");
+    }
+    public static final class StorageFailure extends IOException {
+        public StorageFailure(String message, Throwable cause) { super(message, cause); }
     }
     /** UI retains the upstream message; diagnostics retain only a fixed classification. */
     public static final class RpcFailure extends IOException {

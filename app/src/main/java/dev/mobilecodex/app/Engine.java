@@ -389,7 +389,7 @@ public final class Engine {
     /** Writes an already-staged session state. Mutating RPCs use this directly so they cannot report a durable success on I/O failure. */
     private void persistSessions(JSONArray value) throws IOException {
         try { sessionStore.save(value); }
-        catch (IOException e) { throw new IOException(t(sessionStore.recoveryRequired()
+        catch (IOException e) { throw new DiagnosticFailure.StorageFailure(t(sessionStore.recoveryRequired()
             ? "대화 기록을 불러오지 못했습니다. 원본을 보존했습니다. 복구 후 다시 시도해 주세요."
             : "대화 기록을 저장하지 못했습니다."), e); }
     }
@@ -638,7 +638,7 @@ public final class Engine {
             diagnosticOperation = new Object();
             try {
                 if (sessionStore.recoveryRequired() && action.startsWith("chat.") && !action.equals("chat.stop"))
-                    throw new IOException(t("대화 기록을 저장할 수 없습니다. 복구가 필요합니다. 원본은 보존되어 있습니다."));
+                    throw new DiagnosticFailure.StorageFailure(t("대화 기록을 저장할 수 없습니다. 복구가 필요합니다. 원본은 보존되어 있습니다."), null);
                 if (Set.of("terminal.run", "files.mutate", "changes.restore", "recovery.restore").contains(action) && (!roomLeases.isEmpty() || (roomCommand != null && roomCommand.isAlive())))
                     throw new IOException(t("초대한 에이전트의 작업을 중지한 뒤 파일이나 명령을 실행해 주세요."));
                 switch (action) {
