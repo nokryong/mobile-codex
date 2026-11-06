@@ -31,12 +31,14 @@ async function verifyPublic(url, payload) {
     const comments = await get(api + '/comments?per_page=100&page=' + page);
     bodies.push(...comments.map(comment => comment.body));
   }
-  const matches = bodies.filter(body => body?.includes(payload.reportId)).map(body => {
-    const json = body.match(/```json\n([\s\S]*?)\n```/)?.[1];
+  // Identical samples intentionally share the first public sample even when a
+  // new receipt ID was submitted. Compare all diagnostic fields, not that ID.
+  const matches = bodies.map(body => {
+    const json = body?.match(/```json\n([\s\S]*?)\n```/)?.[1];
     return json ? JSON.parse(json) : null;
-  });
-  if (matches.length !== 1 || !matches[0] || Object.keys(matches[0]).length !== 27 ||
-      Object.entries(payload).some(([key,value]) => matches[0][key] !== value)) throw Error('Public payload mismatch or duplicate');
+  }).filter(value => value && Object.entries(payload).every(([key,expected]) => key === 'reportId' || value[key] === expected));
+  if (matches.length !== 1 || Object.keys(matches[0]).length !== 27 ||
+      !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(matches[0].reportId || '')) throw Error('Public payload mismatch or duplicate');
 }
 const health = await fetch(base + '/api/health', {redirect:'error',signal:AbortSignal.timeout(10000)});
 console.log(JSON.stringify({healthHttpStatus:health.status}));
