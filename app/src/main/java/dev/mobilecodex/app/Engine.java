@@ -972,6 +972,11 @@ public final class Engine {
         // leave the old child around while replacing it.
         Process staleProcess = process; RpcClient staleRpc = rpc;
         widgetProcess = null; process = null; rpc = null; ready = false;
+        // Loaded thread ids and running turns belong to the old transport. A queued
+        // disconnect callback is ignored after replacement, so invalidate them here
+        // before restoreConversation() can mistake a saved id for a loaded thread.
+        serverThreadId = "";
+        clearRunningState();
         if (staleRpc != null) staleRpc.close();
         if (staleProcess != null && staleProcess.isAlive()) staleProcess.destroyForcibly();
         if (!Arrays.asList(Build.SUPPORTED_ABIS).contains("arm64-v8a"))
