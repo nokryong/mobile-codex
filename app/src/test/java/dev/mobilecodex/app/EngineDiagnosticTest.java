@@ -23,6 +23,7 @@ import static org.junit.Assert.*;
 public class EngineDiagnosticTest {
     private Engine engine;
     private final List<JSONObject> diagnostics = new CopyOnWriteArrayList<>();
+    private final List<JSONObject> recoveries = new CopyOnWriteArrayList<>();
     @Before public void before() throws Exception {
         var context = RuntimeEnvironment.getApplication();
         remove(new File(context.getFilesDir(), ".codex"));
@@ -30,7 +31,7 @@ public class EngineDiagnosticTest {
         Files.deleteIfExists(new File(context.getFilesDir(), "sessions.json").toPath());
         engine = new Engine(context);
         engine.attach(new Engine.Ui() {
-            @Override public void event(String name, JSONObject data) { if (name.equals("diagnostics.available")) diagnostics.add(data); }
+            @Override public void event(String name, JSONObject data) { if (name.equals("diagnostics.available")) diagnostics.add(data); if (name.equals("diagnostics.cleared")) recoveries.add(data); }
             @Override public void approval(Engine.Approval approval) { fail("unexpected approval"); }
         });
         handle("state");
@@ -99,7 +100,7 @@ public class EngineDiagnosticTest {
         assertEquals(1, diagnostics.size());
         JSONObject report = DiagnosticReport.build(diagnostics.get(0), "0.3.6", 35, "arm64", "other", "phone", "unknown", "unknown");
         assertEquals("transport_closed", report.getString("errorCode")); assertEquals("running", report.getString("stage"));
-        assertEquals("other", report.getString("operation"));
+        assertEquals("start", report.getString("operation"));
         assertTrue(report.isNull("stdoutBytes")); assertTrue(report.isNull("elapsedMs"));
         assertEquals(-1, report.getLong("spawnMs")); assertTrue(report.getBoolean("processAlive"));
     }
@@ -109,6 +110,62 @@ public class EngineDiagnosticTest {
         engine.io.submit(() -> engine.codexDisconnected(child, null, null, new RuntimeFailure.Tail())).get(5, TimeUnit.SECONDS);
         assertEquals("login", diagnostics.get(0).getString("operation"));
         assertFalse(diagnostics.get(0).has("spawnMs"));
+    }
+    @Test public void preparationFailureReportsStageBeforeProcessCreation() throws Exception {
+        assertThrows(ExecutionException.class, () -> handle("runtime.start"));
+        JSONObject diagnostic = diagnostics.get(0);
+        assertEquals("runtime_check", diagnostic.getString("stage"));
+        assertEquals("start", diagnostic.getString("operation"));
+        assertEquals(-1, diagnostic.getLong("spawnMs"));
+        assertFalse(diagnostic.getBoolean("processAlive"));
+    }
+    @Test public void loginRpcFailureRetainsStageAndSafeExceptionCategory() throws Exception {
+        engine.setTestTransport((method, params) -> {
+            if (method.equals("account/login/start")) throw new java.net.SocketTimeoutException("private-token /private/path");
+            return obj();
+        });
+        assertThrows(ExecutionException.class, () -> handle("auth.login"));
+        JSONObject diagnostic = diagnostics.get(0);
+        assertEquals("login_rpc", diagnostic.getString("stage"));
+        assertEquals("request_timeout", diagnostic.getString("errorCode"));
+        assertEquals("active", diagnostic.getString("homeKind"));
+        assertFalse(diagnostic.toString().contains("private"));
+        assertFalse(diagnostic.has("stdoutBytes"));
+    }
+    @Test public void loginPreparationFailureDoesNotRollbackOrEraseLiveLogin() throws Exception {
+        field("liveRemote", "private-remote"); field("loginInProgress", true);
+        assertThrows(ExecutionException.class, () -> handle("auth.login"));
+        assertEquals("login_prepare", diagnostics.get(0).getString("stage"));
+        assertEquals(true, field("loginInProgress"));
+        assertEquals("private-remote", field("liveRemote"));
+        assertFalse(diagnostics.toString().contains("private"));
+    }
+
+    @Test public void backgroundChatFailureAndRecoveryUseTheirOwnLocalScope() throws Exception {
+        JSONObject foreground=obj("id","local-A","codexThreadId","remote-A","messages",new org.json.JSONArray());
+        JSONObject background=obj("id","local-B","codexThreadId","remote-B","messages",new org.json.JSONArray());
+        ((org.json.JSONArray)field("sessions")).put(foreground).put(background);
+        field("active",foreground); field("threadId","local-A");
+        notification("error",obj("threadId","remote-B","error",obj("message","private")));
+        assertEquals("local-B",diagnostics.get(0).optString("_scope"));
+        notification("turn/started",obj("threadId","remote-A","turn",obj("id","turn-A")));
+        notification("turn/started",obj("threadId","remote-B","turn",obj("id","turn-B")));
+        notification("turn/completed",obj("threadId","remote-A","turn",obj("id","turn-A","status","completed")));
+        assertEquals("local-A",recoveries.get(0).optString("_scope"));
+        notification("turn/completed",obj("threadId","remote-B","turn",obj("id","turn-B","status","completed")));
+        assertEquals("local-B",recoveries.get(1).optString("_scope"));
+        notification("turn/completed",obj("threadId","unknown","turn",obj("id","turn-C","status","completed")));
+        assertEquals(2,recoveries.size());
+        // A newer failure removes its running turn. A delayed old success must
+        // not clear that newer report merely because the conversation matches.
+        notification("turn/started",obj("threadId","remote-B","turn",obj("id","new-failed-turn")));
+        notification("turn/completed",obj("threadId","remote-B","turn",obj("id","new-failed-turn","status","failed")));
+        notification("turn/completed",obj("threadId","remote-B","turn",obj("id","turn-B","status","completed")));
+        assertEquals(2,recoveries.size());
+        notification("turn/completed",obj("threadId","remote-A","turn",obj("status","completed")));
+        assertEquals(2,recoveries.size());
+        JSONObject publicReport=DiagnosticReport.build(diagnostics.get(0),"0.3.6",35,"arm64","other","phone","unknown","unknown");
+        assertFalse(publicReport.toString().contains("local-B")); assertFalse(publicReport.has("_scope"));
     }
     private static final class Child extends Process {
         private boolean alive = true;

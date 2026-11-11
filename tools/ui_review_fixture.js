@@ -48,6 +48,7 @@
         else if (message.action === 'rpc') {
           result = rpc(message.args.method, message.args.params);
         }
+        else if (message.action === 'reports.status') result = {available:false};
         else if (message.action === 'voice.recover') result = {active:surface === 'dictation',receipts:[]};
       else if (message.action === 'notifications.state') result = {enabled:true,vibration:true,permission:true};
         else if (message.action === 'linux.status') result = state.linux;

@@ -71,4 +71,92 @@ public class ErrorReportsTest {
         assertTrue(transport.entered.await(5,TimeUnit.SECONDS)); assertEquals("busy",send(service,id,true).optString("status"));
         service.cancel(); assertEquals("cancelled",first.get(20,TimeUnit.SECONDS).optString("status")); assertTrue(transport.cancelled);assertTrue(transport.reports.isEmpty());
     }
+    @Test public void successfulSendConsumesReportAndConsent() throws Exception {
+        Transport transport=new Transport(); ErrorReports service=make(transport);
+        assertFalse(service.status().optBoolean("available"));
+        service.capture(ErrorReports.genericDiagnostic()); assertTrue(service.status().optBoolean("available"));
+        String id=service.preview().optString("reportId");
+        assertEquals("sent",send(service,id,true).optString("status"));
+        assertFalse(service.status().optBoolean("available"));
+        assertEquals("unavailable",service.preview().optString("status"));
+        assertEquals("preview_required",send(service,id,true).optString("code"));
+        assertEquals(1,transport.reports.size());
+    }
+    @Test public void sendingOlderPreviewPreservesNewerFailure() throws Exception {
+        Transport transport=new Transport(); ErrorReports service=make(transport);
+        service.capture(obj("operation","login","errorCode","login_failed"));
+        String oldId=service.preview().optString("reportId");
+        service.capture(obj("operation","chat","errorCode","turn_failed"));
+        assertEquals("sent",send(service,oldId,true).optString("status"));
+        assertTrue(service.status().optBoolean("available"));
+        JSONObject newer=service.preview(); assertNotEquals(oldId,newer.optString("reportId"));
+        assertEquals("turn_failed",newer.getJSONObject("payload").optString("errorCode"));
+    }
+    @Test public void recoveryOnlyClearsMatchingOperationAndConsent() throws Exception {
+        Transport transport=new Transport(); ErrorReports service=make(transport);
+        service.capture(obj("operation","login")); String loginId=service.preview().optString("reportId");
+        assertFalse(service.clear("start")); assertTrue(service.status().optBoolean("available"));
+        service.capture(obj("operation","chat","_scope","local-chat")); assertTrue(service.clear("login"));
+        assertFalse(service.clear("login"));
+        assertTrue(service.status().optBoolean("available"));
+        assertEquals("preview_required",send(service,loginId,true).optString("code"));
+        JSONObject chat=service.preview(); assertEquals("chat",chat.getJSONObject("payload").optString("operation"));
+        assertTrue(service.clear("chat", "local-chat")); assertFalse(service.status().optBoolean("available"));
+        assertEquals("preview_required",send(service,chat.optString("reportId"),true).optString("code"));
+        assertTrue(transport.reports.isEmpty());
+    }
+    @Test public void cancellationRequiresFreshPreviewButRetainsRetryableReport() throws Exception {
+        Transport transport=new Transport(); ErrorReports service=make(transport);
+        service.capture(ErrorReports.genericDiagnostic()); String id=service.preview().optString("reportId");
+        service.cancel(); assertTrue(service.status().optBoolean("available"));
+        assertEquals("preview_required",send(service,id,true).optString("code"));
+        assertEquals(id,service.preview().optString("reportId"));
+        assertEquals("sent",send(service,id,true).optString("status"));
+    }
+    @Test public void recoveryCancelsPendingSendWithoutClearingUnrelatedFailure() throws Exception {
+        Transport transport=new Transport(); transport.held=true; ErrorReports service=make(transport);
+        service.capture(obj("operation","login")); String id=service.preview().optString("reportId");
+        CompletableFuture<JSONObject> result=new CompletableFuture<>(); service.send(id,true,result::complete);
+        assertTrue(transport.entered.await(5,TimeUnit.SECONDS));
+        service.capture(obj("operation","chat")); service.clear("login");
+        assertEquals("cancelled",result.get(20,TimeUnit.SECONDS).optString("status"));
+        assertTrue(service.status().optBoolean("available")); assertTrue(transport.reports.isEmpty());
+        assertEquals("chat",service.preview().getJSONObject("payload").optString("operation"));
+    }
+
+    @Test public void returnedPreviewCannotMutateConsentedPayload() throws Exception {
+        Transport transport=new Transport(); ErrorReports service=make(transport);
+        service.capture(obj("operation","login","errorCode","login_failed"));
+        JSONObject preview=service.preview(); String id=preview.optString("reportId");
+        preview.getJSONObject("payload").put("operation","chat").put("errorCode","turn_failed");
+        assertEquals("sent",send(service,id,true).optString("status"));
+        assertEquals("login",transport.reports.get(0).optString("operation"));
+        assertEquals("login_failed",transport.reports.get(0).optString("errorCode"));
+    }
+
+    @Test public void recoveryUsesPrivateConversationScopeWithoutLeakingIt() throws Exception {
+        Transport transport=new Transport(); ErrorReports service=make(transport);
+        service.capture(obj("operation","chat","_scope","private-conversation-A"));
+        String older=service.preview().optString("reportId");
+        service.capture(obj("operation","chat","_scope","private-conversation-B"));
+        assertTrue(service.clear("chat","private-conversation-A"));
+        assertTrue(service.status().optBoolean("available"));
+        assertEquals("preview_required",send(service,older,true).optString("code"));
+        JSONObject preview=service.preview();
+        assertFalse(service.clear("chat","private-conversation-A"));
+        assertFalse(service.clear("chat"));
+        assertFalse(preview.toString().contains("private-conversation"));
+        assertFalse(preview.toString().contains("_scope"));
+        assertFalse(service.status().toString().contains("private-conversation"));
+        assertEquals("sent",send(service,preview.optString("reportId"),true).optString("status"));
+        assertFalse(transport.reports.toString().contains("private-conversation"));
+        assertFalse(transport.reports.toString().contains("_scope"));
+    }
+    @Test public void matchingBackgroundRecoveryClearsLatestAndPreview() {
+        ErrorReports service=make(new Transport());
+        service.capture(obj("operation","chat","_scope","background")); service.preview();
+        assertTrue(service.clear("chat","background"));
+        assertFalse(service.status().optBoolean("available"));
+    }
+
 }

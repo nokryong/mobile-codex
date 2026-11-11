@@ -2160,7 +2160,7 @@
   }
   reportsUi = window.MobileCodexReports?.({document, call, t, show, close});
   window.mobileCodexEvent = (name, data) => {
-    if (name === 'reports.available') { reportsUi?.available(); return; }
+    if (name === 'reports.available') { reportsUi?.available(data); return; }
     if (name.startsWith('live.')) { liveUi?.event(name, data); return; }
     if (name.startsWith('agents.')) { agentUi?.event(name, data); return; }
     if (name === 'response') { const p = pending.get(data.id); if (p) { clearTimeout(p.timer); pending.delete(data.id); data.error ? p.reject(new Error(data.error)) : p.resolve(data.result || {}); } return; }
@@ -2203,6 +2203,7 @@
     else if (name === 'notifications.changed') { window.refreshNotificationSettings?.(); }
     else if (name === 'back') window.mobileCodexBack();
   };
+  reportsUi?.refresh();
   window.mobileCodexBack = () => {
     const roomDialog = document.querySelector('.room-dialog[open]');
     if (roomDialog) { roomDialog.close(); return true; }

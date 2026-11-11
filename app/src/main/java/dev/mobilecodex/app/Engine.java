@@ -22,8 +22,15 @@ public final class Engine {
     // Only used on the engine queue; each action/notification gets a fresh identity.
     private Object diagnosticOperation = new Object();
     private void publishDiagnostic(JSONObject value, String action) {
-        try { event("diagnostics.available", ErrorReports.withOperation(value, action)); }
-        catch (Exception ignored) { /* Diagnostic handling must preserve the original failure. */ }
+        publishDiagnostic(value, action, threadId);
+    }
+    private void publishDiagnostic(JSONObject value, String action, String scope) {
+        try {
+            JSONObject diagnostic = ErrorReports.withOperation(value, action);
+            // Native correlation only; ErrorReports never includes this in a report.
+            if ("chat".equals(diagnostic.optString("operation"))) diagnostic.put("_scope", scope);
+            event("diagnostics.available", diagnostic);
+        } catch (Exception ignored) { /* Diagnostic handling must preserve the original failure. */ }
     }
     private void error(String action, JSONObject data) {
         error(action, data, null);
@@ -34,7 +41,7 @@ public final class Engine {
             String code = action.equals("auth.login") ? "login_failed" : action.equals("sessions.save") ? "storage_failure" : "operation_failed";
             diagnostic = obj("errorCode", code, "stage", "unknown", "homeKind", "unknown");
         }
-        publishDiagnostic(diagnostic, action);
+        publishDiagnostic(diagnostic, action, data.has("threadId") ? data.optString("threadId") : threadId);
         event("error", data);
     }
     /** State events are frequent and cross the WebView bridge, so only expose a bounded tail. */
@@ -664,7 +671,7 @@ public final class Engine {
                     }
                     case "state" -> reply.complete(snapshot(), null);
                     case "phone.stop" -> { publish(); reply.complete(snapshot(), null); }
-                    case "runtime.start" -> { autoRestorePaused = false; start(); reply.complete(snapshot(), null); }
+                    case "runtime.start" -> { autoRestorePaused = false; start(); event("diagnostics.cleared", obj("operation", "start")); reply.complete(snapshot(), null); }
                     case "auth.refresh" -> { refreshAccount(); reply.complete(snapshot(), null); }
                     case "models.refresh" -> {
                         if (!ready) start();
@@ -954,52 +961,61 @@ public final class Engine {
         start(restoreConversation, true);
     }
     private void start(boolean restoreConversation, boolean foregroundRuntime) throws Exception {
-        restoreConversation = restoreConversation && !loginInProgress && processHome.equals(codexHome.root());
-        autoRestorePaused = false;
-        if (foregroundRuntime) promoteWidgetRuntime();
-        if (testTransport != null) {
-            ready = true;
-            if (testAccountValidation) { readAccount(); readRateLimits(); }
-            if (restoreConversation) restoreConversation();
-            return;
-        }
-        if (ready && process != null && process.isAlive() && rpc != null && !rpc.isClosed()) {
-            if (restoreConversation) retryPendingDeletions();
-            publish();
-            return;
-        }
-        // A stdout disconnect can race with queued UI RPCs. Never reuse its closed writer or
-        // leave the old child around while replacing it.
-        Process staleProcess = process; RpcClient staleRpc = rpc;
-        widgetProcess = null; process = null; rpc = null; ready = false;
-        // Loaded thread ids and running turns belong to the old transport. A queued
-        // disconnect callback is ignored after replacement, so invalidate them here
-        // before restoreConversation() can mistake a saved id for a loaded thread.
-        serverThreadId = "";
-        clearRunningState();
-        if (staleRpc != null) staleRpc.close();
-        if (staleProcess != null && staleProcess.isAlive()) staleProcess.destroyForcibly();
-        if (!Arrays.asList(Build.SUPPORTED_ABIS).contains("arm64-v8a"))
-            throw new IOException(t("이 알파 버전은 ARM64 안드로이드 기기용입니다."));
-        File libraryDir = new File(context.getApplicationInfo().nativeLibraryDir);
-        File binary = new File(libraryDir, "libcodex.so");
-        if (!binary.isFile() || !binary.canExecute()) throw new IOException(t("실행 엔진이 포함되지 않았습니다. 전체 APK를 다시 설치해 주세요."));
-        status = t("Codex를 시작하고 있습니다"); publish();
-        // Keep upstream Codex tools/features available; preserve user configuration.
-        File config = new File(processHome, "config.toml");
-        if (!config.exists()) dev.mobilecodex.app.core.Utf8Files.write(config.toPath(), "cli_auth_credentials_store = \"file\"\napproval_policy = \"on-request\"\n");
-        ProcessBuilder builder = new ProcessBuilder(binary.getAbsolutePath(), "app-server", "--listen", "stdio://");
-        builder.directory(projectDirectory());
-        devTools.configure(builder, processHome, runtimeAliases());
-        // Retire the app-owned Pro bridge left in old configurations. Only disable an entry
-        // that exists: Codex rejects an MCP server that has no transport and will not start.
-        if (retiredProBridgeConfigured(config)) builder.command().addAll(List.of("-c", "mcp_servers.mobile_codex_pro.enabled=false"));
-        linux.configureEnvironment(builder.environment());
-        builder.environment().put("CODEX_SELF_EXE", binary.getAbsolutePath());
-        if (foregroundRuntime) context.startForegroundService(new Intent(context, EngineService.class));
-        RuntimeFailure.Tail stderrTail = new RuntimeFailure.Tail();
         StartupDiagnostics diagnostic = new StartupDiagnostics();
+        RuntimeFailure.Tail stderrTail = new RuntimeFailure.Tail();
+        boolean replacing = false, spawnAttempted = false;
         try {
+            diagnostic.stage("runtime_prepare");
+            restoreConversation = restoreConversation && !loginInProgress && processHome.equals(codexHome.root());
+            autoRestorePaused = false;
+            if (foregroundRuntime) promoteWidgetRuntime();
+            if (testTransport != null) {
+                ready = true;
+                if (testAccountValidation) { readAccount(); readRateLimits(); }
+                if (restoreConversation) restoreConversation();
+                return;
+            }
+            if (ready && process != null && process.isAlive() && rpc != null && !rpc.isClosed()) {
+                if (restoreConversation) retryPendingDeletions();
+                publish();
+                return;
+            }
+            // A stdout disconnect can race with queued UI RPCs. Never reuse its closed writer or
+            // leave the old child around while replacing it.
+            replacing = true;
+            Process staleProcess = process; RpcClient staleRpc = rpc;
+            widgetProcess = null; process = null; rpc = null; ready = false;
+            // Loaded thread ids and running turns belong to the old transport. A queued
+            // disconnect callback is ignored after replacement, so invalidate them here
+            // before restoreConversation() can mistake a saved id for a loaded thread.
+            serverThreadId = "";
+            clearRunningState();
+            if (staleRpc != null) staleRpc.close();
+            if (staleProcess != null && staleProcess.isAlive()) staleProcess.destroyForcibly();
+            diagnostic.stage("runtime_check");
+            if (!Arrays.asList(Build.SUPPORTED_ABIS).contains("arm64-v8a"))
+                throw new IOException(t("이 알파 버전은 ARM64 안드로이드 기기용입니다."));
+            File libraryDir = new File(context.getApplicationInfo().nativeLibraryDir);
+            File binary = new File(libraryDir, "libcodex.so");
+            if (!binary.isFile() || !binary.canExecute()) throw new IOException(t("실행 엔진이 포함되지 않았습니다. 전체 APK를 다시 설치해 주세요."));
+            status = t("Codex를 시작하고 있습니다"); publish();
+            // Keep upstream Codex tools/features available; preserve user configuration.
+            diagnostic.stage("config_prepare");
+            File config = new File(processHome, "config.toml");
+            if (!config.exists()) dev.mobilecodex.app.core.Utf8Files.write(config.toPath(), "cli_auth_credentials_store = \"file\"\napproval_policy = \"on-request\"\n");
+            ProcessBuilder builder = new ProcessBuilder(binary.getAbsolutePath(), "app-server", "--listen", "stdio://");
+            diagnostic.stage("environment_prepare");
+            builder.directory(projectDirectory());
+            devTools.configure(builder, processHome, runtimeAliases());
+            // Retire the app-owned Pro bridge left in old configurations. Only disable an entry
+            // that exists: Codex rejects an MCP server that has no transport and will not start.
+            if (retiredProBridgeConfigured(config)) builder.command().addAll(List.of("-c", "mcp_servers.mobile_codex_pro.enabled=false"));
+            linux.configureEnvironment(builder.environment());
+            builder.environment().put("CODEX_SELF_EXE", binary.getAbsolutePath());
+            diagnostic.stage("service_start");
+            if (foregroundRuntime) context.startForegroundService(new Intent(context, EngineService.class));
+            diagnostic.stage("before_spawn");
+            spawnAttempted = true;
             process = builder.start();
             widgetProcess = foregroundRuntime ? null : process;
             diagnostic.spawned();
@@ -1025,23 +1041,33 @@ public final class Engine {
             diagnostic.initialized();
             rpc.notify("initialized", new JSONObject());
             ready = true; status = t("연결됨");
+            diagnostic.stage("account_read");
             readAccount();
+            diagnostic.stage("limits_read");
             readRateLimits();
             if (foregroundRuntime) try { models = call("model/list", obj("limit", 100, "includeHidden", false)).optJSONArray("data"); }
             catch (Exception ignored) { models = new JSONArray(); }
             if (models == null) models = new JSONArray();
+            diagnostic.stage("conversation_restore");
             if (restoreConversation) restoreConversation();
             diagnostic.ready();
             publish();
         } catch (Exception e) {
+            // Keep nested measurements from this exact operation, not a recovery attempt.
+            if (e instanceof DiagnosticFailure) throw e;
             Process failed = process; int exitCode = -1;
             try { if (failed != null) exitCode = failed.exitValue(); } catch (IllegalThreadStateException ignored) { }
-            String errorCode = "initialize_sent".equals(diagnostic.stage()) && unwrap(e) instanceof TimeoutException ? "initialize_timeout" : "start_failure";
-            JSONObject measured = diagnostic.snapshot(errorCode, loginInProgress ? "pending" : "active", failed != null && failed.isAlive(), exitCode, stderrTail.category());
+            String errorCode = DiagnosticFailure.snapshot(e, diagnosticOperation).optString("errorCode", "start_failure");
+            if ("operation_failed".equals(errorCode)) errorCode = "start_failure";
+            if ("initialize_sent".equals(diagnostic.stage()) && unwrap(e) instanceof TimeoutException) errorCode = "initialize_timeout";
+            JSONObject measured = diagnostic.snapshot(errorCode, processHome.equals(codexHome.root()) ? "active" : "pending", failed != null && failed.isAlive(), exitCode, stderrTail.category());
             String diagnosis = stderrTail.diagnosis();
             String detail = t("Codex를 시작하지 못했습니다") + (exitCode >= 0 ? t(" (종료 코드 ") + exitCode + ")" : "") + ": " + unwrap(e).getMessage()
                 + (diagnosis.isEmpty() ? "" : t(" (진단 단서: ") + diagnosis + ")");
-            if (foregroundRuntime) stopCodex(); else releaseWidgetRuntime();
+            // Pre-launch failures previously reached callers unchanged. Diagnostics
+            // must not alter their user-facing message or recovery contract.
+            if (!spawnAttempted) detail = unwrap(e).getMessage();
+            if (replacing) { if (foregroundRuntime) stopCodex(); else releaseWidgetRuntime(); }
             throw new DiagnosticFailure(detail, e, diagnosticOperation, measured);
         }
     }
@@ -1054,9 +1080,9 @@ public final class Engine {
         if (process != launched || rpc != connection) return;
         int exitCode = -1;
         try { exitCode = launched.exitValue(); } catch (IllegalThreadStateException ignored) { }
-        publishDiagnostic(obj("errorCode", "transport_closed", "stage", "running", "homeKind", loginInProgress ? "pending" : "active",
+        publishDiagnostic(obj("errorCode", "transport_closed", "stage", "running", "homeKind", processHome.equals(codexHome.root()) ? "active" : "pending",
             "processAlive", launched.isAlive(), "exitCode", exitCode, "stderrCategory", stderrTail.category()),
-            loginInProgress ? "auth.login" : hasRunningTurns() ? "chat.send" : "runtime.disconnected");
+            loginInProgress ? "auth.login" : hasRunningTurns() ? "chat.send" : "runtime.start");
         if (launched.isAlive()) launched.destroyForcibly();
         PhoneUseService.stopControl();
         widgetProcess = null; process = null; rpc = null;
@@ -1125,12 +1151,16 @@ public final class Engine {
         }
     }
     private JSONObject beginLogin(boolean add) throws Exception {
-        ensureEngineIdle();
-        autoRestorePaused = false;
-        // Re-login must not validate a revoked token before reaching device login.
-        // Use the existing isolated transaction so cancellation preserves the profile.
-        if (!add && accountProfiles.hasSavedLogin() && accountProfiles.activeNeedsLogin()) add = true;
+        StartupDiagnostics diagnostic = new StartupDiagnostics();
+        diagnostic.stage("login_prepare");
+        boolean preparing = false;
         try {
+            ensureEngineIdle();
+            autoRestorePaused = false;
+            // Re-login must not validate a revoked token before reaching device login.
+            // Use the existing isolated transaction so cancellation preserves the profile.
+            if (!add && accountProfiles.hasSavedLogin() && accountProfiles.activeNeedsLogin()) add = true;
+            preparing = true;
             if (add) {
                 // Recovery must not validate the existing account first: a
                 // token_revoked account cannot reach device login otherwise.
@@ -1149,12 +1179,22 @@ public final class Engine {
             }
             loginInProgress = true;
             start(false);
+            diagnostic.stage("login_rpc");
             return call("account/login/start", obj("type", "chatgptDeviceCode"));
         } catch (Exception error) {
-            loginInProgress = false;
-            try { restoreAccountAfterCancelledLogin(); }
-            catch (Exception restoreError) { error.addSuppressed(restoreError); }
-            throw error;
+            JSONObject measured = DiagnosticFailure.snapshot(error, diagnosticOperation);
+            if ("unknown".equals(measured.optString("stage"))) {
+                measured.put("stage", diagnostic.stage());
+                measured.put("elapsedMs", diagnostic.elapsed() / 100 * 100);
+                measured.put("homeKind", processHome.equals(codexHome.root()) ? "active" : "pending");
+            }
+            DiagnosticFailure failure = new DiagnosticFailure(error.getMessage(), error, diagnosticOperation, measured);
+            if (preparing) {
+                loginInProgress = false;
+                try { restoreAccountAfterCancelledLogin(); }
+                catch (Exception restoreError) { failure.addSuppressed(restoreError); }
+            }
+            throw failure;
         }
     }
 
@@ -2113,6 +2153,7 @@ public final class Engine {
                         suppressStatePublish = previousSuppression;
                         if (adding) publish();
                     }
+                    event("diagnostics.cleared", obj("operation", "login"));
                     // Authentication already committed. A missing rollout must not
                     // turn a successful login into a failed credential transaction.
                     try { restoreConversation(); }
@@ -2191,6 +2232,9 @@ public final class Engine {
                 JSONObject error = turn == null ? null : turn.optJSONObject("error");
                 boolean failed = !interrupted && ("failed".equals(completionStatus) || error != null);
                 if (currentThread && (interrupted || failed)) status = interrupted ? t("작업 중지됨") : t("작업 실패");
+                if (target != null && !eventThreadId.isBlank() && !completedId.isBlank() && completedId.equals(runningId)
+                        && "completed".equals(completionStatus) && error == null)
+                    event("diagnostics.cleared", obj("operation", "chat", "_scope", eventThreadId));
                 if (failed) error("chat.send", obj("threadId", eventThreadId, "message", error == null ? t("작업 실패") : error.optString("message", t("작업 실패"))), new DiagnosticFailure.RpcFailure("", error));
                 taskNotification(interrupted ? "interrupted" : failed ? "failed" : "completed",
                     interrupted ? t("작업 중지됨") : failed ? t("작업 실패") : t("답변 완료"),

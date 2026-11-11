@@ -375,10 +375,17 @@ public final class MainActivity extends Activity implements Engine.Ui {
         super.onConfigurationChanged(configuration); applyTheme(theme);
     }
     @Override public void event(String name, JSONObject data) {
-        if ("diagnostics.available".equals(name)) {
-            try { ((MobileCodexApp) getApplication()).reports().capture(data); }
-            catch (Exception ignored) { return; } // Reporting must not replace the original failure.
-            event("reports.available", obj("available", true)); return;
+        if ("diagnostics.available".equals(name) || "diagnostics.cleared".equals(name)) {
+            try {
+                ErrorReports reports = ((MobileCodexApp) getApplication()).reports();
+                boolean previewInvalidated = false;
+                if ("diagnostics.available".equals(name)) reports.capture(data);
+                else previewInvalidated = reports.clear(data.optString("operation"), data.optString("_scope"));
+                JSONObject status = reports.status();
+                if (previewInvalidated) status.put("previewInvalidated", true);
+                event("reports.available", status);
+            } catch (Exception ignored) { } // Reporting must not replace the original operation.
+            return;
         }
         runOnUiThread(() -> {
             if (isDestroyed()) return;
@@ -601,8 +608,12 @@ public final class MainActivity extends Activity implements Engine.Ui {
                 if (action.startsWith("reports.")) {
                     ErrorReports reports = ((MobileCodexApp) getApplication()).reports();
                     switch (action) {
+                        case "reports.status" -> respond(id, reports.status(), null);
                         case "reports.preview" -> respond(id, reports.preview(), null);
-                        case "reports.send" -> reports.send(parameters.optString("reportId"), parameters.optBoolean("consent"), value -> respond(id, value, null));
+                        case "reports.send" -> reports.send(parameters.optString("reportId"), parameters.optBoolean("consent"), value -> {
+                            event("reports.available", reports.status());
+                            respond(id, value, null);
+                        });
                         case "reports.cancel" -> respond(id, reports.cancel(), null);
                         default -> respond(id, obj("status", "failed"), null);
                     }

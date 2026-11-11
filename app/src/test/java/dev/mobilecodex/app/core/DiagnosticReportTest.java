@@ -10,6 +10,16 @@ public class DiagnosticReportTest {
         JSONObject invalid = DiagnosticReport.build(obj("errorCode", "secret"),"private-version",35,"arm64","other","phone","unknown","unknown");
         assertEquals("unknown", invalid.optString("appVersion")); assertEquals("operation_failed", invalid.optString("errorCode"));
     }
+    @Test public void detailedStagesRemainCompatibleWithDeployedRelayVocabulary() {
+        for (String stage : new String[]{"runtime_check", "config_prepare", "environment_prepare", "service_start"})
+            assertEquals("before_spawn", report(obj("stage", stage)).optString("stage"));
+        for (String stage : new String[]{"account_read", "limits_read", "conversation_restore"})
+            assertEquals("initialized", report(obj("stage", stage)).optString("stage"));
+        assertEquals("ready", report(obj("stage", "login_rpc")).optString("stage"));
+        for (String stage : new String[]{"runtime_prepare", "login_prepare"})
+            assertEquals("unknown", report(obj("stage", stage)).optString("stage"));
+        assertEquals("unknown", report(obj("stage", "secret /private/path")).optString("stage"));
+    }
     @Test public void copiesOnlyFixedFieldsAndCoarseDeviceBuckets() {
         JSONObject source = obj("errorCode", "initialize_timeout", "stage", "initialize_sent", "operation", "login", "stdoutBytes", 12,
             "token", "secret", "message", "private chat", "path", "/private/account", "stderrCategory", "private log", "spawnMs", -1);

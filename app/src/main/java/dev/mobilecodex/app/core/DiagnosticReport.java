@@ -12,6 +12,17 @@ public final class DiagnosticReport {
         for (String item : allowed) if (item.equals(value)) return item;
         return fallback;
     }
+    // Detailed local stages are deliberately reduced to the deployed relay's
+    // existing vocabulary. Never require a server rollout to submit a report.
+    private static String publicStage(String stage) {
+        return switch (stage) {
+            case "runtime_check", "config_prepare", "environment_prepare", "service_start" -> "before_spawn";
+            case "runtime_prepare", "login_prepare" -> "unknown";
+            case "account_read", "limits_read", "conversation_restore" -> "initialized";
+            case "login_rpc" -> "ready";
+            default -> choice(stage, "unknown", "before_spawn", "spawned", "initialize_sent", "initialized", "ready", "running");
+        };
+    }
     private static Object count(JSONObject source, String key, long max, boolean rounded) {
         Object raw = source.opt(key);
         if (!(raw instanceof Number)) return JSONObject.NULL;
@@ -27,7 +38,7 @@ public final class DiagnosticReport {
                 "rpc_invalid_request", "rpc_method_missing", "rpc_internal", "rpc_rejected", "turn_failed", "context_limit", "usage_limit",
                 "upstream_connection", "upstream_auth", "upstream_bad_request", "upstream_internal", "sandbox_failure"),
             "operation", choice(source.optString("operation"), "other", "login", "start", "chat"),
-            "stage", choice(source.optString("stage"), "unknown", "before_spawn", "spawned", "initialize_sent", "initialized", "ready", "running"),
+            "stage", publicStage(source.optString("stage")),
             "homeKind", choice(source.optString("homeKind"), "unknown", "active", "pending"),
             "elapsedMs", count(source, "elapsedMs", 600000, true),
             "processAlive", source.opt("processAlive") instanceof Boolean ? source.opt("processAlive") : JSONObject.NULL,

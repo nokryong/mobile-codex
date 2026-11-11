@@ -1,4 +1,6 @@
 {
+  "전송을 취소했습니다. 다시 보내려면 오류 정보를 다시 열어 확인해 주세요.": "Sending cancelled. Reopen the error report to review it before retrying.",
+  "오류 정보가 변경되었습니다. 다시 열어 확인해 주세요.": "The error report changed. Reopen it to review the current report.",
   "오류 정보 보내기": "Send error report",
   "아래 진단 정보가 공개 GitHub 이슈에 등록됩니다. 누구나 볼 수 있습니다.": "The diagnostic information below will be posted to a public GitHub issue. Anyone can read it.",
   "계정·대화·파일·경로·원본 로그는 포함하지 않습니다. 기기 정보는 제조사와 성능 범주만 포함합니다. 전송 시 서버는 도배 방지를 위해 네트워크 주소를 일시 처리합니다. 같은 오류는 기존 이슈에 모일 수 있습니다.": "Accounts, conversations, files, paths and raw logs are excluded. Device information includes only the manufacturer and capability categories. The server temporarily processes your network address to limit spam. Similar errors may be grouped into an existing issue.",

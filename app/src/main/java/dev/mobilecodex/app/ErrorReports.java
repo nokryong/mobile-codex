@@ -26,6 +26,8 @@ final class ErrorReports {
     private final Transport transport;
     private final Context context;
     private JSONObject latest, preview;
+    // Correlation never enters the public preview or network payload.
+    private String latestScope = "", previewScope = "";
     private boolean busy;
     private volatile int generation;
 
@@ -46,13 +48,31 @@ final class ErrorReports {
         latest = DiagnosticReport.build(diagnostic, BuildConfig.VERSION_NAME, Build.VERSION.SDK_INT,
             java.util.Arrays.asList(Build.SUPPORTED_ABIS).contains("arm64-v8a") ? "arm64" : "other",
             Build.MANUFACTURER.toLowerCase(Locale.ROOT), context.getResources().getConfiguration().smallestScreenWidthDp >= 600 ? "tablet" : "phone", ram, page);
+        latestScope = diagnostic.optString("_scope");
     }
+    synchronized JSONObject status() { return obj("available", latest != null); }
+
+    synchronized boolean clear(String operation) { return clear(operation, ""); }
+    synchronized boolean clear(String operation, String scope) {
+        // Unknown chat scope cannot prove recovery. Concurrent conversations
+        // must not consume each other's report or consent.
+        if (matchesRecovery(latest, latestScope, operation, scope)) { latest = null; latestScope = ""; }
+        boolean previewInvalidated = matchesRecovery(preview, previewScope, operation, scope);
+        if (previewInvalidated) cancel();
+        return previewInvalidated;
+    }
+
+    private static boolean matchesRecovery(JSONObject report, String reportScope, String operation, String scope) {
+        return report != null && operation.equals(report.optString("operation"))
+            && (!"chat".equals(operation) || (!scope.isBlank() && scope.equals(reportScope)));
+    }
+
     synchronized JSONObject preview() {
         if (busy) return obj("status", "busy");
         if (latest == null) return obj("status", "unavailable");
         // The native snapshot is immutable for this consent, even if a newer
         // error arrives while the preview is open. Retrying keeps its report ID.
-        preview = parse(latest.toString());
+        preview = parse(latest.toString()); previewScope = latestScope;
         return obj("status", "preview", "reportId", preview.optString("reportId"), "payload", parse(preview.toString()));
     }
     synchronized void send(String reportId, boolean consent, Reply reply) {
@@ -84,11 +104,20 @@ final class ErrorReports {
                 // URLs, headers or request contents through failure handling.
                 result = obj("status", attempt != generation ? "cancelled" : "failed", "code", "send_unconfirmed");
             }
-            synchronized (this) { busy = false; }
+            synchronized (this) {
+                busy = false;
+                if (attempt != generation) result = obj("status", "cancelled", "code", "send_unconfirmed");
+                else if ("sent".equals(result.optString("status"))) {
+                    // A successful submission consumes only this consent and
+                    // this report, never a newer failure captured meanwhile.
+                    if (latest != null && reportId.equals(latest.optString("reportId"))) { latest = null; latestScope = ""; }
+                    if (preview != null && reportId.equals(preview.optString("reportId"))) { preview = null; previewScope = ""; }
+                }
+            }
             reply.complete(result);
         });
     }
-    synchronized JSONObject cancel() { ++generation; transport.cancel(); return obj("status", "cancelled"); }
+    synchronized JSONObject cancel() { ++generation; preview = null; previewScope = ""; transport.cancel(); return obj("status", "cancelled"); }
 
     static void configureReportConnection(HttpURLConnection connection) throws IOException {
         connection.setInstanceFollowRedirects(false); connection.setConnectTimeout(10000); connection.setReadTimeout(15000);

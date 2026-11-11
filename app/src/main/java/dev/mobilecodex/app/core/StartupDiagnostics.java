@@ -15,6 +15,7 @@ public final class StartupDiagnostics {
     public void initializing() { stage = "initialize_sent"; }
     public void initialized() { response = elapsed(); stage = "initialized"; }
     public void ready() { stage = "ready"; }
+    public void stage(String value) { stage = value; }
     public String stage() { return stage; }
     public void written() { if (write < 0) write = elapsed(); }
     public synchronized void bytes(int count) { if (count > 0) { if (firstByte < 0) firstByte = elapsed(); add(bytes, count, 100000000); } }
