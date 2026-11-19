@@ -106,7 +106,9 @@ class TerminalBackpressureTests(unittest.TestCase):
             try: process.wait(timeout=4)
             except subprocess.TimeoutExpired: process.kill(); process.wait(timeout=2)
         for stream in (process.stdin, process.stdout, process.stderr):
-            if stream: stream.close()
+            if stream:
+                try: stream.close()
+                except BrokenPipeError: pass  # The stopped process already closed its input.
 
     def alive(self, pid):
         try:

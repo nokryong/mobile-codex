@@ -113,8 +113,8 @@ class NativeBuildTests(unittest.TestCase):
             harness = root / "hook-harness"
             prefix = root / "usr"
             (prefix / "bin").mkdir(parents=True)
-            os.symlink("/bin/echo", prefix / "bin" / "node")
-            os.symlink("/bin/echo", prefix / "bin" / "python3")
+            os.symlink(harness, prefix / "bin" / "node")
+            os.symlink(harness, prefix / "bin" / "python3")
             source = root / "hook-harness.c"
             source.write_text(textwrap.dedent("""
                 #define _GNU_SOURCE
@@ -130,6 +130,14 @@ class NativeBuildTests(unittest.TestCase):
                 #include <unistd.h>
                 extern char **environ;
                 int main(int argc, char **argv) {
+                  // Record forwarded arguments without depending on the host coreutils dispatcher.
+                  const char *name = strrchr(argv[0], '/');
+                  name = name ? name + 1 : argv[0];
+                  if (!strcmp(name, "node") || !strcmp(name, "python3")) {
+                    for (int i = 1; i < argc; ++i) printf("%s%s", i == 1 ? "" : " ", argv[i]);
+                    putchar(10);
+                    return 0;
+                  }
                   char *args[] = { argv[2], "extra", NULL }; int rc, status; pid_t pid;
                   if (!strcmp(argv[1], "execve")) { execve(argv[2], args, environ); return errno; }
                   if (!strcmp(argv[1], "execvp")) { execvp(argv[2], args); return errno; }
