@@ -149,6 +149,10 @@ public final class Engine {
     private final PersonalInstructions instructions;
     private final DevTools devTools;
     private final LinuxRuntime linux;
+    private final LinuxCodexRuntime linuxCodex;
+    private File processRelease;
+    private Set<File> mountedProjects = Collections.emptySet();
+    private boolean voiceStartup;
     private AgentBridge agentBridge;
     private final java.util.concurrent.atomic.AtomicInteger agentRequests = new java.util.concurrent.atomic.AtomicInteger();
     /** Tool permission keyed by a unique agent turn, never shared between participants. */
@@ -201,6 +205,8 @@ public final class Engine {
         instructions = new PersonalInstructions(codexHome);
         devTools = new DevTools(context);
         linux = new LinuxRuntime(context, devTools, this::linuxChanged);
+        linuxCodex = new LinuxCodexRuntime(context.getFilesDir(), new File(context.getApplicationInfo().nativeLibraryDir == null ? "/missing-native" : context.getApplicationInfo().nativeLibraryDir),
+            () -> linux.status().optBoolean("enabled"));
         changes = new ChangeReview(new File(context.getFilesDir(), "change-backups"), this::git);
         workDir = new File(context.getFilesDir(), "workspace"); workDir.mkdirs();
         stateFile = new File(context.getFilesDir(), "sessions.json");
@@ -211,7 +217,7 @@ public final class Engine {
     public void attach(Ui ui) {
         this.ui = ui;
         io.execute(() -> {
-            if (this.ui == ui) promoteWidgetRuntime();
+            if (this.ui == ui) { promoteWidgetRuntime(); linuxCodex.check(); }
             else if (this.ui == null && observers.isEmpty()) releaseWidgetRuntime();
             publish();
             if (pendingApproval != null && !pendingApproval.decision.isDone()) ui.approval(pendingApproval);
@@ -529,7 +535,7 @@ public final class Engine {
         if (!Set.of("auto", "ko", "en").contains(language)) throw new IOException(t("지원하지 않는 언어 설정입니다."));
         if (key.isBlank() || key.length() > 100 || !sdp.startsWith("v=0") || sdp.length() > 100000)
             throw new IOException(t("음성 연결 요청이 올바르지 않습니다."));
-        documents.requireWorkspaceAvailable(); start();
+        documents.requireWorkspaceAvailable(); startVoiceEngine();
         if (account.length() == 0) throw new IOException(t("ChatGPT 계정으로 로그인해 주세요."));
         JSONObject catalog = call("thread/realtime/listVoices", obj()).getJSONObject("voices");
         JSONArray voices = catalog.optJSONArray("v3");
@@ -657,7 +663,7 @@ public final class Engine {
                         active = null; threadId = ""; serverThreadId = ""; draftAgents = new JSONArray();
                         restoreSessionProjects(); publish(); reply.complete(sessionStore.status(), null);
                     }
-                    case "live.voices" -> { start(); reply.complete(call("thread/realtime/listVoices", obj()), null); }
+                    case "live.voices" -> { startVoiceEngine(); reply.complete(call("thread/realtime/listVoices", obj()), null); }
                     case "live.start" -> { requireChatScope(args); reply.complete(startLive(args), null); }
                     case "live.stop" -> { if (args.optString("key").equals(liveKey)) stopLive(); reply.complete(obj("ok", true), null); }
                     case "live.text" -> {
@@ -674,7 +680,7 @@ public final class Engine {
                     case "runtime.start" -> { autoRestorePaused = false; start(); event("diagnostics.cleared", obj("operation", "start")); reply.complete(snapshot(), null); }
                     case "auth.refresh" -> { refreshAccount(); reply.complete(snapshot(), null); }
                     case "models.refresh" -> {
-                        if (!ready) start();
+                        start();
                         JSONArray latest = call("model/list", obj("limit", 100, "includeHidden", false), 10).optJSONArray("data");
                         if (latest == null) throw new IOException(t("모델 목록 응답이 올바르지 않습니다."));
                         models = latest; publish(); reply.complete(obj("models", models), null);
@@ -687,12 +693,19 @@ public final class Engine {
                         catch (Exception error) { stopServiceIfIdle(); throw error; }
                     }
                     case "linux.enable" -> {
-                        ensureRuntimeSettingsIdle(); linux.setEnabled(args.getBoolean("enabled"));
+                        ensureRuntimeSettingsIdle();
+                        if (loginInProgress) throw new IOException(t("로그인을 마친 뒤 다시 시도해 주세요."));
+                        linux.setEnabled(args.getBoolean("enabled"));
+                        if (!args.getBoolean("enabled") && processRelease != null) stopCodex();
+                        linuxCodex.check();
                         // Re-read developer instructions on the next turn, including restored chats.
                         serverThreadId = ""; publish(); reply.complete(linux.status(), null);
                     }
                     case "linux.remove" -> {
-                        ensureRuntimeSettingsIdle(); linux.remove(); serverThreadId = "";
+                        ensureRuntimeSettingsIdle();
+                        if (loginInProgress) throw new IOException(t("로그인을 마친 뒤 다시 시도해 주세요."));
+                        if (processRelease != null) stopCodex();
+                        linux.remove(); serverThreadId = "";
                         publish(); reply.complete(linux.status(), null);
                     }
                     case "runtime.stop" -> { autoRestorePaused = true; linux.cancel(); stopNow(); reply.complete(snapshot(), null); }
@@ -953,6 +966,11 @@ public final class Engine {
         }
         busy = false; turnId = "";
     }
+    private void startVoiceEngine() throws Exception {
+        voiceStartup = true;
+        try { start(); } finally { voiceStartup = false; }
+    }
+
     private void start() throws Exception {
         start(true);
     }
@@ -963,7 +981,8 @@ public final class Engine {
     private void start(boolean restoreConversation, boolean foregroundRuntime) throws Exception {
         StartupDiagnostics diagnostic = new StartupDiagnostics();
         RuntimeFailure.Tail stderrTail = new RuntimeFailure.Tail();
-        boolean replacing = false, spawnAttempted = false;
+        boolean replacing = false, spawnAttempted = false, handshakeCompleted = false;
+        File preferred = null;
         try {
             diagnostic.stage("runtime_prepare");
             restoreConversation = restoreConversation && !loginInProgress && processHome.equals(codexHome.root());
@@ -974,6 +993,14 @@ public final class Engine {
                 if (testAccountValidation) { readAccount(); readRateLimits(); }
                 if (restoreConversation) restoreConversation();
                 return;
+            }
+            linuxCodex.check();
+            if (!voiceStartup && liveRemote.isBlank()) preferred = linuxCodex.selected();
+            if (ready && process != null && process.isAlive() && rpc != null && !rpc.isClosed()
+                    && (!Objects.equals(preferred, processRelease) || (processRelease != null && !mountedProjects.contains(projectDirectory())))
+                    && !loginInProgress && !hasRunningTurns() && group == null && liveRemote.isBlank()
+                    && pendingApproval == null && !hasProOperations()) {
+                stopCodex();
             }
             if (ready && process != null && process.isAlive() && rpc != null && !rpc.isClosed()) {
                 if (restoreConversation) retryPendingDeletions();
@@ -1012,6 +1039,15 @@ public final class Engine {
             if (retiredProBridgeConfigured(config)) builder.command().addAll(List.of("-c", "mcp_servers.mobile_codex_pro.enabled=false"));
             linux.configureEnvironment(builder.environment());
             builder.environment().put("CODEX_SELF_EXE", binary.getAbsolutePath());
+            if (preferred != null) {
+                mountedProjects = documents.codexDirectories();
+                Set<File> mounts = new LinkedHashSet<>(mountedProjects);
+                mounts.add(new File(context.getFilesDir(), "images"));
+                mounts.add(new File(context.getFilesDir(), "attachments"));
+                builder = linuxCodex.server(preferred, processHome, projectDirectory(),
+                    builder.command().subList(1, builder.command().size()), mounts.toArray(new File[0]));
+            }
+            processRelease = preferred;
             diagnostic.stage("service_start");
             if (foregroundRuntime) context.startForegroundService(new Intent(context, EngineService.class));
             diagnostic.stage("before_spawn");
@@ -1038,6 +1074,7 @@ public final class Engine {
             diagnostic.initializing();
             call("initialize", obj("clientInfo", obj("name", "mobile_codex", "title", "Mobile Codex", "version", "0.1.11"),
                 "capabilities", obj("experimentalApi", true)));
+            handshakeCompleted = true;
             diagnostic.initialized();
             rpc.notify("initialized", new JSONObject());
             ready = true; status = t("연결됨");
@@ -1068,6 +1105,11 @@ public final class Engine {
             // must not alter their user-facing message or recovery contract.
             if (!spawnAttempted) detail = unwrap(e).getMessage();
             if (replacing) { if (foregroundRuntime) stopCodex(); else releaseWidgetRuntime(); }
+            if (preferred != null && !handshakeCompleted) {
+                linuxCodex.reject(preferred);
+                start(restoreConversation, foregroundRuntime);
+                return;
+            }
             throw new DiagnosticFailure(detail, e, diagnosticOperation, measured);
         }
     }

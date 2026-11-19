@@ -252,6 +252,27 @@ public final class DocumentStore {
             try { return safeGeneralRoot(); }
             catch (IOException ignored) { return null; }
         }
+        return directTreeDirectory(tree);
+    }
+
+    /** Only registered and currently available project trees get a Linux filesystem path. */
+    synchronized Set<File> codexDirectories() {
+        Set<File> dirs = new LinkedHashSet<>();
+        dirs.add(generalRoot);
+        JSONArray entries = projects();
+        for (int i = 0; i < entries.length(); i++) {
+            JSONArray bindings = entries.optJSONObject(i).optJSONArray("bindings");
+            for (int j = 0; j < bindings.length(); j++) {
+                JSONObject binding = bindings.optJSONObject(j);
+                if (!binding.optBoolean("available")) continue;
+                File dir = directTreeDirectory(Uri.parse(binding.optString("uri")));
+                if (dir != null) dirs.add(dir);
+            }
+        }
+        return dirs;
+    }
+
+    private static File directTreeDirectory(Uri tree) {
         if (tree == null || !"com.android.externalstorage.documents".equals(tree.getAuthority())) return null;
         try {
             String id = DocumentsContract.getTreeDocumentId(tree);

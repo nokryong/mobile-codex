@@ -272,6 +272,8 @@ Additional technical documents are currently mostly in Korean.
 
 The runtime uses [`@mmmbuto/codex-cli-termux@0.162.1-termux.1`](https://github.com/DioNanos/codex-termux/tree/v0.162.1-termux.1) with the [Live voice patch](tools/runtime-patches/README.md). The UI connects through the [Codex app-server JSON-RPC protocol](https://github.com/openai/codex/tree/main/codex-rs/app-server). Android native executables are bundled directly in the APK; the Termux app is not installed.
 
+With the optional Linux environment enabled, text chat checks for the official OpenAI Linux ARM64 CLI. The app verifies the package and tests the app-server before switching at an idle boundary. Both runtimes use the existing GPT account. Live voice and installations with Linux disabled use the bundled runtime.
+
 Versions and checksums are pinned in [`runtime-lock.json`](tools/runtime-lock.json) and [`devtools-lock.json`](tools/devtools-lock.json). Preparation scripts include Android packaging changes to executable names and library references. Original LICENSE/NOTICE files are retained in the APK; corresponding developer-tool sources accompany releases. Preserve these notices and sources when redistributing.
 
 Authentication data stays in app-private storage and is excluded from Android backup/device transfer. Personal settings, logs, signing keys, credentials, and build outputs are not committed.

@@ -20,7 +20,8 @@ jobs:
     name: Fast UI and source checks
     outputs:
       tested: ${{ steps.reuse.outputs.tested }}
-    runs-on: ubuntu-latest
+    # The pinned Playwright release supports Ubuntu 24.04.
+    runs-on: ubuntu-24.04
     # Allow slow cold-runner apt downloads plus the complete browser matrix.
     timeout-minutes: 20
     steps:
@@ -134,12 +135,23 @@ jobs:
           restore-keys: |
             runtime-inputs-${{ runner.os }}-
       - name: Prepare pinned Android runtimes on cache miss
+        env:
+          RUNTIME_INPUTS: ${{ hashFiles('tools/runtime-lock.json', 'tools/devtools-lock.json', 'tools/requirements-devtools.txt', 'tools/prepare_runtime.py', 'tools/prepare_devtools.py', 'tools/build_native.py', 'tools/native/**') }}
         if: steps.prepared.outputs.cache-hit != 'true'
         run: |
           sdkmanager 'ndk;28.2.13676358'
           python3 tools/prepare_runtime.py
           python3 tools/build_native.py --ndk "$ANDROID_HOME/ndk/28.2.13676358"
-          python3 tools/prepare_devtools.py
+          # The old Termux pool no longer retains every locked package. The
+          # published APK contains the verified output for this exact input set.
+          if [ "$RUNTIME_INPUTS" = bc4af22c0fef22041450feb41db000ac43535801009a499da989df38de0e53a9 ]; then
+            curl --fail --location --retry 3 --proto '=https' --proto-redir '=https' \
+              -o "$RUNNER_TEMP/devtools-base.apk" \
+              https://github.com/nokryong/mobile-codex/releases/download/v0.3.9/mobile-codex-0.3.9-arm64.apk
+            python3 tools/restore_release_devtools.py "$RUNNER_TEMP/devtools-base.apk"
+          else
+            python3 tools/prepare_devtools.py
+          fi
       - name: Verify prepared runtime even on cache hit
         run: |
           python3 tools/prepare_devtools.py --verify

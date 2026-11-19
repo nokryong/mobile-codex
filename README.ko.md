@@ -274,6 +274,8 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 Android 실행 엔진은 [DioNanos/codex-termux](https://github.com/DioNanos/codex-termux/tree/v0.162.1-termux.1)의 `@mmmbuto/codex-cli-termux@0.162.1-termux.1`에 [Live 음성 패치](tools/runtime-patches/README.md)를 적용한 버전입니다. UI와 엔진은 [Codex app-server](https://github.com/openai/codex/tree/main/codex-rs/app-server)의 JSON-RPC 프로토콜로 연결합니다. Termux 앱을 설치하는 방식이 아니라 Android 네이티브 실행 파일을 APK에 포함해 직접 실행합니다.
 
+앱 내부 Linux를 켜면 일반 대화용 Codex는 OpenAI의 공식 Linux ARM64 CLI를 자동으로 확인합니다. 다운로드 무결성과 app-server 연결을 검증한 뒤 유휴 상태에서 새 버전을 적용합니다. 기존 GPT 계정을 그대로 사용하며, Linux를 끄거나 Live 음성을 사용할 때는 APK에 포함된 엔진을 사용합니다.
+
 엔진·개발 도구의 버전과 체크섬은 [`runtime-lock.json`](tools/runtime-lock.json)과 [`devtools-lock.json`](tools/devtools-lock.json)에 고정합니다. Android 패키징에 필요한 실행 파일 이름과 라이브러리 참조를 조정하며, 준비 스크립트와 변경 사항을 저장소에 포함합니다. 원본 LICENSE·NOTICE는 APK에, 개발 도구의 대응 소스는 빌드 산출물에 포함합니다. 재배포 시에도 해당 고지와 소스를 함께 제공하세요.
 
 인증 정보는 앱 비공개 저장소에 보관하며 Android 백업·기기 전송에서 제외합니다. 저장소에는 앱 소스·에셋·테스트·빌드 설정을 관리하고, 개인 설정·로그·서명키·인증 파일·빌드 산출물은 커밋하지 않습니다.
