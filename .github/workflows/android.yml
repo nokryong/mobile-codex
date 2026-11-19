@@ -185,7 +185,8 @@ jobs:
         run: python3 tools/prepare_update_release.py --apk "$PRODUCTION_APK" --build-tools "$ANDROID_HOME/build-tools/35.0.0" --identity app/build.gradle --previous-manifest artifacts/previous/mobile-codex-update.json --output artifacts/update
       - name: Collect corresponding tool sources on cache miss
         if: (github.event_name != 'pull_request' || env.PRIVATE_TEST_PR == 'true') && steps.sources.outputs.cache-hit != 'true'
-        run: python3 tools/prepare_devtools_sources.py
+        run: |
+          python3 tools/prepare_devtools_sources.py || python3 tools/restore_devtools_sources.py
       - name: Publish private pull request test build
         if: env.PRIVATE_TEST_PR == 'true' && !inputs.apk_only
         env:
