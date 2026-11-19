@@ -20,7 +20,8 @@ jobs:
     name: Fast UI and source checks
     outputs:
       tested: ${{ steps.reuse.outputs.tested }}
-    runs-on: ubuntu-latest
+    # The pinned Playwright release supports Ubuntu 24.04.
+    runs-on: ubuntu-24.04
     # Allow slow cold-runner apt downloads plus the complete browser matrix.
     timeout-minutes: 20
     steps:
