@@ -195,7 +195,7 @@
 
     // ---- Account cards and CLI setup (Settings → Account) ------------------------------
     const providerIds = ['claude', 'agy'];
-    function setupState(id) { if (!setupStates.has(id)) setupStates.set(id, {running:false, text:'', screen:null, action:'login'}); return setupStates.get(id); }
+    function setupState(id) { if (!setupStates.has(id)) setupStates.set(id, {running:false, text:'', screen:null, loginLink:null, action:'login'}); return setupStates.get(id); }
     /** Claude's /usage rows are English sentences; name the common ones in the app's language. */
     function usageLabel(label) {
       if (/^current session$/i.test(label)) return t('현재 세션');
@@ -252,7 +252,7 @@
     }
     function drawSetup() {
       if (!setupView) return;
-      const {id, output, links, entry, inputButtons, stop, retry, summary, finish} = setupView, progress = setupState(id);
+      const {id, output, links, entry, inputButtons, pageButtons, codeHint, stop, retry, summary, finish} = setupView, progress = setupState(id);
       const terminalText = progress.screen === null ? progress.text
         : progress.screen + (progress.running ? '' : '\n' + progress.text);
       if (output.textContent !== terminalText) {
@@ -264,8 +264,13 @@
       entry.disabled = !progress.running; for (const button of inputButtons) button.disabled = !progress.running; stop.disabled = !progress.running; retry.hidden = progress.running;
       // agy stays open as an agent after signing in; finishing closes it and rechecks the account.
       finish.hidden = !progress.running || progress.action !== 'login';
-      // Keep auth URLs in memory only; opening one requires an explicit user click.
-      const urls = progress.running && progress.action === 'login' ? signInUrls(terminalText) : [];
+      const pager = progress.running && id === 'agy' && /shift\+up\/down\s+Navigate/i.test(terminalText);
+      for (const button of pageButtons) button.hidden = !pager;
+      // OSC links stay in memory only. Never open a guessed URL from the AGY screen.
+      const urls = !progress.running || progress.action !== 'login' ? []
+        : id === 'agy' ? (progress.loginLink ? [progress.loginLink] : [])
+        : signInUrls(terminalText);
+      codeHint.hidden = id !== 'agy' || !urls.length;
       links.replaceChildren(...urls.slice(-2).map(url => {
         const row = el('div', null, 'provider-login-link');
         const copy = btn(t('주소 복사'), async () => { await call('ui.copyCode', {code:url}); toast(t('로그인 주소를 복사했습니다.')); });
@@ -299,9 +304,21 @@
       }
       return [...new Set(found)];
     }
+    function agyOAuthLink(value) {
+      if (typeof value !== 'string' || value.length > 4096 ||
+          !value.startsWith('https://accounts.google.com/o/oauth2/auth?') ||
+          /[^!-~]|[<>"']/.test(value)) return null;
+      try {
+        const url = new URL(value), q = url.searchParams;
+        const one = key => q.getAll(key).length === 1 && q.get(key);
+        return !url.hash && one('redirect_uri') === 'https://antigravity.google/oauth-callback' &&
+          one('response_type') === 'code' && one('code_challenge_method') === 'S256' &&
+          ['client_id', 'state', 'code_challenge', 'scope'].every(one) ? value : null;
+      } catch { return null; }
+    }
     async function startSetup(id, action) {
       const progress = setupState(id); if (progress.running) return;
-      Object.assign(progress, {action, running:true, screen:null, text:t(action === 'install' ? 'CLI 설치를 시작합니다.' : '로그인을 시작합니다.') + '\n'}); renderAccounts(); drawSetup();
+      Object.assign(progress, {action, running:true, screen:null, loginLink:null, text:t(action === 'install' ? 'CLI 설치를 시작합니다.' : '로그인을 시작합니다.') + '\n'}); renderAccounts(); drawSetup();
       try { await call('agents.provider.' + action, {provider:id}); }
       catch (error) { progress.running = false; progress.text += '\n' + error.message; renderAccounts(); drawSetup(); }
     }
@@ -320,21 +337,25 @@
       const up = btn('↑', () => send('\x1b[A')), down = btn('↓', () => send('\x1b[B'));
       up.setAttribute('aria-label', t('이전 항목')); down.setAttribute('aria-label', t('다음 항목'));
       const tab = btn('Tab', () => send('\t')), escape = btn('Esc', () => send('\x1b'));
-      const quickInputs = el('div', null, 'provider-terminal-keys'); quickInputs.append(yes, no, up, down, tab, enter, escape); yes.hidden = no.hidden = activeAction !== 'install';
+      const pageUp = btn(t('위로 스크롤'), () => send('\x1b[1;2A')), pageDown = btn(t('아래로 스크롤'), () => send('\x1b[1;2B'));
+      const quickInputs = el('div', null, 'provider-terminal-keys'); quickInputs.append(yes, no, up, down, tab, enter, escape, pageUp, pageDown); yes.hidden = no.hidden = activeAction !== 'install';
       entry.onkeydown = e => {
         if (e.isComposing || e.defaultPrevented) return;
         const choice = e.key === 'ArrowUp' ? up : e.key === 'ArrowDown' ? down : null;
         if (choice && id === 'agy' && activeAction === 'login' && !entry.value &&
-            !e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
-          e.preventDefault(); choice.click();
+            !e.altKey && !e.ctrlKey && !e.metaKey) {
+          const button = e.shiftKey ? (choice === up ? pageUp : pageDown) : choice;
+          if (!button.hidden) { e.preventDefault(); button.click(); }
         } else if (e.key === 'Enter') {
           e.preventDefault(); submit().catch(error => toast(error.message));
         }
       };
       const inputField = el('label', null, 'option-field'); inputField.append(el('span', t(activeAction === 'install' ? '설치 입력' : '로그인 입력')), entry);
       const finish = btn(t('로그인 마침'), () => call('agents.provider.stop', {provider:id}), 'primary-button agent-finish');
-      d.append(summary, links, output, quickInputs, inputField, sendInput, finish, stop, retry, btn(t('Linux 환경 설정'), () => { d.close(); openLinuxSettings(); }));
-      const view = {id, dialog:d, output, links, entry, inputButtons:[sendInput, enter, yes, no, up, down, tab, escape], stop, retry, summary, finish}; setupView = view;
+      const codeHint = el('p', t('브라우저에서 인증 코드를 받았다면 아래 로그인 입력란에 붙여넣으세요.'), 'muted');
+      codeHint.hidden = true;
+      d.append(summary, links, output, quickInputs, codeHint, inputField, sendInput, finish, stop, retry, btn(t('Linux 환경 설정'), () => { d.close(); openLinuxSettings(); }));
+      const view = {id, dialog:d, output, links, entry, inputButtons:[sendInput, enter, yes, no, up, down, tab, escape, pageUp, pageDown], pageButtons:[pageUp, pageDown], codeHint, stop, retry, summary, finish}; setupView = view;
       d.addEventListener('close', () => { entry.value = ''; if (setupView === view) setupView = null; });
       drawSetup(); if (!progress.running) await startSetup(id, action);
     }
@@ -360,10 +381,15 @@
             toast(t('터미널 입력 대기열이 가득 찼습니다. 잠시 후 다시 보내 주세요.'));
           return;
         }
-        if (data.kind === 'started') { progress.running = true; progress.action = data.action; }
-        if (data.kind === 'exit') { progress.running = false; refreshProviders(); }
+        if (data.kind === 'started') { progress.running = true; progress.action = data.action; progress.loginLink = null; }
+        if (data.kind === 'exit') { progress.running = false; progress.loginLink = null; refreshProviders(); }
         if (data.kind === 'screen') progress.screen = String(data.text || '').slice(-24000);
-        else progress.text = (progress.text + (data.text || (data.kind === 'exit' ? '\n' + t('종료 코드: ') + data.code : ''))).slice(-24000);
+        else if (data.kind === 'loginLink') {
+          if (data.provider === 'agy' && progress.running && progress.action === 'login') {
+            const link = agyOAuthLink(data.url);
+            if (link) progress.loginLink = link;
+          }
+        } else progress.text = (progress.text + (data.text || (data.kind === 'exit' ? '\n' + t('종료 코드: ') + data.code : ''))).slice(-24000);
         renderAccounts(); if (setupView?.id === data.provider) drawSetup();
       }
     }

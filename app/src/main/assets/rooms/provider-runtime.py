@@ -307,7 +307,8 @@ def terminal(argv, env, onboarding=False):
     return run_terminal(argv, env, lambda text: emit(kind='output', text=text),
                         columns=100 if onboarding else 500,
                         input_result=lambda result: emit(kind='inputResult', **result),
-                        screen_output=(lambda text: emit(kind='screen', text=text)) if onboarding else None)
+                        screen_output=(lambda text: emit(kind='screen', text=text)) if onboarding else None,
+                        login_link=(lambda url: emit(kind='loginLink', url=url)) if onboarding else None)
 
 def download_installer(url, installer, env):
     # Match the official curl-based installer. Python urllib is rejected with

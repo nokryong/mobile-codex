@@ -182,9 +182,13 @@ async function main(){
     assert.equal(await output.textContent(),'Terms\n> Continue');
     await page.getByLabel('로그인 입력',{exact:true}).press('Enter');
     await page.waitForFunction(()=>window.__agentFx.calls.filter(c=>c.action==='agents.provider.input'&&c.args.text==='\n').length===2);
-    // A terminal can wrap a long sign-in URL onto the next lines; it must still open and copy whole.
-    await screen('Open\nhttps://accounts.google.com/o/oauth2/auth?client_id=fixture&redirect_uri=https%3A%2F%2Fantigravity.google\n&state=abc123\nThen paste the code.\n');
-    const wrapped='https://accounts.google.com/o/oauth2/auth?client_id=fixture&redirect_uri=https%3A%2F%2Fantigravity.google&state=abc123';
+    // The real CLI paints a truncated URL; the OSC target is delivered separately.
+    await screen('Open\nhttps://accounts.google.com/o/oauth2/auth?client_id=fixture\n  shift+up/down Navigate');
+    assert.equal(await page.getByRole('button',{name:'브라우저에서 로그인'}).count(),0);
+    const wrapped='https://accounts.google.com/o/oauth2/auth?client_id=fixture&redirect_uri=https%3A%2F%2Fantigravity.google%2Foauth-callback&response_type=code&state=abc123&code_challenge=fixture&code_challenge_method=S256&scope=openid';
+    await page.evaluate(url=>window.mobileCodexEvent('agents.setup',{provider:'agy',kind:'loginLink',url}),wrapped);
+    await page.getByRole('button',{name:'아래로 스크롤'}).click();
+    await page.waitForFunction(()=>window.__agentFx.calls.some(c=>c.action==='agents.provider.input'&&c.args.text==='\x1b[1;2B'));
     await page.getByRole('button',{name:'브라우저에서 로그인'}).click();
     assert.deepEqual((await calls('ui.providerLoginBrowser')).at(-1),{url:wrapped});
     await page.getByRole('button',{name:'주소 복사'}).click();

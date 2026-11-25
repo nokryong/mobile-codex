@@ -14,6 +14,7 @@ import subprocess
 import sys
 import time
 import unicodedata
+from urllib.parse import parse_qs, urlsplit
 
 
 class OnboardingScreen:
@@ -122,10 +123,33 @@ class OnboardingScreen:
         return '\n'.join(''.join(line).rstrip() for line in self.cells).rstrip()
 
 
+def agy_oauth_link(url):
+    # Only the complete Google OAuth target inside an OSC 8 hyperlink is trusted
+    # as a link. Painted text may be split, scrolled out, or only partly redrawn.
+    if len(url) > 4096 or not url.isascii() or re.search(r'[\s<>"\x00-\x1f\x7f]', url) or "'" in url:
+        return False
+    try:
+        parts = urlsplit(url)
+        if (parts.scheme, parts.netloc, parts.path, parts.fragment) != (
+                'https', 'accounts.google.com', '/o/oauth2/auth', ''):
+            return False
+        query = parse_qs(parts.query, keep_blank_values=True, max_num_fields=40)
+        def one(key):
+            values = query.get(key, [])
+            return values[0] if len(values) == 1 else ''
+        return (one('redirect_uri') == 'https://antigravity.google/oauth-callback'
+                and one('response_type') == 'code' and one('code_challenge_method') == 'S256'
+                and all(one(key) for key in ('client_id', 'state', 'code_challenge', 'scope')))
+    except ValueError:
+        return False
+
+
 class TerminalProtocol:
-    def __init__(self, reply, screen=None):
+    def __init__(self, reply, screen=None, login_link=None):
         self.reply = reply
         self.screen = screen
+        self.login_link = login_link
+        self.last_login_link = None
         self.pending = ''
 
     def input_bytes(self, data):
@@ -164,6 +188,11 @@ class TerminalProtocol:
                 terminator = end.group()
                 if kind == ']':
                     fields = payload.split(';')
+                    if fields[0] == '8' and len(fields) >= 3 and self.login_link is not None:
+                        link = payload.split(';', 2)[-1]
+                        if link != self.last_login_link and agy_oauth_link(link):
+                            self.last_login_link = link
+                            self.login_link(link)
                     if fields[0] in ('10', '11', '12'):
                         for offset, value in enumerate(fields[1:]):
                             code = int(fields[0]) + offset
@@ -218,7 +247,7 @@ def flush_pending(fd, pending):
         pending.clear()
 
 
-def run_terminal(argv, env, output, json_input=True, columns=80, input_result=None, screen_output=None):
+def run_terminal(argv, env, output, json_input=True, columns=80, input_result=None, screen_output=None, login_link=None):
     import fcntl
     import pty
     import struct
@@ -269,7 +298,7 @@ def run_terminal(argv, env, output, json_input=True, columns=80, input_result=No
         return True
 
     screen = OnboardingScreen(columns) if screen_output else None
-    protocol = TerminalProtocol(write, screen=screen)
+    protocol = TerminalProtocol(write, screen=screen, login_link=login_link)
     last_screen = ''
 
     def write_input(data):

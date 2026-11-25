@@ -9,7 +9,7 @@ const scopes = ['cloud-platform', 'userinfo.email', 'userinfo.profile', 'cclog',
   .map(scope => 'https://www.googleapis.com/auth/' + scope).concat('openid');
 const url = 'https://accounts.google.com/o/oauth2/auth?' + new URLSearchParams({
   client_id:'fixture', redirect_uri:'https://antigravity.google/oauth-callback',
-  response_type:'code', scope:scopes.join(' '), state:'fixture-state', code_challenge:'fixture-challenge'
+  response_type:'code', code_challenge_method:'S256', scope:scopes.join(' '), state:'fixture-state', code_challenge:'fixture-challenge'
 });
 const cut = url.indexOf('userinfo.profile') + 'userinf'.length;
 const tick = () => new Promise(resolve => setImmediate(resolve));
@@ -22,20 +22,22 @@ async function setup(t, provider = 'agy') {
   w.eval(fs.readFileSync(path.join(root, 'agents-ui.js'), 'utf8'));
   const ui = w.MobileCodexAgents.init({
     getState:() => ({agents:[], agentProviders:[{id:provider, state:'login_required'}]}),
-    call:async (action, args) => { calls.push({action, args}); return {}; },
+    call:async (action, args) => { calls.push({action, args}); return {providers:[]}; },
     toast:message => assert.equal(message, '로그인 주소를 복사했습니다.'),
     getCharacters:() => [], usageGauge:() => w.document.createElement('div')
   });
   w.document.getElementById('account-' + provider + '-login').click();
   await tick();
   return {w, calls, output:text => ui.event('agents.setup', {provider, kind:'output', text}),
+    link:url => ui.event('agents.setup', {provider, kind:'loginLink', url}),
+    exit:() => ui.event('agents.setup', {provider, kind:'exit', code:0}),
     screen:text => ui.event('agents.setup', {provider, kind:'screen', text}),
     buttons:() => [...w.document.querySelectorAll('#agent-login-links button')]};
 }
 
 for (const separator of ['---', '─'.repeat(500)]) {
   test('complete delimited login URL survives blank lines and indentation: ' + separator.slice(0, 3), async t => {
-    const fx = await setup(t);
+    const fx = await setup(t, 'claude');
     fx.output(separator + '\r\n\r\n  ' + url.slice(0, cut));
     assert.equal(fx.buttons().length, 0, 'do not offer the incomplete first chunk');
     fx.output('\r\n\r\n  ' + url.slice(cut) + '\r\n');
@@ -51,7 +53,7 @@ for (const separator of ['---', '─'.repeat(500)]) {
 }
 
 test('repeated separators do not become URL content', async t => {
-  const fx = await setup(t);
+  const fx = await setup(t, 'claude');
   fx.output('---\n---\n\n' + url.slice(0, cut) + '\n\n' + url.slice(cut) + '\n---\n');
   fx.buttons()[1].click(); await tick();
   assert.equal(fx.calls.find(c => c.action === 'ui.copyCode').args.code, url);
@@ -85,11 +87,27 @@ test('AGY setup replaces menus and sends arrow and bare Enter separately from au
   await tick();
   assert.equal(sent().at(-1), '\n');
   fx.screen('---\n' + url.slice(0, cut) + '\n' + url.slice(cut) + '\n---\nPaste the code.');
+  assert.equal(fx.buttons().length, 0, 'an AGY screen is never the source of a link');
+  fx.link(url.replace('accounts.google.com', 'elsewhere.example'));
+  fx.link(url.replace('&state=fixture-state', ''));
+  assert.equal(fx.buttons().length, 0);
+  fx.link(url);
   assert.equal(fx.buttons().length, 2);
-  fx.buttons()[0].click(); await tick();
+  assert.match(d.querySelector('.agent-setup-dialog').textContent, /브라우저에서 인증 코드를 받았다면/);
+  fx.buttons()[0].click(); fx.buttons()[1].click(); await tick();
+  assert.equal(fx.calls.find(c => c.action === 'ui.copyCode').args.code, url);
   assert.equal(fx.calls.find(c => c.action === 'ui.providerLoginBrowser').args.url, url);
   entry.value = 'fixture-code'; press('ArrowDown'); await tick();
   assert.equal(sent().length, 4, 'do not intercept arrow keys while editing a code');
   press('Enter'); await tick();
   assert.equal(sent().at(-1), 'fixture-code\n');
+  const pageDown = [...d.querySelectorAll('.provider-terminal-keys button')].find(b => b.textContent === '아래로 스크롤');
+  assert.equal(pageDown.hidden, true);
+  fx.screen('27 lines\n  shift+up/down Navigate');
+  assert.equal(pageDown.hidden, false);
+  pageDown.click(); await tick();
+  assert.equal(sent().at(-1), '\x1b[1;2B');
+  assert.equal(fx.buttons().length, 2, 'viewport changes keep the exact link');
+  fx.exit(); fx.link(url); await tick();
+  assert.equal(fx.buttons().length, 0, 'discard link on exit');
 });

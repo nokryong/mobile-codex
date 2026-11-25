@@ -70,6 +70,27 @@ class TerminalProtocolTests(unittest.TestCase):
         self.assertEqual(screen.snapshot(), 'Browser login')
         self.assertEqual(parser.input_bytes(b'\x1b[B'), b'\x1b[B')
 
+    def test_agy_osc8_waits_for_full_valid_link_and_deduplicates_redraws(self):
+        links = []
+        parser = terminal.TerminalProtocol(lambda _: None, login_link=links.append)
+        target = ('https://accounts.google.com/o/oauth2/auth?client_id=fixture&state=nonce'
+                  '&redirect_uri=https%3A%2F%2Fantigravity.google%2Foauth-callback'
+                  '&response_type=code&code_challenge_method=S256&code_challenge=pkce&scope=openid')
+        code = '\x1b]8;id=test;' + target + '\x1b\\'
+        for cut in range(1, len(code)):
+            links.clear()
+            parser.last_login_link = None
+            self.assertEqual(parser.feed(code[:cut]), '')
+            self.assertEqual(links, [])
+            self.assertEqual(parser.feed(code[cut:] + 'Click'), 'Click')
+            self.assertEqual(links, [target])
+        parser.feed(code + '\x1b]8;;\x07')
+        for bad in [target.replace('accounts.google.com', 'evil.invalid'), target.replace('&state=nonce', ''),
+                    target.replace('antigravity.google', 'evil.invalid'), target + '&state=extra', target + '#other',
+                    target.replace('accounts.google.com', 'accounts.google.com@evil.invalid')]:
+            parser.feed('\x1b]8;;' + bad + '\x07')
+        self.assertEqual(links, [target])
+
     def test_incomplete_control_sequence_is_bounded(self):
         parser = terminal.TerminalProtocol(lambda _: None)
         self.assertEqual(parser.feed('\x1b]' + 'a' * 9000), '')
