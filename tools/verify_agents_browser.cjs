@@ -170,8 +170,20 @@ async function main(){
     await page.locator('#account-agy-login').click();
     await page.waitForFunction(()=>document.querySelector('#agent-setup-output'));
     assert.deepEqual((await calls('agents.provider.login')).at(-1),{provider:'agy'});
+    const screen = text => page.evaluate(text=>window.mobileCodexEvent('agents.setup',{provider:'agy',kind:'screen',text}),text);
+    const output = page.locator('#agent-setup-output');
+    await screen('Color\n> Dark\n  Light');
+    assert.match(await output.textContent(), /Color/);
+    await page.getByLabel('로그인 입력',{exact:true}).press('ArrowDown');
+    await page.waitForFunction(()=>window.__agentFx.calls.some(c=>c.action==='agents.provider.input'&&c.args.text==='\x1b[B'));
+    await page.getByRole('button',{name:'Enter',exact:true}).click();
+    await page.waitForFunction(()=>window.__agentFx.calls.some(c=>c.action==='agents.provider.input'&&c.args.text==='\n'));
+    await screen('Terms\n> Continue');
+    assert.equal(await output.textContent(),'Terms\n> Continue');
+    await page.getByLabel('로그인 입력',{exact:true}).press('Enter');
+    await page.waitForFunction(()=>window.__agentFx.calls.filter(c=>c.action==='agents.provider.input'&&c.args.text==='\n').length===2);
     // A terminal can wrap a long sign-in URL onto the next lines; it must still open and copy whole.
-    await page.evaluate(()=>window.mobileCodexEvent('agents.setup',{provider:'agy',kind:'output',text:'Open\nhttps://accounts.google.com/o/oauth2/auth?client_id=fixture&redirect_uri=https%3A%2F%2Fantigravity.google\n&state=abc123\nThen paste the code.\n'}));
+    await screen('Open\nhttps://accounts.google.com/o/oauth2/auth?client_id=fixture&redirect_uri=https%3A%2F%2Fantigravity.google\n&state=abc123\nThen paste the code.\n');
     const wrapped='https://accounts.google.com/o/oauth2/auth?client_id=fixture&redirect_uri=https%3A%2F%2Fantigravity.google&state=abc123';
     await page.getByRole('button',{name:'브라우저에서 로그인'}).click();
     assert.deepEqual((await calls('ui.providerLoginBrowser')).at(-1),{url:wrapped});
@@ -184,7 +196,7 @@ async function main(){
     await page.waitForFunction(()=>window.__agentFx.calls.some(c=>c.action==='agents.provider.stop'));
     assert.deepEqual((await calls('agents.provider.stop')).at(-1),{provider:'agy'});
     await page.getByLabel('로그인 입력',{exact:true}).fill('fixture-code');await page.getByLabel('로그인 입력',{exact:true}).press('Enter');
-    await page.waitForFunction(()=>window.__agentFx.calls.some(c=>c.action==='agents.provider.input'));
+    await page.waitForFunction(()=>window.__agentFx.calls.some(c=>c.action==='agents.provider.input'&&c.args.text==='fixture-code\n'));
     assert.deepEqual((await calls('agents.provider.input')).at(-1),{provider:'agy',text:'fixture-code\n'});
     await page.evaluate(()=>window.mobileCodexEvent('agents.setup',{provider:'agy',kind:'exit',code:0}));
     await page.locator('.agent-setup-dialog').getByRole('button',{name:'닫기',exact:true}).click();

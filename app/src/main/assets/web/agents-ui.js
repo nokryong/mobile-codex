@@ -195,7 +195,7 @@
 
     // ---- Account cards and CLI setup (Settings → Account) ------------------------------
     const providerIds = ['claude', 'agy'];
-    function setupState(id) { if (!setupStates.has(id)) setupStates.set(id, {running:false, text:'', action:'login'}); return setupStates.get(id); }
+    function setupState(id) { if (!setupStates.has(id)) setupStates.set(id, {running:false, text:'', screen:null, action:'login'}); return setupStates.get(id); }
     /** Claude's /usage rows are English sentences; name the common ones in the app's language. */
     function usageLabel(label) {
       if (/^current session$/i.test(label)) return t('현재 세션');
@@ -253,13 +253,19 @@
     function drawSetup() {
       if (!setupView) return;
       const {id, output, links, entry, inputButtons, stop, retry, summary, finish} = setupView, progress = setupState(id);
-      output.textContent = progress.text; output.scrollTop = output.scrollHeight;
+      const terminalText = progress.screen === null ? progress.text
+        : progress.screen + (progress.running ? '' : '\n' + progress.text);
+      if (output.textContent !== terminalText) {
+        const scroll = output.scrollTop;
+        output.textContent = terminalText;
+        output.scrollTop = progress.screen === null || !progress.running ? output.scrollHeight : scroll;
+      }
       summary.textContent = t(progress.running ? (progress.action === 'install' ? '설치 중 질문이 나오면 아래에서 응답해 주세요.' : '브라우저에서 로그인하고 필요한 코드를 입력해 주세요. 첫 설정까지 마치면 \'로그인 마침\'을 눌러 주세요.') : '작업이 종료되었습니다. 계정에서 연결 상태를 확인해 주세요.');
       entry.disabled = !progress.running; for (const button of inputButtons) button.disabled = !progress.running; stop.disabled = !progress.running; retry.hidden = progress.running;
       // agy stays open as an agent after signing in; finishing closes it and rechecks the account.
       finish.hidden = !progress.running || progress.action !== 'login';
       // Keep auth URLs in memory only; opening one requires an explicit user click.
-      const urls = progress.running && progress.action === 'login' ? signInUrls(progress.text) : [];
+      const urls = progress.running && progress.action === 'login' ? signInUrls(terminalText) : [];
       links.replaceChildren(...urls.slice(-2).map(url => {
         const row = el('div', null, 'provider-login-link');
         const copy = btn(t('주소 복사'), async () => { await call('ui.copyCode', {code:url}); toast(t('로그인 주소를 복사했습니다.')); });
@@ -295,7 +301,7 @@
     }
     async function startSetup(id, action) {
       const progress = setupState(id); if (progress.running) return;
-      Object.assign(progress, {action, running:true, text:t(action === 'install' ? 'CLI 설치를 시작합니다.' : '로그인을 시작합니다.') + '\n'}); renderAccounts(); drawSetup();
+      Object.assign(progress, {action, running:true, screen:null, text:t(action === 'install' ? 'CLI 설치를 시작합니다.' : '로그인을 시작합니다.') + '\n'}); renderAccounts(); drawSetup();
       try { await call('agents.provider.' + action, {provider:id}); }
       catch (error) { progress.running = false; progress.text += '\n' + error.message; renderAccounts(); drawSetup(); }
     }
@@ -315,7 +321,16 @@
       up.setAttribute('aria-label', t('이전 항목')); down.setAttribute('aria-label', t('다음 항목'));
       const tab = btn('Tab', () => send('\t')), escape = btn('Esc', () => send('\x1b'));
       const quickInputs = el('div', null, 'provider-terminal-keys'); quickInputs.append(yes, no, up, down, tab, enter, escape); yes.hidden = no.hidden = activeAction !== 'install';
-      entry.onkeydown = e => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); submit().catch(error => toast(error.message)); } };
+      entry.onkeydown = e => {
+        if (e.isComposing || e.defaultPrevented) return;
+        const choice = e.key === 'ArrowUp' ? up : e.key === 'ArrowDown' ? down : null;
+        if (choice && id === 'agy' && activeAction === 'login' && !entry.value &&
+            !e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
+          e.preventDefault(); choice.click();
+        } else if (e.key === 'Enter') {
+          e.preventDefault(); submit().catch(error => toast(error.message));
+        }
+      };
       const inputField = el('label', null, 'option-field'); inputField.append(el('span', t(activeAction === 'install' ? '설치 입력' : '로그인 입력')), entry);
       const finish = btn(t('로그인 마침'), () => call('agents.provider.stop', {provider:id}), 'primary-button agent-finish');
       d.append(summary, links, output, quickInputs, inputField, sendInput, finish, stop, retry, btn(t('Linux 환경 설정'), () => { d.close(); openLinuxSettings(); }));
@@ -340,9 +355,15 @@
       if (name === 'agents.providers') mergeProviders(data.providers);
       if (name === 'agents.setup' && providerIds.includes(data.provider)) {
         const progress = setupState(data.provider);
+        if (data.kind === 'inputResult') {
+          if (data.ok === false && data.reason === 'input_queue_full' && setupView?.id === data.provider)
+            toast(t('터미널 입력 대기열이 가득 찼습니다. 잠시 후 다시 보내 주세요.'));
+          return;
+        }
         if (data.kind === 'started') { progress.running = true; progress.action = data.action; }
         if (data.kind === 'exit') { progress.running = false; refreshProviders(); }
-        progress.text = (progress.text + (data.text || (data.kind === 'exit' ? '\n' + t('종료 코드: ') + data.code : ''))).slice(-24000);
+        if (data.kind === 'screen') progress.screen = String(data.text || '').slice(-24000);
+        else progress.text = (progress.text + (data.text || (data.kind === 'exit' ? '\n' + t('종료 코드: ') + data.code : ''))).slice(-24000);
         renderAccounts(); if (setupView?.id === data.provider) drawSetup();
       }
     }

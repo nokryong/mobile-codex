@@ -300,12 +300,14 @@ def agy_status(code, usage, error):
         return None, []
     return True, parse_agy_usage(usage)
 
-def terminal(argv, env):
+def terminal(argv, env, onboarding=False):
     from terminal_io import run_terminal
-    # Sign-in URLs run to several hundred characters: a wide terminal keeps them on one
-    # line, so the app can open or copy them whole.
-    return run_terminal(argv, env, lambda text: emit(kind='output', text=text), columns=500,
-                        input_result=lambda result: emit(kind='inputResult', **result))
+    # AGY draws first-run menus by moving the cursor. Send snapshots there;
+    # leave installer and Claude line-oriented output unchanged.
+    return run_terminal(argv, env, lambda text: emit(kind='output', text=text),
+                        columns=100 if onboarding else 500,
+                        input_result=lambda result: emit(kind='inputResult', **result),
+                        screen_output=(lambda text: emit(kind='screen', text=text)) if onboarding else None)
 
 def download_installer(url, installer, env):
     # Match the official curl-based installer. Python urllib is rejected with
@@ -341,7 +343,7 @@ def main():
     elif args.action == 'login':
         # agy has no login command: after signing in it stays open as an agent, so the
         # user ends it with the app's finish button. Never run a second agy alongside it.
-        sys.exit(terminal([binary, 'auth', 'login'] if args.provider == 'claude' else [binary], env))
+        sys.exit(terminal([binary, 'auth', 'login'] if args.provider == 'claude' else [binary], env, onboarding=args.provider == 'agy'))
     else:
         config = json.loads(Path('/workspace/run.json').read_text(encoding='utf-8'))
         configure(args.provider, config, env)

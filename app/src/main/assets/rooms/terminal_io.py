@@ -13,12 +13,127 @@ import signal
 import subprocess
 import sys
 import time
+import unicodedata
+
+
+class OnboardingScreen:
+    """Bounded text screen for AGY's setup menus; never forward terminal escapes."""
+    def __init__(self, columns, rows=24):
+        self.columns, self.rows = columns, rows
+        self.main = None
+        self.cursor_keys = False
+        self.reset()
+
+    def reset(self):
+        self.cells = [[' '] * self.columns for _ in range(self.rows)]
+        self.row = self.col = 0
+        self.saved = (0, 0)
+
+    def _down(self):
+        if self.row + 1 == self.rows:
+            self.cells.pop(0)
+            self.cells.append([' '] * self.columns)
+        else:
+            self.row += 1
+
+    def put(self, text):
+        for char in text:
+            if char == '\r':
+                self.col = 0
+            elif char == '\n':
+                self._down()
+            elif char == '\b':
+                self.col = max(0, self.col - 1)
+            elif char == '\t':
+                self.col = min(self.columns - 1, (self.col // 8 + 1) * 8)
+            elif ord(char) >= 32 and not 127 <= ord(char) < 160:
+                if unicodedata.combining(char):
+                    # Bound the output even if a child floods one combining cell.
+                    if self.col and len(self.cells[self.row][self.col - 1]) < 8:
+                        self.cells[self.row][self.col - 1] += char
+                    continue
+                width = 2 if unicodedata.east_asian_width(char) in ('W', 'F') else 1
+                if self.col + width > self.columns:
+                    self.col = 0
+                    self._down()
+                self.cells[self.row][self.col] = char
+                if width == 2:
+                    self.cells[self.row][self.col + 1] = ''
+                self.col += width
+
+    def csi(self, command):
+        code, params = command[-1], command[:-1]
+        if params.startswith('?') and code in 'hl':
+            modes = params[1:].split(';')
+            if '1' in modes:
+                self.cursor_keys = code == 'h'
+            if any(mode in modes for mode in ('47', '1047', '1049')):
+                if code == 'h' and self.main is None:
+                    self.main = (self.cells, self.row, self.col, self.saved)
+                    self.reset()
+                elif code == 'l' and self.main is not None:
+                    self.cells, self.row, self.col, self.saved = self.main
+                    self.main = None
+            return
+        if code not in 'HfABEFCDGdsuJKX' or not re.fullmatch(r'[0-9;]*', params):
+            return
+        values = [min(int(p or '0'), 10000) for p in params.split(';')]
+        n = values[0] or 1
+        if code in 'Hf':
+            self.row = n - 1
+            self.col = (values[1] or 1) - 1 if len(values) > 1 else 0
+        elif code in 'ABEF':
+            self.row += n if code in 'BE' else -n
+            if code in 'EF':
+                self.col = 0
+        elif code in 'CD':
+            self.col += n if code == 'C' else -n
+        elif code == 'G':
+            self.col = n - 1
+        elif code == 'd':
+            self.row = n - 1
+        elif code == 's':
+            self.saved = (self.row, self.col)
+        elif code == 'u':
+            self.row, self.col = self.saved
+        elif code in 'JKX':
+            col = min(self.col, self.columns - 1)
+            mode = values[0]
+            if code == 'X':
+                end = min(col + n, self.columns)
+                self.cells[self.row][col:end] = [' '] * (end - col)
+            elif mode == 0:
+                self.cells[self.row][col:] = [' '] * (self.columns - col)
+                if code == 'J':
+                    for row in range(self.row + 1, self.rows):
+                        self.cells[row] = [' '] * self.columns
+            elif mode == 1:
+                self.cells[self.row][:col + 1] = [' '] * (col + 1)
+                if code == 'J':
+                    for row in range(self.row):
+                        self.cells[row] = [' '] * self.columns
+            elif mode == 2:
+                for row in range(self.rows) if code == 'J' else (self.row,):
+                    self.cells[row] = [' '] * self.columns
+        self.row = max(0, min(self.row, self.rows - 1))
+        self.col = max(0, min(self.col, self.columns - 1))
+
+    def snapshot(self):
+        return '\n'.join(''.join(line).rstrip() for line in self.cells).rstrip()
 
 
 class TerminalProtocol:
-    def __init__(self, reply):
+    def __init__(self, reply, screen=None):
         self.reply = reply
+        self.screen = screen
         self.pending = ''
+
+    def input_bytes(self, data):
+        # Raw CLI key handlers recognize CR as Enter. Canonical terminals map it back to LF.
+        data = data.replace(b'\r\n', b'\n').replace(b'\n', b'\r')
+        if self.screen is not None and self.screen.cursor_keys and data in (b'\x1b[A', b'\x1b[B'):
+            return b'\x1bO' + data[-1:]
+        return data
 
     def feed(self, text):
         text = self.pending + text
@@ -28,6 +143,8 @@ class TerminalProtocol:
         while index < len(text):
             char = text[index]
             if char != '\x1b':
+                if self.screen is not None:
+                    self.screen.put(char)
                 if char in '\n\r\t' or ord(char) >= 32:
                     output.append(char)
                 index += 1
@@ -63,6 +180,14 @@ class TerminalProtocol:
                 replies = {'5n': b'\x1b[0n', '6n': b'\x1b[1;1R', '?6n': b'\x1b[?1;1R',
                            'c': b'\x1b[?1;2c', '0c': b'\x1b[?1;2c', '>c': b'\x1b[>0;0;0c',
                            '>0c': b'\x1b[>0;0;0c', '18t': b'\x1b[8;24;80t'}
+                if self.screen is not None:
+                    screen = self.screen
+                    if command in ('6n', '?6n'):
+                        replies[command] = f'\x1b[{command[:-2]}{screen.row + 1};{min(screen.col + 1, screen.columns)}R'.encode()
+                    elif command == '18t':
+                        replies[command] = f'\x1b[8;{screen.rows};{screen.columns}t'.encode()
+                    else:
+                        screen.csi(command)
                 if command in replies:
                     self.reply(replies[command])
                 index += 3 + end.start()
@@ -72,6 +197,8 @@ class TerminalProtocol:
                     break
                 index += 3
             else:
+                if self.screen is not None and kind in '78':
+                    self.screen.csi('s' if kind == '7' else 'u')
                 index += 2
         return ''.join(output)
 
@@ -91,7 +218,7 @@ def flush_pending(fd, pending):
         pending.clear()
 
 
-def run_terminal(argv, env, output, json_input=True, columns=80, input_result=None):
+def run_terminal(argv, env, output, json_input=True, columns=80, input_result=None, screen_output=None):
     import fcntl
     import pty
     import struct
@@ -141,11 +268,12 @@ def run_terminal(argv, env, output, json_input=True, columns=80, input_result=No
         outgoing.extend(data)
         return True
 
-    protocol = TerminalProtocol(write)
+    screen = OnboardingScreen(columns) if screen_output else None
+    protocol = TerminalProtocol(write, screen=screen)
+    last_screen = ''
+
     def write_input(data):
-        # Raw CLI key handlers recognize CR as Enter; canonical terminals map
-        # CR to LF themselves. Replies to terminal queries must remain unchanged.
-        return write(data.replace(b'\r\n', b'\n').replace(b'\n', b'\r'))
+        return write(protocol.input_bytes(data))
     pending_input = b''
     output_open = True
     exited_at = None
@@ -210,7 +338,12 @@ def run_terminal(argv, env, output, json_input=True, columns=80, input_result=No
                             output_open = False
                             continue
                         text = protocol.feed(decoder.decode(data))
-                        if text:
+                        if screen is not None:
+                            snapshot = screen.snapshot()
+                            if snapshot != last_screen:
+                                screen_output(snapshot)
+                                last_screen = snapshot
+                        elif text:
                             output(text)
                     else:
                         data = os.read(sys.stdin.fileno(), 8192)

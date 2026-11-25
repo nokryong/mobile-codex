@@ -53,11 +53,69 @@ class TerminalProtocolTests(unittest.TestCase):
         self.assertEqual(''.join(parser.feed(chunk) for chunk in chunks), '로그인 https://claude.ai/auth\n다음')
         self.assertEqual(replies, [])
 
+    def test_onboarding_redraw_replaces_the_previous_menu_and_reports_cursor(self):
+        replies = []
+        screen = terminal.OnboardingScreen(columns=80)
+        parser = terminal.TerminalProtocol(replies.append, screen=screen)
+        for chunk in ['\x1b[?104', '9h\x1b[HColor\r\n  Dark', '\x1b[2J\x1b[H',
+                      'Terms\r\n> Accept\x1b[2;3H\x1b[6n\x1b[18t']:
+            parser.feed(chunk)
+        self.assertEqual(screen.snapshot(), 'Terms\n> Accept')
+        self.assertEqual(replies, [b'\x1b[2;3R', b'\x1b[8;24;80t'])
+        parser.feed('\x1b[?1h')
+        self.assertEqual(parser.input_bytes(b'\x1b[A'), b'\x1bOA')
+        self.assertEqual(parser.input_bytes(b'\n'), b'\r')
+        self.assertEqual(parser.input_bytes(b'code\r\n'), b'code\r')
+        parser.feed('\x1b[?1l\x1b[?1049lBrowser login')
+        self.assertEqual(screen.snapshot(), 'Browser login')
+        self.assertEqual(parser.input_bytes(b'\x1b[B'), b'\x1b[B')
+
     def test_incomplete_control_sequence_is_bounded(self):
         parser = terminal.TerminalProtocol(lambda _: None)
         self.assertEqual(parser.feed('\x1b]' + 'a' * 9000), '')
         self.assertEqual(parser.pending, '')
         self.assertEqual(parser.feed('Ready'), 'Ready')
+
+    @unittest.skipUnless(os.name == 'posix', 'Actual PTY and controlling terminal require POSIX')
+    def test_raw_onboarding_transitions_using_app_arrow_and_enter(self):
+        fixture = r'''
+import os,select,tty
+tty.setraw(0)
+def expect(expected):
+    result = b''
+    while len(result) < len(expected):
+        assert select.select([0], [], [], 3)[0], (result, expected)
+        result += os.read(0, len(expected) - len(result))
+    assert result == expected, (result, expected)
+os.write(1,b'\x1b[?1049h\x1b[?1h\x1b[HColor\r\n> Dark')
+expect(b'\x1bOB')
+os.write(1,b'\x1b[2;1H\x1b[2K> Light')
+expect(b'\r')
+os.write(1,b'\x1b[2J\x1b[HTerms\r\n> Continue')
+expect(b'\r')
+os.write(1,b'\x1b[?1l\x1b[?1049lBrowser login')
+'''
+        bridge = r'''
+import importlib.util,json,sys
+spec=importlib.util.spec_from_file_location('terminal_io',sys.argv[1])
+module=importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+def show(text): print(json.dumps(text),flush=True)
+sys.exit(module.run_terminal([sys.executable,'-u','-c',sys.argv[2]],{},show,screen_output=show))
+'''
+        process = subprocess.Popen([sys.executable, '-u', '-c', bridge, str(file), fixture],
+                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        with process:
+            try:
+                for screen, key in [('Color\n> Dark','\x1b[B'), ('Color\n> Light','\n'), ('Terms\n> Continue','\n')]:
+                    self.assertEqual(json.loads(process.stdout.readline()), screen)
+                    process.stdin.write((json.dumps({'text': key}) + '\n').encode())
+                    process.stdin.flush()
+                self.assertEqual(json.loads(process.stdout.readline()), 'Browser login')
+                self.assertEqual(process.wait(timeout=4), 0, process.stderr.read().decode())
+            finally:
+                if process.poll() is None:
+                    process.kill()
 
     @unittest.skipUnless(os.name == 'posix', 'Actual PTY and controlling terminal require POSIX')
     def test_real_cli_waits_for_color_response_and_accepts_code_with_raw_enter(self):
