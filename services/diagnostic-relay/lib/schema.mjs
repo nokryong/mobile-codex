@@ -45,13 +45,21 @@ const transport = {
 // Preserve v1's validation and acceptance for already released APKs.
 const nullableMeasurements = ['elapsedMs', 'processAlive', 'stdoutBytes', 'stdoutLines', 'invalidJson', 'unmatchedIds', 'stderrBytes'];
 function reportFields(schema) {
-  if (schema !== 2) return fields;
-  return {...fields,
+  if (schema !== 2 && schema !== 3) return fields;
+  const v2 = {...fields,
     appVersion: value => typeof value === 'string' && /^(?:unknown|(?:0|[1-9][0-9]{0,2})\.(?:0|[1-9][0-9]{0,2})\.(?:0|[1-9][0-9]{0,2}))$/.test(value),
     errorCode: value => fields.errorCode(value) || oneOf(['request_timeout', 'permission_denied', 'invalid_response', 'storage_failure', 'io_failure', 'login_failed',
       'rpc_invalid_request', 'rpc_method_missing', 'rpc_internal', 'rpc_rejected', 'turn_failed', 'context_limit', 'usage_limit',
       'upstream_connection', 'upstream_auth', 'upstream_bad_request', 'upstream_internal', 'sandbox_failure'])(value),
     ...Object.fromEntries(nullableMeasurements.map(key => [key, value => value === null || fields[key](value)]))};
+  if (schema === 2) return v2;
+  return {...v2, schema: value => value === 3, operation: oneOf(['login']),
+    stage: oneOf(['unknown', 'login_prepare', 'login_profile_check', 'login_profile_snapshot', 'login_home_prepare',
+      'login_runtime_start', 'login_rpc', 'login_code_response', 'login_wait', 'login_result', 'login_mark_complete', 'login_account_read',
+      'login_account_apply', 'login_limits_read', 'login_promote', 'login_restart', 'login_restore', 'login_cancel',
+      'runtime_prepare', 'runtime_check', 'config_prepare', 'environment_prepare', 'service_start', 'before_spawn',
+      'spawned', 'initialize_sent', 'initialized', 'account_read', 'limits_read', 'conversation_restore', 'ready', 'running']),
+    failureKind: oneOf(['unknown', 'busy', 'file_missing', 'permission_denied', 'timeout'])};
 }
 
 // Deliberately a flat scalar format. Reject duplicate keys, escaping, nested
@@ -79,15 +87,17 @@ export function validate(object, definition) {
 }
 export function reportPayload(text) {
   const parsed = parseFlat(text);
-  const incoming = validate(parsed, {...reportFields(parsed.schema), ...transport});
-  const report = Object.fromEntries(Object.keys(fields).map(key => [key, incoming[key]]));
+  const definition = reportFields(parsed.schema);
+  const incoming = validate(parsed, {...definition, ...transport});
+  const report = Object.fromEntries(Object.keys(definition).map(key => [key, incoming[key]]));
   return {report, challengeId: incoming.challengeId, proof: incoming.proof};
 }
 export function challengePayload(text) { return validate(parseFlat(text), {reportId: fields.reportId}); }
 export function signature(report) {
   // Group by failure and compatibility class, never by a person/device ID.
   const compatibility = [report.appVersion, report.runtime, report.errorCode, report.operation, report.stage, report.androidApi, report.abi, report.pageSize];
-  if (report.schema === 2) compatibility.unshift(2);
+  if (report.schema >= 2) compatibility.unshift(report.schema);
+  if (report.schema === 3) compatibility.push(report.failureKind);
   return hash(JSON.stringify(compatibility));
 }
 export function sampleHash(report) {

@@ -128,6 +128,9 @@ public final class Engine {
     private String authState = "unknown", authError = "";
     private long lastAccountCheckElapsed = -1;
     private boolean autoRestorePaused, loginInProgress;
+    // Only match elapsed time to its own device-code request. The protocol ID never enters a diagnostic.
+    private record PendingLogin(String id, long began) {}
+    private PendingLogin pendingLogin;
     private JSONObject rateLimits = new JSONObject();
     /** Do not publish a staged target until account/rate-limit validation passes. */
     private boolean suppressStatePublish;
@@ -712,15 +715,23 @@ public final class Engine {
                     case "auth.login" -> reply.complete(beginLogin(false), null);
                     case "auth.add" -> reply.complete(beginLogin(true), null);
                     case "auth.cancel" -> {
+                        Long began = loginStartFor(args);
                         JSONObject result;
                         try { result = call("account/login/cancel", args); }
-                        finally { loginInProgress = false; restoreAccountAfterCancelledLogin(); }
+                        catch (Exception error) { throw loginFailure(error, "login_cancel", began); }
+                        finally {
+                            loginInProgress = false; pendingLogin = null;
+                            try { restoreAccountAfterCancelledLogin(); }
+                            catch (Exception error) { throw loginFailure(error, "login_restore", began); }
+                        }
                         reply.complete(result, null);
                     }
                     case "auth.switch" -> { switchAccount(args.getString("key")); reply.complete(snapshot(), null); }
                     case "auth.remove" -> { accountProfiles.delete(args.getString("key")); publish(); reply.complete(snapshot(), null); }
                     case "auth.logout" -> {
-                        ensureEngineIdle(); start(); call("account/logout", new JSONObject()); accountProfiles.removeActiveProfile();
+                        ensureEngineIdle(); start(); call("account/logout", new JSONObject());
+                        pendingLogin = null;
+                        accountProfiles.removeActiveProfile();
                         account = new JSONObject(); rateLimits = new JSONObject(); authState = "signed_out"; authError = "";
                         autoRestorePaused = true; publish(); reply.complete(obj("ok", true), null);
                     }
@@ -930,10 +941,10 @@ public final class Engine {
         }
     }
     private void ensureEngineIdle() throws IOException {
-        if (!liveRemote.isBlank()) throw new IOException(t("음성 대화를 먼저 종료해 주세요."));
-        if(roomCommand!=null&&roomCommand.isAlive())throw new IOException(t("이전 명령이 종료 중입니다. 잠시 후 다시 보내 주세요."));
-        if(!roomLeases.isEmpty()||group!=null)throw new IOException(t("초대한 에이전트의 답변을 먼저 중지해 주세요."));
-        if (hasRunningTurns() || hasProOperations()) throw new IOException(t("진행 중인 작업을 먼저 중지해 주세요."));
+        if (!liveRemote.isBlank()) throw new DiagnosticFailure.EngineBusy(t("음성 대화를 먼저 종료해 주세요."));
+        if (roomCommand != null && roomCommand.isAlive()) throw new DiagnosticFailure.EngineBusy(t("이전 명령이 종료 중입니다. 잠시 후 다시 보내 주세요."));
+        if (!roomLeases.isEmpty() || group != null) throw new DiagnosticFailure.EngineBusy(t("초대한 에이전트의 답변을 먼저 중지해 주세요."));
+        if (hasRunningTurns() || hasProOperations()) throw new DiagnosticFailure.EngineBusy(t("진행 중인 작업을 먼저 중지해 주세요."));
     }
     private void ensureRuntimeSettingsIdle() throws IOException {
         ensureEngineIdle();
@@ -1011,6 +1022,7 @@ public final class Engine {
             // leave the old child around while replacing it.
             replacing = true;
             Process staleProcess = process; RpcClient staleRpc = rpc;
+            pendingLogin = null;
             widgetProcess = null; process = null; rpc = null; ready = false;
             // Loaded thread ids and running turns belong to the old transport. A queued
             // disconnect callback is ignored after replacement, so invalidate them here
@@ -1122,9 +1134,18 @@ public final class Engine {
         if (process != launched || rpc != connection) return;
         int exitCode = -1;
         try { exitCode = launched.exitValue(); } catch (IllegalThreadStateException ignored) { }
-        publishDiagnostic(obj("errorCode", "transport_closed", "stage", "running", "homeKind", processHome.equals(codexHome.root()) ? "active" : "pending",
-            "processAlive", launched.isAlive(), "exitCode", exitCode, "stderrCategory", stderrTail.category()),
-            loginInProgress ? "auth.login" : hasRunningTurns() ? "chat.send" : "runtime.start");
+        boolean duringLogin = pendingLogin != null || loginInProgress;
+        JSONObject diagnostic = obj("errorCode", "transport_closed", "stage", pendingLogin != null ? "login_wait" : "running",
+            "homeKind", processHome.equals(codexHome.root()) ? "active" : "pending",
+            "processAlive", launched.isAlive(), "exitCode", exitCode, "stderrCategory", stderrTail.category());
+        if (duringLogin) {
+            try {
+                diagnostic.put("failureKind", "unknown");
+                if (pendingLogin != null) diagnostic.put("elapsedMs", loginElapsed(pendingLogin.began()));
+            } catch (org.json.JSONException impossible) { throw new IllegalStateException(impossible); }
+        }
+        pendingLogin = null;
+        publishDiagnostic(diagnostic, duringLogin ? "auth.login" : hasRunningTurns() ? "chat.send" : "runtime.start");
         if (launched.isAlive()) launched.destroyForcibly();
         PhoneUseService.stopControl();
         widgetProcess = null; process = null; rpc = null;
@@ -1146,13 +1167,18 @@ public final class Engine {
         if (rpc == null) throw new IOException(t("먼저 Codex를 시작해 주세요."));
         return rpc.request(method, params).get(timeoutSeconds, TimeUnit.SECONDS);
     }
-    private void readAccount() throws Exception {
+    private JSONObject requestAccount() throws Exception {
         // Do not force a refresh here. In app-server v0.155.1,
         // account/read(refreshToken:true) unconditionally consumes and rotates
         // the refresh token, even when the access token is still fresh. The
         // normal auth() path refreshes only when needed; profile snapshots are
         // updated after account/rateLimits/read if that path rotates auth.
-        JSONObject data = call("account/read", obj("refreshToken", false));
+        return call("account/read", obj("refreshToken", false));
+    }
+    private void readAccount() throws Exception {
+        applyAccount(requestAccount());
+    }
+    private void applyAccount(JSONObject data) throws Exception {
         account = data.optJSONObject("account"); if (account == null) account = new JSONObject();
         if (account.length() > 0) {
             boolean activate = !stagedSwitchValidation && !(addAccountRestoreKey != null
@@ -1193,44 +1219,46 @@ public final class Engine {
         }
     }
     private JSONObject beginLogin(boolean add) throws Exception {
-        StartupDiagnostics diagnostic = new StartupDiagnostics();
-        diagnostic.stage("login_prepare");
+        long began = SystemClock.elapsedRealtime();
+        String stage = "login_prepare";
         boolean preparing = false;
         try {
             ensureEngineIdle();
             autoRestorePaused = false;
             // Re-login must not validate a revoked token before reaching device login.
             // Use the existing isolated transaction so cancellation preserves the profile.
+            stage = "login_profile_check";
             if (!add && accountProfiles.hasSavedLogin() && accountProfiles.activeNeedsLogin()) add = true;
             preparing = true;
+            pendingLogin = null;
             if (add) {
                 // Recovery must not validate the existing account first: a
                 // token_revoked account cannot reach device login otherwise.
                 // Snapshot only while a live server is available, then cross the
                 // process boundary before starting the isolated login home. Never logout.
                 boolean snapshotted = ready && processIsAlive();
+                stage = "login_profile_snapshot";
                 if (snapshotted) accountProfiles.saveCurrentForAddLogin(account);
+                stage = "login_home_prepare";
                 stopCodex();
                 JSONObject profile = accountProfiles.prepareAddLogin(account, snapshotted);
                 addAccountRestoreKey = profile.optString("key");
                 account = new JSONObject(); rateLimits = new JSONObject(); publish();
-                processHome = accountProfiles.pendingLoginHome();
-                if (processHome == null) throw new IOException(t("새 로그인 공간을 준비하지 못했습니다."));
+                File pendingHome = accountProfiles.pendingLoginHome();
+                if (pendingHome == null) throw new IOException(t("새 로그인 공간을 준비하지 못했습니다."));
+                processHome = pendingHome;
             } else {
                 addAccountRestoreKey = "";
             }
             loginInProgress = true;
+            stage = "login_runtime_start";
             start(false);
-            diagnostic.stage("login_rpc");
-            return call("account/login/start", obj("type", "chatgptDeviceCode"));
+            stage = "login_rpc";
+            JSONObject result = call("account/login/start", obj("type", "chatgptDeviceCode"));
+            if (result.opt("loginId") instanceof String id && !id.isBlank()) pendingLogin = new PendingLogin(id, began);
+            return result;
         } catch (Exception error) {
-            JSONObject measured = DiagnosticFailure.snapshot(error, diagnosticOperation);
-            if ("unknown".equals(measured.optString("stage"))) {
-                measured.put("stage", diagnostic.stage());
-                measured.put("elapsedMs", diagnostic.elapsed() / 100 * 100);
-                measured.put("homeKind", processHome.equals(codexHome.root()) ? "active" : "pending");
-            }
-            DiagnosticFailure failure = new DiagnosticFailure(error.getMessage(), error, diagnosticOperation, measured);
+            DiagnosticFailure failure = loginFailure(error, stage, began);
             if (preparing) {
                 loginInProgress = false;
                 try { restoreAccountAfterCancelledLogin(); }
@@ -1240,6 +1268,16 @@ public final class Engine {
         }
     }
 
+    private Long loginStartFor(JSONObject params) {
+        return pendingLogin != null && pendingLogin.id().equals(params.opt("loginId")) ? pendingLogin.began() : null;
+    }
+    private static long loginElapsed(long began) {
+        return Math.max(0, Math.min(600000, SystemClock.elapsedRealtime() - began)) / 100 * 100;
+    }
+    private DiagnosticFailure loginFailure(Exception error, String stage, Long began) throws org.json.JSONException {
+        return DiagnosticFailure.login(error, diagnosticOperation, stage, processHome.equals(codexHome.root()) ? "active" : "pending",
+            began == null ? null : loginElapsed(began));
+    }
     private boolean processIsAlive() {
         return process != null && process.isAlive() && rpc != null && !rpc.isClosed();
     }
@@ -2154,40 +2192,54 @@ public final class Engine {
         try {
             if (method.startsWith("thread/realtime/")) { liveNotification(method, p); return; }
             if (method.equals("account/login/completed")) {
+                Long began = loginStartFor(p);
+                if (began != null) pendingLogin = null;
                 loginInProgress = false;
                 if (p.optBoolean("success")) {
-                    boolean adding = !addAccountRestoreKey.isBlank() && accountProfiles.hasPendingAddLogin();
+                    boolean adding = false;
                     boolean previousSuppression = suppressStatePublish;
-                    if (adding) suppressStatePublish = true;
+                    String stage = "login_mark_complete";
                     try {
-                        if (adding) accountProfiles.markAddLoginCompleting();
-                        readAccount();
+                        adding = !addAccountRestoreKey.isBlank() && accountProfiles.hasPendingAddLogin();
+                        if (adding) {
+                            suppressStatePublish = true;
+                            accountProfiles.markAddLoginCompleting();
+                        }
+                        stage = "login_account_read";
+                        JSONObject accountData = requestAccount();
+                        stage = "login_account_apply";
+                        applyAccount(accountData);
+                        stage = "login_limits_read";
                         readRateLimits();
                         if (adding) {
                             // Stop the isolated server before promoting its
                             // auth.json, so no late refresh write can race the
                             // promotion into the primary CODEX_HOME.
+                            stage = "login_promote";
                             stopCodex();
                             accountProfiles.finishAddLogin(account);
                             processHome = codexHome.root();
+                            stage = "login_restart";
                             start(false);
                         }
                         addAccountRestoreKey = ""; status = t("연결됨");
                         try { JSONArray data = call("model/list", obj("limit", 100)).optJSONArray("data"); if (data != null) models = data; } catch (Exception ignored) {}
                     } catch (Exception loginError) {
+                        DiagnosticFailure failure = loginFailure(loginError, stage, began);
                         if (adding) {
                             try {
                                 stopCodex();
                                 accountProfiles.restorePreparedAddLogin(true);
                             } catch (Exception restoreError) {
-                                error("auth.login", obj("message", t("이전 계정을 복원하지 못했습니다: ") + unwrap(restoreError).getMessage()));
+                                error("auth.login", obj("message", t("이전 계정을 복원하지 못했습니다: ") + unwrap(restoreError).getMessage()),
+                                    loginFailure(restoreError, "login_restore", began));
                             }
                             addAccountRestoreKey = "";
                             processHome = codexHome.root();
                             account = new JSONObject(); rateLimits = new JSONObject();
                             try { start(); } catch (Exception ignored) { }
                         }
-                        error("auth.login", obj("message", unwrap(loginError).getMessage()), loginError);
+                        error("auth.login", obj("message", unwrap(loginError).getMessage()), failure);
                         JSONObject failed = new JSONObject(p.toString()); failed.put("success", false);
                         failed.put("error", unwrap(loginError).getMessage());
                         event("login.completed", failed); publish(); return;
@@ -2201,8 +2253,12 @@ public final class Engine {
                     try { restoreConversation(); }
                     catch (Exception restoreError) { error("chat.resume", obj("message", unwrap(restoreError).getMessage()), restoreError); }
                 } else {
-                    error("auth.login", obj("message", p.optString("error", t("로그인이 취소되었습니다."))));
-                    try { restoreAccountAfterCancelledLogin(); } catch (Exception restoreError) { error("auth.login", obj("message", t("이전 계정을 복원하지 못했습니다: ") + unwrap(restoreError).getMessage())); }
+                    error("auth.login", obj("message", p.optString("error", t("로그인이 취소되었습니다."))), loginFailure(null, "login_result", began));
+                    try { restoreAccountAfterCancelledLogin(); }
+                    catch (Exception restoreError) {
+                        error("auth.login", obj("message", t("이전 계정을 복원하지 못했습니다: ") + unwrap(restoreError).getMessage()),
+                            loginFailure(restoreError, "login_restore", began));
+                    }
                 }
                 event("login.completed", p); publish(); return;
             }
@@ -2483,6 +2539,7 @@ public final class Engine {
     }
     /** Restarts only Codex (sign-in, account switch, config). Claude/Antigravity setup keeps running. */
     private void stopCodex() {
+        pendingLogin = null;
         GroupRun run = group; if (run != null) cancelGroup(run);
         if (roomCommand != null) roomCommand.destroy();
         if (pendingConsultation != null) finishConsultation(pendingConsultation, "cancelled", t("Codex 실행이 중지되어 Pro 문의를 취소했습니다."), null);

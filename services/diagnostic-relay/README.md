@@ -38,7 +38,7 @@ Set the APK endpoint only to the verified production `https://*.vercel.app` alia
 
 ## Contract and privacy
 
-1. Preview: native code freezes exactly 27 scalar fields from `DiagnosticReport`.
+1. Preview: native code freezes the allow-listed scalar fields from `DiagnosticReport`.
    No messages, exceptions, raw logs, files, account data, paths, model name,
    device model/serial, Android ID, installation ID or environment is read into it.
    Times are relative, rounded to 100 ms and capped at ten minutes. The report ID
@@ -53,10 +53,20 @@ Set the APK endpoint only to the verified production `https://*.vercel.app` alia
    only by the same engine action or notification. Successful startup, later
    failures and replacement processes cannot supply those measurements. A later
    disconnect reports only its current process state, without startup counters.
-   **Rollout order:** the relay must support schema 2 before an APK containing
-   this collector is released. The currently deployed schema-1-only relay will
-   reject schema 2; do not fall back to fabricated zeros. This PR does not deploy
-   the relay or release an APK.
+   Schemas 1 and 2 retain their original 27 fields, validation and grouping keys.
+   Schema 3 is used for instrumented login failures. It preserves the observed
+   stage, including preparation, the device-code request, completion, local
+   profile application and nested runtime startup. It adds one field,
+   `failureKind`, to distinguish a busy-engine guard, a missing file, denied
+   access or a timeout when code or a typed exception establishes that fact.
+   An opaque failure notification or ambiguous I/O error yields `unknown`.
+   For a completion, elapsed time is measured from the matching device-code
+   attempt. An unmatched completion has null elapsed time. The protocol login ID
+   stays in memory and is excluded from the preview and submission.
+   Schema 3 groups by stage and failure kind. Deploy the updated relay first,
+   then release the APK. An older relay rejects schema 3. The public 0.4.0
+   reports show that schema 2 was accepted at submission time. The health
+   endpoint does not identify the deployed source revision.
 2. Explicit Send: `POST /api/challenge`, JSON `{ "reportId": "<UUID-v4>" }`.
    Returns a random challenge, 16-bit SHA-256 work requirement, five-minute expiry.
 3. `POST /api/reports`: the exact diagnostic fields plus `challengeId` and integer

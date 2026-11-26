@@ -4,6 +4,7 @@ const crypto = require('node:crypto');
 const base = '../services/diagnostic-relay/lib/';
 const sample = (extra = {}) => ({schema:1, reportId:crypto.randomUUID(), appVersion:'0.3.6', runtime:'codex_01621', errorCode:'initialize_timeout', operation:'login', stage:'initialize_sent', homeKind:'pending', elapsedMs:60000, spawnMs:0, writeMs:0, firstByteMs:-1, responseMs:-1, processAlive:true, exitCode:-1, stdoutBytes:0, stdoutLines:0, invalidJson:0, unmatchedIds:0, stderrBytes:32, stderrCategory:'none', androidApi:35, abi:'arm64', manufacturer:'samsung', deviceClass:'phone', ramClass:'le8gb', pageSize:'4k', ...extra});
 const missingMeasurements = require('../app/src/test/resources/diagnostic-v2.json');
+const loginCompletion = require('../app/src/test/resources/diagnostic-login-v3.json');
 test('schema 2 accepts real release versions and fixed failure categories, while v1 stays unchanged',async()=>{
   const {reportPayload,signature}=await import(base+'schema.mjs');
   const parse=report=>reportPayload(JSON.stringify({...report,challengeId:'a'.repeat(48),proof:0})).report;
@@ -53,12 +54,52 @@ test('v2 native fixture preserves unavailable values through the mocked relay an
   const body=publicBody(fx.issues[0].report,'fixture');
   assert.match(body,/"stdoutBytes": null/); assert.match(body,/"processAlive": null/);
 });
+test('login observations and legacy reports reach the final issue and comment bodies unchanged', async () => {
+  const {GitHubReporter} = await import(base + 'github.mjs');
+  const fx = await fixture(), writes = [];
+  let number = 100;
+  const reporter = new GitHubReporter('private-test-token', async (url, options) => {
+    if (url === 'https://api.github.com/user') return Response.json({login:'nokryong'});
+    assert.equal(options.method, 'POST');
+    writes.push({url, ...JSON.parse(options.body)});
+    if (url.endsWith('/comments')) return Response.json({});
+    number++;
+    return Response.json({number, html_url:'https://github.com/nokryong/mobile-codex/issues/' + number});
+  });
+  fx.github.create = reporter.create.bind(reporter);
+  fx.github.comment = reporter.comment.bind(reporter);
+  const reports = [
+    loginCompletion, {...loginCompletion, elapsedMs:100},
+    {...loginCompletion, stage:'login_prepare', errorCode:'login_failed', failureKind:'busy'},
+    {...loginCompletion, stage:'login_rpc', errorCode:'request_timeout', failureKind:'timeout'},
+    {...loginCompletion, stage:'login_account_apply', errorCode:'storage_failure', failureKind:'file_missing'},
+    {...loginCompletion, stage:'login_account_apply', errorCode:'storage_failure', failureKind:'permission_denied'},
+    {...missingMeasurements, appVersion:'0.4.0', errorCode:'login_failed'}, sample()
+  ];
+  for (const [index, item] of reports.entries()) {
+    const report = {...item, reportId:crypto.randomUUID()};
+    assert.equal((await fx.send(report, '192.0.' + index + '.1')).status, 200);
+    assert.deepEqual(JSON.parse(writes[index].body.split('```')[1].slice(4)), report);
+    assert.equal(writes[index].url.endsWith('/comments'), index === 1);
+    assert.doesNotMatch(writes[index].body, /private-test-token|challengeId|"proof"/);
+  }
+});
+test('unknown native observations are valid fixed sentinels; unsupported wire values and extra fields are rejected', async () => {
+  const {reportPayload} = await import(base + 'schema.mjs');
+  const parse = report => reportPayload(JSON.stringify({...report, challengeId:'a'.repeat(48), proof:0})).report;
+  assert.equal(parse({...loginCompletion, stage:'unknown'}).failureKind, 'unknown');
+  for (const change of [{failureKind:'unrecognized'}, {stage:'unrecognized'}, {operation:'chat'}, {schema:2},
+    {token:'private'}, {email:'private@example.test'}, {loginId:'private'}, {exception:'/private/path'},
+    {stderr:'private log'}, {message:'private conversation'}]) assert.throws(() => parse({...loginCompletion, ...change}));
+  assert.throws(() => parse({...missingMeasurements, stage:'login_result'}));
+});
 test('v1 validation and grouping stay compatible; v2 retains measured zeros and rejects invalid values', async()=>{
   const {reportPayload,signature,hash}=await import(base+'schema.mjs');
   const parse=report=>reportPayload(JSON.stringify({...report,challengeId:'a'.repeat(48),proof:0})).report;
   const old=sample(); assert.deepEqual(parse(old),old);
   assert.equal(signature(old),hash(JSON.stringify([old.appVersion,old.runtime,old.errorCode,old.operation,old.stage,old.androidApi,old.abi,old.pageSize])));
   assert.notEqual(signature(old),signature({...old,schema:2}));
+  assert.equal(signature({...old,schema:2}),hash(JSON.stringify([2,old.appVersion,old.runtime,old.errorCode,old.operation,old.stage,old.androidApi,old.abi,old.pageSize])));
   assert.notEqual(signature(old),signature({...old,operation:'chat'}));
   const zero={...old,schema:2,elapsedMs:0,processAlive:false,stderrBytes:0};
   assert.deepEqual(parse(zero),zero);

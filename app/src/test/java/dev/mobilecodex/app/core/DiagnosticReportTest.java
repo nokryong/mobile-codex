@@ -56,10 +56,26 @@ public class DiagnosticReportTest {
         assertEquals(-1, absent.getLong("spawnMs")); assertEquals(-1, absent.getInt("exitCode"));
     }
     @Test public void measuredReportMatchesSharedRelayAndPreviewFixture() throws Exception {
-        try (var input = getClass().getResourceAsStream("/diagnostic-v2.json")) {
+        assertFixture("/diagnostic-v2.json", report(obj("operation", "login")));
+        Object operation = new Object();
+        var failure = DiagnosticFailure.login(null, operation, "login_result", "active", null);
+        JSONObject measured = DiagnosticFailure.snapshot(failure, operation).put("operation", "login");
+        assertFixture("/diagnostic-login-v3.json", DiagnosticReport.build(measured, "0.4.0", 35, "arm64", "other", "phone", "unknown", "unknown"));
+    }
+    @Test public void unrecognizedLoginValuesAreUnknownAndExtraFieldsNeverReachThePreview() {
+        JSONObject value = report(obj("operation", "login", "stage", "/private/path", "failureKind", "private-value",
+            "token", "secret", "email", "private@example.test", "account", "private-account",
+            "loginId", "private-id", "message", "private-chat", "stderr", "private-log"));
+        assertEquals("unknown", value.optString("stage"));
+        assertEquals("unknown", value.optString("failureKind"));
+        assertFalse(value.toString().contains("private"));
+        assertFalse(value.toString().contains("secret"));
+        assertEquals(28, value.length());
+    }
+    private void assertFixture(String path, JSONObject actual) throws Exception {
+        try (var input = getClass().getResourceAsStream(path)) {
             assertNotNull(input);
             JSONObject fixture = new JSONObject(new String(input.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8));
-            JSONObject actual = report(obj("operation", "login"));
             actual.put("reportId", fixture.getString("reportId"));
             assertEquals(fixture.length(), actual.length());
             for (var keys = fixture.keys(); keys.hasNext();) {

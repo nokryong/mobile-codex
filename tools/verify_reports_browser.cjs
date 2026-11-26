@@ -5,8 +5,12 @@ const {createReviewServer}=require('./ui_review_server.cjs');
 async function fixture(){
  const fx=window.__reportFx={calls:[],attempts:0,hold:false,available:false}, original=window.Native.postMessage.bind(window.Native);
  window.Native.postMessage=raw=>{
-  const request=JSON.parse(raw),{id,action}=request;if(!action.startsWith('reports.'))return original(raw);
-  fx.calls.push(request);const reply=value=>window.mobileCodexEvent('response',{id,result:value});
+  const request=JSON.parse(raw),{id,action}=request;
+  const reply=value=>window.mobileCodexEvent('response',{id,result:value});
+  if(action==='auth.add' && fx.loginResponse)return reply(fx.loginResponse);
+  if(!action.startsWith('reports.'))return original(raw);
+  fx.calls.push(request);
+  if(action==='reports.invalidLoginResponse')return reply({ok:true});
   if(action==='reports.status')return reply({available:fx.available});
   if(action==='reports.preview'&&!fx.available)return reply({status:'unavailable'});
   if(action==='reports.preview')return reply({status:'preview',reportId:'synthetic-preview',payload:{schema:1,reportId:'synthetic-preview',appVersion:'0.3.6',errorCode:'initialize_timeout',operation:'login',stage:'initialize_sent',elapsedMs:60000,processAlive:true,stdoutBytes:0,stdoutLines:0,androidApi:35,manufacturer:'samsung',deviceClass:'phone',ramClass:'le8gb',pageSize:'16k'}});
@@ -51,6 +55,21 @@ async function fixture(){
    assert.equal(await page.locator('#report-payload').textContent(),'');
    assert.ok(await page.evaluate(()=>window.__reportFx.calls.some(call=>call.action==='reports.cancel')));
    assert.deepEqual(errors,[]);await page.close();
+  }
+  for(const response of [
+   {verificationUrl:'https://private.example/device',userCode:'private-code'},
+   {verificationUrl:'https://auth.openai.com/codex/device',userCode:''}
+  ]){
+   const page=await browser.newPage({viewport:{width:1280,height:844}});
+   await page.goto('http://127.0.0.1:'+server.address().port+'/app');await page.waitForFunction(()=>window.__uiReviewReady);
+   await page.evaluate(fixture);await page.evaluate(value=>{window.__reportFx.loginResponse=value;},response);
+   await page.locator('#account-button').click();await page.locator('#account-add').click();
+   await page.waitForFunction(()=>window.__reportFx.calls.some(call=>call.action==='reports.invalidLoginResponse'));
+   const calls=await page.evaluate(()=>window.__reportFx.calls);
+   assert.deepEqual(calls.find(call=>call.action==='reports.invalidLoginResponse').args,{});
+   assert.equal(calls.some(call=>call.action==='reports.send'),false);
+   assert.equal(await page.locator('#open-login').isDisabled(),true);
+   await page.close();
   }
   console.log('Diagnostic report browser flow passed: consent, exact preview, offline/retry, cancellation, safe result links; mobile/desktop and Korean/English.');
  }finally{await browser.close();await new Promise(resolve=>server.close(resolve));}

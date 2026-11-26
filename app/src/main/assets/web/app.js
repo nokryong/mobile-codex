@@ -1542,7 +1542,10 @@
     if (!add && !accountNeedsLogin()) return openAccountSettings();
     show('login-dialog'); $('device-code').textContent = t('연결 준비 중'); $('open-login').disabled = true;
     login = await call(add ? 'auth.add' : 'auth.login');
-    if (!C.safeLoginUrl(login.verificationUrl)) throw new Error(t('잘못된 로그인 응답입니다.'));
+    if (!C.safeLoginUrl(login?.verificationUrl) || typeof login.userCode !== 'string' || !login.userCode.trim()) {
+      call('reports.invalidLoginResponse').catch(() => {});
+      throw new Error(t('잘못된 로그인 응답입니다.'));
+    }
     $('device-code').textContent = login.userCode; $('open-login').disabled = false;
   }
   function fileWorkspaceScope(snapshot = state) {
