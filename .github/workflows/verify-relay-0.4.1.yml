@@ -1,4 +1,4 @@
-name: Verify public relay for 0.4.1
+name: Verify public relay and APK for 0.4.1
 on:
   push:
     branches: [verify/diagnostic-relay-0.4.1]
@@ -6,7 +6,7 @@ permissions: {}
 jobs:
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 6
     steps:
       - name: Check public relay without a valid proof and read the previous update manifest
         shell: python
@@ -66,3 +66,61 @@ jobs:
           assert old['applicationId'] == 'dev.mobilecodex.app'
           assert old['signingCertificateSha256'] == ['f9a8d59abf5ab33b44879ade1b9500c385b2cf03e1cb17f94936eadb85337bd7']
           print('Published 0.4.0 (75) manifest bytes and pinned signing certificate verified', flush=True)
+      - name: Download the public APK and verify signatures, signed identity and six assets
+        shell: python
+        run: |
+          import hashlib, json, os, re, subprocess, tempfile
+          from pathlib import Path
+          from urllib.request import urlopen
+          
+          owner = 'nokryong/mobile-codex'
+          release = json.load(urlopen('https://api.github.com/repos/' + owner + '/releases/latest', timeout=20))
+          assert release['tag_name'] == 'v0.4.1' and not release['draft'] and not release['prerelease']
+          apk_name = 'mobile-codex-0.4.1-arm64.apk'
+          files = {item['name']: item for item in release['assets']}
+          expected = {apk_name, apk_name + '.sha256', 'mobile-codex-update.json', 'devtools-corresponding-source.zip', 'LICENSE', 'THIRD_PARTY_NOTICES.md'}
+          assert expected == set(files)
+          assert all(item['state'] == 'uploaded' and item['size'] > 0 and re.fullmatch('sha256:[0-9a-f]{64}', item['digest']) for item in files.values())
+          directory = Path(tempfile.mkdtemp())
+          for name in [apk_name, apk_name + '.sha256', 'mobile-codex-update.json']:
+              asset = files[name]
+              url = 'https://github.com/' + owner + '/releases/download/v0.4.1/' + name
+              assert asset['browser_download_url'] == url
+              with urlopen(url, timeout=60) as response, (directory / name).open('wb') as output:
+                  assert response.status == 200 and response.geturl().startswith('https://')
+                  digest = hashlib.sha256()
+                  while block := response.read(1024 * 1024):
+                      output.write(block)
+                      digest.update(block)
+              assert (directory / name).stat().st_size == asset['size']
+              assert asset['digest'] == 'sha256:' + digest.hexdigest()
+          manifest = json.loads((directory / 'mobile-codex-update.json').read_text())
+          apk = directory / apk_name
+          apk_sha = files[apk_name]['digest'].split(':', 1)[1]
+          assert (directory / (apk_name + '.sha256')).read_text() == apk_sha + '  ' + apk_name + '\n'
+          cert = 'f9a8d59abf5ab33b44879ade1b9500c385b2cf03e1cb17f94936eadb85337bd7'
+          expected_manifest = dict(applicationId='dev.mobilecodex.app', versionCode=76, versionName='0.4.1', minimumSdk=29,
+                                   abi='arm64-v8a', fileName=apk_name, size=apk.stat().st_size, sha256=apk_sha,
+                                   signingCertificateSha256=[cert], debuggable=False, testOnly=False)
+          assert manifest == expected_manifest
+          builds = Path(os.environ['ANDROID_HOME']) / 'build-tools'
+          tools = max((p for p in builds.iterdir() if re.fullmatch(r'\d+\.\d+\.\d+', p.name) and (p/'apksigner').is_file()), key=lambda p: tuple(map(int, p.name.split('.'))))
+          def run(argv):
+              return subprocess.run([str(a) for a in argv], check=True, capture_output=True, text=True).stdout
+          signed = run([tools/'apksigner', 'verify', '--verbose', '--print-certs', apk])
+          assert re.findall(r'^Signer #\d+ certificate SHA-256 digest: ([0-9a-f]+)$', signed, re.M) == [cert]
+          assert 'Verified using v2 scheme (APK Signature Scheme v2): true' in signed or 'Verified using v3 scheme (APK Signature Scheme v3): true' in signed
+          badging = run([tools/'aapt2', 'dump', 'badging', apk])
+          assert re.search(r"^package: name='dev\.mobilecodex\.app' versionCode='76' versionName='0\.4\.1'", badging, re.M)
+          assert "sdkVersion:'29'" in badging and re.findall(r'^native-code:\s*(.*)$', badging, re.M) == ["'arm64-v8a'"]
+          assert 'application-debuggable' not in badging and 'application-testOnly' not in badging
+          xml = run([tools / 'aapt2', 'dump', 'xmltree', apk, '--file', 'AndroidManifest.xml'])
+          assert 'E: application' in xml
+          for name in ['debuggable', 'testOnly']:
+              flags = re.findall(r'A: android:' + name + r'\([^\n]*', xml)
+              assert all(re.fullmatch(r'A: android:' + name + r'\(0x[0-9a-fA-F]+\)=\(type 0x12\)0x0\s*', flag) for flag in flags)
+          print('Verified public download:', files[apk_name]['browser_download_url'])
+          print('APK bytes:', apk.stat().st_size, 'SHA-256:', apk_sha)
+          print('APK signature certificate SHA-256:', cert)
+          print('Android identity: dev.mobilecodex.app 0.4.1 (76), arm64-v8a, minSdk 29')
+          print('All six standard release assets are present. The APK, manifest and checksum match.')
