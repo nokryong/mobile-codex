@@ -78,7 +78,7 @@ final class AccountProfiles {
 
     private JSONObject saveCurrent(JSONObject account, boolean activate) throws IOException {
         File source = authSource();
-        if (!source.isFile()) throw new IOException(t("현재 로그인 정보를 찾지 못했습니다."));
+        requireLoginFile(source, t("현재 로그인 정보를 찾지 못했습니다."));
         JSONObject auth = readJson(source);
         JSONObject effectiveAccount;
         try { effectiveAccount = account == null ? new JSONObject() : new JSONObject(account.toString()); }
@@ -122,7 +122,7 @@ final class AccountProfiles {
 
     /** Prepare after the caller has already snapshotted live auth. */
     JSONObject prepareAddLogin(JSONObject account, boolean alreadySnapshotted) throws IOException {
-        if (!liveAuth.isFile()) throw new IOException(t("현재 로그인 정보를 찾지 못했습니다."));
+        requireLoginFile(liveAuth, t("현재 로그인 정보를 찾지 못했습니다."));
         String previousKey = activeKey();
         boolean previouslyNeedsLogin = validKey(previousKey) && readMetadata(profileDirectory(previousKey)).optBoolean("needsLogin", false);
         JSONObject profile = alreadySnapshotted
@@ -164,8 +164,10 @@ final class AccountProfiles {
 
     /** Save the newly authenticated account and remove the old-login recovery state. */
     JSONObject finishAddLogin(JSONObject account) throws IOException {
-        File pendingAuth = pendingAuth();
-        if (!pendingAuth.isFile()) throw new IOException(t("새 로그인 정보를 찾지 못했습니다."));
+        File home = pendingLoginHome();
+        if (home == null) throw new IOException(t("새 로그인 정보를 찾지 못했습니다."));
+        File pendingAuth = new File(home, AUTH);
+        requireLoginFile(pendingAuth, t("새 로그인 정보를 찾지 못했습니다."));
         copyAtomic(pendingAuth, liveAuth);
         JSONObject profile = saveCurrent(account, true);
         removeAddLoginFiles();
@@ -325,9 +327,12 @@ final class AccountProfiles {
         return pending != null && pending.isFile() ? pending : liveAuth;
     }
 
-    private File pendingAuth() throws IOException {
-        File home = pendingLoginHome();
-        return home == null ? new File(root, ".missing-pending-auth") : new File(home, AUTH);
+    private static void requireLoginFile(File file, String message) throws IOException {
+        // isFile() collapses a missing file, a non-file and an inaccessible file into false.
+        try {
+            if (Files.readAttributes(file.toPath(), java.nio.file.attribute.BasicFileAttributes.class).isRegularFile()) return;
+        } catch (IOException error) { throw new IOException(message, error); }
+        throw new IOException(message);
     }
 
     private File pendingHome(JSONObject state) throws IOException {

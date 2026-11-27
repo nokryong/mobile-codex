@@ -63,12 +63,23 @@ public class EngineDiagnosticTest {
             } catch (Exception error) { throw new RuntimeException(error); }
         }).get(5, TimeUnit.SECONDS);
     }
+    private JSONObject loginPreview(int index, String stage, String kind) throws Exception {
+        var reports = new ErrorReports(RuntimeEnvironment.getApplication());
+        reports.capture(diagnostics.get(index));
+        JSONObject payload = reports.preview().getJSONObject("payload");
+        assertEquals(3, payload.getInt("schema"));
+        assertEquals(stage, payload.getString("stage"));
+        assertEquals(kind, payload.getString("failureKind"));
+        assertFalse(payload.toString().contains("private"));
+        return payload;
+    }
     @Test public void failedLoginNotificationAndChatErrorRecordTheirActualOperations() throws Exception {
         engine.setTestTransport((method, params) -> obj());
         handle("auth.login");
         notification("account/login/completed", obj("success", false, "error", "private login token /path"));
         assertEquals("login", diagnostics.get(0).getString("operation"));
         assertEquals("login_failed", diagnostics.get(0).getString("errorCode"));
+        assertTrue(loginPreview(0, "login_result", "unknown").isNull("elapsedMs"));
         notification("error", obj("error", obj("message", "private conversation")));
         assertEquals("chat", diagnostics.get(1).getString("operation"));
         notification("error", obj("error", obj("message", "private conversation", "codexErrorInfo", "usageLimitExceeded")));
@@ -131,14 +142,54 @@ public class EngineDiagnosticTest {
         assertEquals("active", diagnostic.getString("homeKind"));
         assertFalse(diagnostic.toString().contains("private"));
         assertFalse(diagnostic.has("stdoutBytes"));
+        assertTrue(loginPreview(0, "login_rpc", "timeout").getLong("elapsedMs") >= 0);
     }
     @Test public void loginPreparationFailureDoesNotRollbackOrEraseLiveLogin() throws Exception {
         field("liveRemote", "private-remote"); field("loginInProgress", true);
         assertThrows(ExecutionException.class, () -> handle("auth.login"));
         assertEquals("login_prepare", diagnostics.get(0).getString("stage"));
+        assertEquals("active", loginPreview(0, "login_prepare", "busy").getString("homeKind"));
         assertEquals(true, field("loginInProgress"));
         assertEquals("private-remote", field("liveRemote"));
         assertFalse(diagnostics.toString().contains("private"));
+    }
+
+    @Test public void missingLoginFileIsDistinguishedFromANonFileAtTheSameBoundary() throws Exception {
+        File auth = new File(engine.processHomeForTest(), "auth.json");
+        assertFalse(auth.exists());
+        assertThrows(ExecutionException.class, () -> handle("auth.add"));
+        loginPreview(0, "login_home_prepare", "file_missing");
+        assertTrue(auth.mkdir());
+        assertThrows(ExecutionException.class, () -> handle("auth.add"));
+        loginPreview(1, "login_home_prepare", "unknown");
+    }
+    @Test public void completionOnlyUsesTheMatchingAttemptClockAndNeverClassifiesItsText() throws Exception {
+        engine.setTestTransport((method, params) -> obj("loginId", "private-attempt"));
+        handle("auth.login");
+        org.robolectric.shadows.ShadowSystemClock.advanceBy(350, TimeUnit.MILLISECONDS);
+        for (String id : List.of("private-other", "private-attempt", "private-attempt")) {
+            notification("account/login/completed", obj("success", false, "loginId", id,
+                "error", "timeout permission denied private-token@example.test /private/path"));
+        }
+        assertTrue(loginPreview(0, "login_result", "unknown").isNull("elapsedMs"));
+        long elapsed = loginPreview(1, "login_result", "unknown").getLong("elapsedMs");
+        assertTrue(elapsed >= 300);
+        assertEquals(0, elapsed % 100);
+        assertTrue(loginPreview(2, "login_result", "unknown").isNull("elapsedMs"));
+    }
+    @Test public void remoteAccountReadAndLocalCredentialApplicationHaveSeparateStages() throws Exception {
+        engine.setTestTransport((method, params) -> {
+            if (method.equals("account/read")) throw new java.nio.file.AccessDeniedException("/private/path");
+            return obj("loginId", "private-attempt");
+        });
+        handle("auth.login");
+        notification("account/login/completed", obj("success", true, "loginId", "private-attempt"));
+        loginPreview(0, "login_account_read", "permission_denied");
+        engine.setTestTransport((method, params) -> method.equals("account/read")
+            ? obj("account", obj("email", "private@example.test")) : obj("loginId", "private-second"));
+        handle("auth.login");
+        notification("account/login/completed", obj("success", true, "loginId", "private-second"));
+        loginPreview(1, "login_account_apply", "file_missing");
     }
 
     @Test public void backgroundChatFailureAndRecoveryUseTheirOwnLocalScope() throws Exception {

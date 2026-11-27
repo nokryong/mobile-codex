@@ -35,6 +35,7 @@ public class EngineLoginConversationTest {
     private boolean failLogin, failStartup, failResume;
     private final List<String> threadCalls = new ArrayList<>();
     private final List<JSONObject> completions = new ArrayList<>();
+    private final List<JSONObject> diagnostics = new ArrayList<>();
     private final JSONObject oldAccount = obj("type", "chatgpt", "email", "old@example.test");
     private final JSONObject newAccount = obj("type", "chatgpt", "email", "new@example.test");
 
@@ -97,7 +98,10 @@ public class EngineLoginConversationTest {
             throw new AssertionError(method);
         });
         engine.attach(new Engine.Ui() {
-            @Override public void event(String name, JSONObject data) { if (name.equals("login.completed")) completions.add(data); }
+            @Override public void event(String name, JSONObject data) {
+                if (name.equals("login.completed")) completions.add(data);
+                if (name.equals("diagnostics.available")) diagnostics.add(data);
+            }
             @Override public void approval(Engine.Approval approval) { fail("login must not request tool approval"); }
         });
         if (selected) handle("chat.resume", obj("id", "local-saved"));
@@ -177,6 +181,16 @@ public class EngineLoginConversationTest {
     @Test public void unsuccessfulCompletionRestoresOldHomeAndConversation() throws Exception {
         create(true); handle("auth.add", obj()); completed(false);
         assertOriginalAccount(); assertFalse(completions.get(0).getBoolean("success"));
+    }
+    @Test public void failedPromotionReportsThePendingHomeBeforeRollback() throws Exception {
+        create(true); handle("auth.add", obj());
+        completed(true); // The synthetic server supplies no new credential file.
+        assertOriginalAccount();
+        JSONObject failure = diagnostics.get(diagnostics.size() - 1);
+        assertEquals("login_promote", failure.getString("stage"));
+        assertEquals("file_missing", failure.getString("failureKind"));
+        assertEquals("pending", failure.getString("homeKind"));
+        assertFalse(failure.toString().contains("secret"));
     }
     @Test public void successfulLoginPromotesAuthBeforeResumingExactlyOnce() throws Exception {
         assertSuccessfulLogin(false);

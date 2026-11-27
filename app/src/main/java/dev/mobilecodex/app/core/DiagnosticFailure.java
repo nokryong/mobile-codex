@@ -38,6 +38,33 @@ public final class DiagnosticFailure extends IOException {
     private static JSONObject generic(String code) {
         return obj("errorCode", code, "stage", "unknown", "homeKind", "unknown");
     }
+    /** Frame the failure before rollback can change the home or start another process. */
+    public static DiagnosticFailure login(Throwable error, Object operation, String stage, String homeKind, Long elapsedMs) throws org.json.JSONException {
+        JSONObject measured = error == null ? generic("login_failed") : snapshot(error, operation);
+        if ("unknown".equals(measured.optString("stage"))) {
+            measured.put("stage", stage);
+            measured.put("homeKind", homeKind);
+        }
+        measured.put("elapsedMs", elapsedMs == null ? JSONObject.NULL : elapsedMs);
+        String kind = loginFailureKind(error, operation);
+        if ("busy".equals(kind)) measured.put("errorCode", "login_failed");
+        measured.put("failureKind", kind);
+        return new DiagnosticFailure(error == null ? null : error.getMessage(), error, operation, measured);
+    }
+    private static String loginFailureKind(Throwable cause, Object operation) {
+        for (int depth = 0; cause != null && depth < 16; depth++, cause = cause.getCause()) {
+            if (cause instanceof DiagnosticFailure measured && measured.operation != operation) break;
+            if (cause instanceof EngineBusy) return "busy";
+            if (cause instanceof java.nio.file.NoSuchFileException) return "file_missing";
+            if (cause instanceof java.nio.file.AccessDeniedException || cause instanceof SecurityException) return "permission_denied";
+            if (cause instanceof java.util.concurrent.TimeoutException || cause instanceof java.net.SocketTimeoutException) return "timeout";
+        }
+        // FileNotFoundException, plain IOException and login/completed text can each have multiple causes.
+        return "unknown";
+    }
+    public static final class EngineBusy extends IOException {
+        public EngineBusy(String message) { super(message); }
+    }
     public static final class StorageFailure extends IOException {
         public StorageFailure(String message, Throwable cause) { super(message, cause); }
     }

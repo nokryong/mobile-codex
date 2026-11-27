@@ -51,6 +51,9 @@ final class ErrorReports {
         latestScope = diagnostic.optString("_scope");
     }
     synchronized JSONObject status() { return obj("available", latest != null); }
+    void invalidLoginResponse() {
+        capture(obj("operation", "login", "stage", "login_code_response", "errorCode", "invalid_response", "failureKind", "unknown"));
+    }
 
     synchronized boolean clear(String operation) { return clear(operation, ""); }
     synchronized boolean clear(String operation, String scope) {

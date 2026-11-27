@@ -608,6 +608,11 @@ public final class MainActivity extends Activity implements Engine.Ui {
                 if (action.startsWith("reports.")) {
                     ErrorReports reports = ((MobileCodexApp) getApplication()).reports();
                     switch (action) {
+                        case "reports.invalidLoginResponse" -> {
+                            reports.invalidLoginResponse();
+                            event("reports.available", reports.status());
+                            respond(id, obj("ok", true), null);
+                        }
                         case "reports.status" -> respond(id, reports.status(), null);
                         case "reports.preview" -> respond(id, reports.preview(), null);
                         case "reports.send" -> reports.send(parameters.optString("reportId"), parameters.optBoolean("consent"), value -> {

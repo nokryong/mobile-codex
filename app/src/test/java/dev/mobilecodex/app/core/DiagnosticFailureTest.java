@@ -33,6 +33,17 @@ public class DiagnosticFailureTest {
         assertFalse(laterChat.toString().contains("private"));
         assertFalse(DiagnosticFailure.snapshot(new IOException("later failure"), login).has("stdoutBytes"));
     }
+    @Test public void ambiguousFileErrorsAndOtherOperationsNeverSupplyALoginFailureKind() throws Exception {
+        Object operation = new Object();
+        Throwable wrapped = new IOException("private", new java.nio.file.AccessDeniedException("/private/path"));
+        for (Throwable error : new Throwable[]{new java.io.FileNotFoundException("Permission denied: /private"),
+                new IOException("ENOENT /private"), new DiagnosticFailure("private", wrapped, new Object(), obj())}) {
+            var failure = DiagnosticFailure.login(error, operation, "login_account_apply", "active", null);
+            assertEquals("unknown", DiagnosticFailure.snapshot(failure, operation).getString("failureKind"));
+        }
+        var failure = DiagnosticFailure.login(wrapped, operation, "login_account_apply", "active", null);
+        assertEquals("permission_denied", DiagnosticFailure.snapshot(failure, operation).getString("failureKind"));
+    }
     @Test public void replacementProcessAndRollbackCannotOverwriteTheOriginalFailure() throws Exception {
         Object operation = new Object();
         StartupDiagnostics first = new StartupDiagnostics(); first.bytes(12);
