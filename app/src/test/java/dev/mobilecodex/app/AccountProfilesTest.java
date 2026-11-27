@@ -61,6 +61,8 @@ public class AccountProfilesTest {
         writeAuth("restore@example.test", "subject", "workspace", "secret");
         AccountProfiles profiles = new AccountProfiles(codexHome, context.getFilesDir());
         String key = profiles.saveCurrent(new JSONObject().put("email", "restore@example.test")).getString("key");
+        writeAuth("restore@example.test", "subject", "workspace", "rotated-secret");
+        byte[] latest = Files.readAllBytes(auth.toPath());
         profiles.prepareAddLogin(new JSONObject().put("email", "restore@example.test"));
         assertTrue(auth.isFile());
         assertEquals(key, profiles.activeKey());
@@ -71,7 +73,60 @@ public class AccountProfilesTest {
         assertTrue(auth.isFile());
         assertEquals(key, reopened.activeKey());
         assertFalse(reopened.hasPendingAddLogin());
-        assertTrue(accessToken().endsWith(".secret"));
+        assertArrayEquals(latest, Files.readAllBytes(auth.toPath()));
+        assertArrayEquals(latest, Files.readAllBytes(new File(store, "profiles/" + key + "/auth.json").toPath()));
+    }
+
+    @Test public void missingLiveAuthUsesTheMarkedSnapshotWithoutReidentifyingIt() throws Exception {
+        AccountProfiles profiles = new AccountProfiles(codexHome, context.getFilesDir());
+        // An opaque saved login has no claims to match against a later account/read result.
+        Files.write(auth.toPath(), new JSONObject().put("access_token", "opaque-test-value").toString().getBytes(StandardCharsets.UTF_8));
+        String active = profiles.saveCurrent(new JSONObject()).getString("key");
+        writeAuth("other@example.test", "other", "other-workspace", "other-secret");
+        JSONObject otherAccount = new JSONObject().put("email", "other@example.test").put("planType", "pro");
+        String other = profiles.saveCurrent(otherAccount).getString("key");
+        profiles.switchTo(active);
+        profiles.markNeedsLogin(active);
+        File saved = new File(store, "profiles/" + active + "/auth.json");
+        File metadata = new File(saved.getParentFile(), "profile.json");
+        File otherSaved = new File(store, "profiles/" + other + "/auth.json");
+        byte[] original = Files.readAllBytes(saved.toPath()), otherOriginal = Files.readAllBytes(otherSaved.toPath());
+        byte[] marked = Files.readAllBytes(metadata.toPath());
+        Files.delete(auth.toPath());
+
+        assertEquals(active, profiles.prepareAddLogin(otherAccount).getString("key"));
+        assertEquals(active, profiles.activeKey());
+        assertFalse(new File(profiles.pendingLoginHome(), "auth.json").exists());
+        profiles.restorePreparedAddLogin();
+        assertFalse(profiles.hasPendingAddLogin());
+        assertArrayEquals(marked, Files.readAllBytes(metadata.toPath()));
+        assertArrayEquals(original, Files.readAllBytes(auth.toPath()));
+        assertArrayEquals(original, Files.readAllBytes(saved.toPath()));
+        assertArrayEquals(otherOriginal, Files.readAllBytes(otherSaved.toPath()));
+    }
+
+    @Test public void unavailableActiveSnapshotNeverFallsBackToAnotherProfile() throws Exception {
+        AccountProfiles profiles = new AccountProfiles(codexHome, context.getFilesDir());
+        writeAuth("other@example.test", "other", "one", "other-secret");
+        String other = profiles.saveCurrent(new JSONObject()).getString("key");
+        writeAuth("active@example.test", "active", "two", "active-secret");
+        String active = profiles.saveCurrent(new JSONObject()).getString("key");
+        File saved = new File(store, "profiles/" + active + "/auth.json");
+        File otherSaved = new File(store, "profiles/" + other + "/auth.json");
+        byte[] otherOriginal = Files.readAllBytes(otherSaved.toPath());
+        Files.delete(auth.toPath());
+        Files.createDirectory(auth.toPath());
+        assertThrows(java.io.IOException.class, () -> profiles.prepareAddLogin(new JSONObject()));
+        assertTrue(auth.isDirectory());
+        Files.delete(auth.toPath());
+        Files.delete(saved.toPath());
+        assertThrows(java.io.IOException.class, () -> profiles.prepareAddLogin(new JSONObject()));
+        Files.createDirectory(saved.toPath());
+        assertThrows(java.io.IOException.class, () -> profiles.prepareAddLogin(new JSONObject()));
+        assertFalse(auth.exists());
+        assertFalse(profiles.hasPendingAddLogin());
+        assertEquals(active, profiles.activeKey());
+        assertArrayEquals(otherOriginal, Files.readAllBytes(otherSaved.toPath()));
     }
 
     @Test public void stagedSwitchDoesNotPublishUntilCommitAndRollbackRestoresLiveAuth() throws Exception {

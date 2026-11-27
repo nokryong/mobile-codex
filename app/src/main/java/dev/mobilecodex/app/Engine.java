@@ -1228,7 +1228,7 @@ public final class Engine {
             // Re-login must not validate a revoked token before reaching device login.
             // Use the existing isolated transaction so cancellation preserves the profile.
             stage = "login_profile_check";
-            if (!add && accountProfiles.hasSavedLogin() && accountProfiles.activeNeedsLogin()) add = true;
+            if (!add && accountProfiles.needsIsolatedRelogin()) add = true;
             preparing = true;
             pendingLogin = null;
             if (add) {
@@ -1236,7 +1236,7 @@ public final class Engine {
                 // token_revoked account cannot reach device login otherwise.
                 // Snapshot only while a live server is available, then cross the
                 // process boundary before starting the isolated login home. Never logout.
-                boolean snapshotted = ready && processIsAlive();
+                boolean snapshotted = ready && processIsAlive() && accountProfiles.hasSavedLogin();
                 stage = "login_profile_snapshot";
                 if (snapshotted) accountProfiles.saveCurrentForAddLogin(account);
                 stage = "login_home_prepare";
