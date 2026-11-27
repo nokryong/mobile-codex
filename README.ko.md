@@ -26,11 +26,22 @@ APK를 여는 앱에서 **이 출처 허용**을 별도로 요구할 수 있습�
 
 Codex 데스크톱의 작업 방식을 모바일로 옮기는 개인용 클라이언트입니다. Codex 실행 엔진과 Python·Node.js·Git을 APK에 포함해, Termux 설치나 별도 PC 서버 없이 기기에서 바로 작업할 수 있습니다.
 
-**0.3.9** · **ARM64 / Android 10 이상** · 제작 [nokryong](https://github.com/nokryong)
+**0.4.2** · **ARM64 / Android 10 이상** · 제작 [nokryong](https://github.com/nokryong)
 
-[APK 다운로드](https://github.com/nokryong/mobile-codex/releases) · [개발 빌드](https://github.com/nokryong/mobile-codex/actions/workflows/android.yml) · [문제 제보](https://github.com/nokryong/mobile-codex/issues)
+[APK 다운로드](https://github.com/nokryong/mobile-codex/releases/latest) · [개발 빌드](https://github.com/nokryong/mobile-codex/actions/workflows/android.yml) · [문제 제보](https://github.com/nokryong/mobile-codex/issues)
 
 > OpenAI 공식 앱이 아닌 개인 프로젝트입니다. 모델 추론에는 인터넷과 Codex를 사용할 수 있는 계정이 필요합니다. Codex 프로세스와 파일·명령 도구는 Android 기기에서 실행합니다.
+
+## 0.4.2 업데이트
+
+- **라이트·다크 테마**를 개편했습니다. 대화, 사이드바, 입력창, 설정, 에이전트 조작 화면과 Live에 적용됩니다.
+- **대화 조작**을 다듬었습니다. 접힌 입력창을 누르면 입력란에 초점이 가고, 복사하면 체크 표시가 나타납니다. 최신 메시지로 이동할 때는 기기의 동작 줄이기 설정을 따릅니다.
+- **사이드바와 단축키.** 좁은 화면에서는 왼쪽 가장자리에서 오른쪽으로 밀어 사이드바를 열고, 왼쪽으로 밀어 닫습니다. Ctrl/Cmd+B로 사이드바를 열거나 닫고, Ctrl/Cmd+Shift+O로 새 대화를 시작합니다. 입력란 밖에서 `/`를 누르면 입력란으로 이동합니다. [릴리스 노트](docs/releases/0.4.2.md).
+
+## 0.4.1과 0.4.0 업데이트
+
+- **로그인 진단.** 선택 사항인 익명 신고에 멈춘 로그인 단계와 확인된 오류 유형이 표시됩니다. [0.4.1 릴리스 노트](docs/releases/0.4.1.md).
+- **Linux Codex.** 선택 설치하는 Linux 환경을 켜면 텍스트 대화에서 공식 Linux ARM64 Codex CLI를 사용하고 CLI 업데이트를 자동 확인할 수 있습니다. [0.4.0 릴리스 노트](docs/releases/0.4.0.md).
 
 ## 0.3.9 업데이트
 
@@ -116,7 +127,7 @@ Codex 데스크톱의 작업 방식을 모바일로 옮기는 개인용 클라�
 
 ### APK 받기
 
-[0.3.9 릴리스](https://github.com/nokryong/mobile-codex/releases/tag/v0.3.9)에서 **`mobile-codex-0.3.9-arm64.apk`**를 받습니다. 일반 빌드의 설치 파일은 Releases에 게시합니다. [Actions → Android APK](https://github.com/nokryong/mobile-codex/actions/workflows/android.yml)의 **Artifacts**에는 아래 검사 자료를 보관하며, APK 산출물은 `apk_only`를 선택한 수동 테스트 실행에만 있습니다.
+[0.4.2 릴리스](https://github.com/nokryong/mobile-codex/releases/tag/v0.4.2)에서 **`mobile-codex-0.4.2-arm64.apk`**를 받습니다. 일반 빌드의 설치 파일은 Releases에 게시합니다. [Actions → Android APK](https://github.com/nokryong/mobile-codex/actions/workflows/android.yml)의 **Artifacts**에는 아래 검사 자료를 보관하며, APK 산출물은 `apk_only`를 선택한 수동 테스트 실행에만 있습니다.
 
 | Actions 산출물 | 용도 |
 | --- | --- |
@@ -141,6 +152,8 @@ Actions 산출물 다운로드에는 GitHub 로그인이 필요하며, 보관 �
 저장된 대화는 로그인이나 엔진 실행 없이 열 수 있습니다. 프로젝트를 제거하거나 연결 해제하면 해당 대화는 일반 대화로 옮기고 실제 폴더·파일은 유지합니다. 일반 대화는 프로젝트 선택 없이 기본 **Codex** 폴더에서 작업합니다. 기존 앱 내부 작업 경로를 그대로 사용하므로 기존 파일도 유지합니다. 단순한 폴더 접근 권한 상실은 대화를 옮기지 않으며 **폴더 다시 연결**로 복구합니다.
 
 다른 대화가 실행 중이어도 관련 없는 대화와 프로젝트를 삭제하거나 이름을 바꿀 수 있습니다. 실행 중인 대화와 해당 프로젝트의 삭제는 작업을 중지할 때까지 제한합니다.
+
+로그인에 실패했을 때 **오류 정보 보내기**가 표시되면 익명 신고 내용을 미리 볼 수 있습니다. 실패한 단계와 시간 초과·권한 거부처럼 확인된 오류 유형이 표시됩니다. 직접 전송하면 공개 GitHub 이슈에 등록되며, 계정 정보·토큰·경로·원본 로그·대화 내용은 포함하지 않습니다.
 
 ### 프로젝트 정보 옮기기
 
@@ -184,7 +197,9 @@ Claude·Antigravity는 앱 내부 Linux 환경을 활성화한 뒤 **설정 → 
 
 **설정 → 도구 → Linux 환경**에서 Arch Linux ARM을 설치하고 **Linux 환경 사용**을 켭니다. 약 152 MB의 루트 파일 시스템을 별도로 내려받으며 APK에는 포함하지 않습니다. 설치 전에 저장 공간을 확인하고 다운로드 무결성을 검증합니다. 설치 도중 취소하거나 실패 후 다시 시도할 수 있습니다.
 
-활성화하면 앱 터미널에서 Linux 명령을 실행합니다. Codex는 기존 셸 도구와 승인 절차를 통해 `mc-linux -- /bin/bash -lc '명령'`을 사용할 수 있습니다. 현재 프로젝트는 Linux의 `/workspace`로 연결하며, 설치한 패키지와 Linux 홈은 앱 내부에 보관합니다. Linux 환경을 삭제해도 연결된 프로젝트 폴더는 유지됩니다. 자세한 사용법과 호환 범위는 [Linux 환경 안내](docs/linux-runtime.md)를 참고하세요.
+활성화하면 기존 ChatGPT 계정으로 공식 OpenAI Linux ARM64 Codex CLI를 텍스트 대화에 사용할 수 있습니다. 앱은 CLI 다운로드의 SHA-512 무결성과 app-server 초기화를 검증하고, 작업이 없을 때 엔진을 전환합니다. 모델 목록을 새로고침하면 현재 선택된 엔진에서 조회합니다. Live 음성은 번들 Android 엔진을 사용하며, Linux를 끄거나 Linux app-server 초기화 전에 실행이 실패하면 텍스트 대화도 번들 엔진으로 실행합니다.
+
+앱 터미널에서 Linux 명령을 실행할 수 있습니다. Codex는 기존 셸 도구와 승인 절차를 통해 `mc-linux -- /bin/bash -lc '명령'`을 사용할 수 있습니다. 현재 프로젝트는 Linux의 `/workspace`에 연결하고, 설치한 패키지와 Linux 홈은 앱 내부에 보관합니다. Linux 환경을 삭제해도 연결된 프로젝트 폴더는 유지됩니다. [Linux 환경 설치와 사용](docs/linux-runtime.md#설치와-사용).
 
 ### 휴대폰 제어와 플로팅 대화
 
@@ -206,7 +221,7 @@ Android 10은 화면 요소를 읽고, Android 11 이상은 스크린샷도 사�
 
 ## Android에서 알아둘 점
 
-0.2.9은 정식 릴리스입니다. 기기별 동작은 Android·WebView·권한 설정에 따라 달라질 수 있습니다. 자동 테스트와 실기기 확인 범위는 [검증 기록](docs/verification.md)과 [기기 검증 목록](docs/device-validation.md)에 구분합니다.
+기기별 동작은 Android·WebView·권한 설정에 따라 달라질 수 있습니다. 자동 테스트와 실기기 확인 범위는 [검증 기록](docs/verification.md)과 [기기 검증 목록](docs/device-validation.md)을 참고하세요.
 
 - **파일 접근:** Android가 허용한 범위에서 동작합니다. 다른 앱의 비공개 데이터나 시스템 보호 영역에는 접근할 수 없으며, 전체 파일 접근은 루트 권한이 아닙니다. 클라우드 문서 제공자 폴더는 일반 셸 경로 대신 문서 도구를 사용합니다.
 - **승인 방식:** 대화 입력창의 모델 옆에서 **승인 받기 / 자동 검토 / 모두 허용**을 선택합니다. 자동 검토는 승인 요청을 Codex 위험 검토기에 맡기며 파일 접근 범위와는 별도입니다.

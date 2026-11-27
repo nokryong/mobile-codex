@@ -26,11 +26,22 @@ The APK-opening app may separately require **Allow from this source**. Menu name
 
 Mobile Codex is an independent Android client built around the Codex app-server. It bundles an Android port of Codex, Python, Node.js, and Git, so you do not need to install Termux or keep a separate PC server running.
 
-**0.3.9** · **ARM64 / Android 10+** · Created by [nokryong](https://github.com/nokryong)
+**0.4.2** · **ARM64 / Android 10+** · Created by [nokryong](https://github.com/nokryong)
 
-[Download APK](https://github.com/nokryong/mobile-codex/releases) · [Builds](https://github.com/nokryong/mobile-codex/actions/workflows/android.yml) · [Report an issue](https://github.com/nokryong/mobile-codex/issues)
+[Download APK](https://github.com/nokryong/mobile-codex/releases/latest) · [Builds](https://github.com/nokryong/mobile-codex/actions/workflows/android.yml) · [Report an issue](https://github.com/nokryong/mobile-codex/issues)
 
 > This is not an official OpenAI app. Model inference requires an internet connection and an account with Codex access. The Codex process and file/command tools run on your Android device.
+
+## 0.4.2 update
+
+- **Light and dark themes.** Refreshed conversations, the sidebar, the composer, settings, agent controls, and Live.
+- **Chat controls.** Tap the compact composer to focus the prompt. Copying shows a checkmark, and jumping to the latest message respects reduced motion.
+- **Navigation.** On narrow screens, swipe right from the left edge to open the sidebar or swipe left to close it. Use Ctrl/Cmd+B to toggle it, Ctrl/Cmd+Shift+O to start a new chat, or `/` to focus the prompt when you are outside a text field. [Release notes](docs/releases/0.4.2.md).
+
+## 0.4.1 and 0.4.0 updates
+
+- **Login diagnostics.** Optional anonymous reports show the sign-in step and the detected failure category. [0.4.1 release notes](docs/releases/0.4.1.md).
+- **Linux Codex.** Text chat can use the official Linux ARM64 Codex CLI and check for CLI updates when the optional Linux environment is enabled. [0.4.0 release notes](docs/releases/0.4.0.md).
 
 ## 0.3.9 update
 
@@ -116,7 +127,7 @@ You need an **ARM64 device running Android 10 or later**, an up-to-date Android 
 
 ### Download the APK
 
-Open the [0.3.9 release](https://github.com/nokryong/mobile-codex/releases/tag/v0.3.9) and download **`mobile-codex-0.3.9-arm64.apk`** from the release assets. Open the APK and follow Android’s installation prompts. If requested, allow installation from the app you used to download/open it.
+Download **`mobile-codex-0.4.2-arm64.apk`** from the [0.4.2 release](https://github.com/nokryong/mobile-codex/releases/tag/v0.4.2). Open the APK and follow Android’s installation prompts. If requested, allow installation from the app you used to download/open it.
 
 New app versions are published automatically after the `main` workflow passes its tests, builds, and original-key signature verification. Alpha versions are marked as prereleases. A published version is never silently replaced; maintainers must increment both `versionName` and `versionCode` for the next release.
 
@@ -143,6 +154,8 @@ The lower-left quota ring opens **Settings → Account**. From there you can add
 Saved chats can be opened without signing in or starting the runtime. Removing or unlinking a project moves its chats into general chats without deleting the folder or its files. General chats use the existing app-private workspace, displayed as **Codex**, without needing a project. Temporary loss of folder access does not move chats; reconnect the folder in that case.
 
 Unrelated chats and projects can be deleted or renamed while another chat is running. Deleting the running chat or its project remains blocked until that task stops.
+
+If sign-in fails and **Send error report** is available, open it to preview the anonymous report. It can show the step that failed and a category such as timeout or permission denied. Sending is optional and creates or updates a public GitHub issue. The report excludes account details, tokens, paths, raw logs, and conversations.
 
 ### Update an existing installation
 
@@ -186,7 +199,9 @@ Open **Plugins · Skills · MCP** in the sidebar.
 
 Open **Settings → Tools → Linux environment** to download and install Arch Linux ARM on demand, then turn on **Use Linux environment**. The root filesystem is a separate download of about 152 MB; it is not included in the APK. The installer checks free space and download integrity, and offers cancellation and retry.
 
-When enabled, the app terminal runs Linux commands. Codex can use `mc-linux -- /bin/bash -lc 'command'` through its normal shell tool and approval flow. The current project is mounted at `/workspace`; Linux packages and the guest home remain in app-private storage. Removing Linux deletes that environment, while preserving connected project folders. See [Linux setup and limitations](docs/linux-runtime.md).
+When enabled, text chat can use the official OpenAI Linux ARM64 Codex CLI with your existing ChatGPT account. The app checks CLI downloads against their SHA-512 integrity metadata, verifies that the app-server initializes, and switches runtimes when idle. Refreshing the model list queries the selected runtime. Live voice uses the bundled Android engine, which also handles text chat when Linux is disabled or the Linux app-server fails before initialization.
+
+The app terminal runs Linux commands. Codex can use `mc-linux -- /bin/bash -lc 'command'` through its normal shell tool and approval flow. The current project is mounted at `/workspace`. Linux packages and the guest home remain in app-private storage. Removing Linux deletes that environment while preserving connected project folders. See [Linux setup](docs/linux-runtime.md#설치와-사용).
 
 ### Phone controls and floating chat
 
@@ -208,7 +223,7 @@ Recognition uses the device’s configured speech service, which may use externa
 
 ## Android limitations
 
-0.2.9 is a stable release. Device-specific behavior still depends on Android, WebView, and permissions. Automated checks and physical-device results are distinguished in [verification](docs/verification.md) and the [device checklist](docs/device-validation.md).
+Device-specific behavior depends on Android, WebView, and permissions. See [verification](docs/verification.md) and the [device checklist](docs/device-validation.md) for automated checks and physical-device coverage.
 
 - **File access:** Android permissions apply. Full file access is not root and cannot access other apps’ private data or protected system areas. Cloud document providers use document tools rather than ordinary shell paths.
 - **Approvals:** Choose **Ask**, **Auto review**, or **Allow all** beside the model in the chat composer. Auto review routes approval requests to Codex's risk reviewer; task file access remains a separate setting.
