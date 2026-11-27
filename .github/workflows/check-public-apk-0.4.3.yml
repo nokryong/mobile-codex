@@ -1,0 +1,84 @@
+name: Verify public APK 0.4.3
+on:
+  push:
+    branches: [verify/apk-0.4.3]
+permissions: {}
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Download the signed APK and compare its identity, manifest and original signing certificate
+        shell: python
+        run: |
+          import hashlib
+          import importlib.util
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import shutil
+          import subprocess
+          import tempfile
+          from urllib.request import urlopen
+          
+          repo = 'nokryong/mobile-codex'
+          root = 'https://github.com/' + repo + '/releases/download/'
+          version = '0.4.3'
+          tag = 'v' + version
+          apk = 'mobile-codex-' + version + '-arm64.apk'
+          checksum = apk + '.sha256'
+          manifest = 'mobile-codex-update.json'
+          with urlopen('https://api.github.com/repos/' + repo + '/releases/latest', timeout=30) as resp:
+              release = json.load(resp)
+          assert release['tag_name'] == tag and not release['draft'] and not release['prerelease']
+          assert release['target_commitish'] == 'f2c80bfddf94992e82c2ab15e2f0b24fc7a79fed'
+          assets = {a['name']: a for a in release['assets']}
+          assert set(assets) == {apk, checksum, manifest, 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'devtools-corresponding-source.zip'}
+          assert all(a['state'] == 'uploaded' and a['size'] > 0 and re.fullmatch(r'sha256:[0-9a-f]{64}', a['digest']) for a in assets.values())
+          work = Path(tempfile.mkdtemp())
+          for name in (apk, checksum, manifest):
+              url = root + tag + '/' + name
+              assert assets[name]['browser_download_url'] == url
+              digest = hashlib.sha256()
+              with urlopen(url, timeout=60) as resp, (work / name).open('wb') as out:
+                  assert resp.status == 200 and resp.geturl().startswith('https://')
+                  while chunk := resp.read(1024*1024):
+                      out.write(chunk)
+                      digest.update(chunk)
+              assert assets[name]['size'] == (work / name).stat().st_size
+              assert assets[name]['digest'] == 'sha256:' + digest.hexdigest()
+          digest = assets[apk]['digest'].split(':')[1]
+          assert (work / checksum).read_text() == digest + '  ' + apk + '\n'
+          build = json.loads((work / manifest).read_text())
+          with urlopen(root + 'v0.4.2/' + manifest, timeout=30) as response:
+              oldbytes = response.read(8192)
+          assert hashlib.sha256(oldbytes).hexdigest() == '779640db0e127a67ab89a3b51b4eb92f90ce52656d3625f9ae5a1cac804eadaf'
+          old = json.loads(oldbytes)
+          assert (old['versionName'], old['versionCode']) == ('0.4.2', 77)
+          cert = 'f9a8d59abf5ab33b44879ade1b9500c385b2cf03e1cb17f94936eadb85337bd7'
+          assert old['signingCertificateSha256'] == [cert]
+          assert build == dict(applicationId='dev.mobilecodex.app', versionName=version, versionCode=78, minimumSdk=29, abi='arm64-v8a',
+                               fileName=apk, size=assets[apk]['size'], sha256=digest, signingCertificateSha256=[cert], debuggable=False, testOnly=False)
+          sdk = Path(os.environ['ANDROID_HOME'])
+          tools = sdk / 'build-tools' / '35.0.0'
+          if not (tools / 'apksigner').is_file():
+              manager = shutil.which('sdkmanager') or str(sdk / 'cmdline-tools' / 'latest' / 'bin' / 'sdkmanager')
+              subprocess.run([manager, 'build-tools;35.0.0'], check=True)
+          for name, sha in {'prepare_update_release.py':'9bb11d01b957eb8417c0e97fa7353c8003bf6a1188da705fa7f47c96b1f643a2',
+                            'release-policy.json':'bc245c7e7ed75f71c64d301925b2df4575eb8826c7e659bde9b1011c1f5415d4'}.items():
+              url = 'https://raw.githubusercontent.com/' + repo + '/f2c80bfddf94992e82c2ab15e2f0b24fc7a79fed/tools/' + name
+              with urlopen(url, timeout=30) as resp:
+                  data = resp.read(20000)
+              assert hashlib.sha256(data).hexdigest() == sha
+              (work / name).write_bytes(data)
+          spec = importlib.util.spec_from_file_location('release_inspector', work / 'prepare_update_release.py')
+          inspector = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(inspector)
+          assert inspector.inspect_apk(work / apk, tools, previous_version_code=old['versionCode'], expected=build) == build
+          print('Verified public APK', root + tag + '/' + apk, flush=True)
+          print('Release commit', release['target_commitish'], flush=True)
+          print('App version', build['versionName'], 'versionCode', build['versionCode'], build['applicationId'], build['abi'], 'minSdk', build['minimumSdk'], flush=True)
+          print('APK size', build['size'], 'SHA-256', digest, flush=True)
+          print('Signing certificate SHA-256', cert, flush=True)
+          print('Public APK, checksum and update manifest match. All six standard assets are present.', flush=True)
