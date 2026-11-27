@@ -66,7 +66,7 @@ jobs:
           assert old['applicationId'] == 'dev.mobilecodex.app'
           assert old['signingCertificateSha256'] == ['f9a8d59abf5ab33b44879ade1b9500c385b2cf03e1cb17f94936eadb85337bd7']
           print('Published 0.4.0 (75) manifest bytes and pinned signing certificate verified', flush=True)
-      - name: Download the public APK and verify signatures, signed identity and six assets
+      - name: Download and inspect the public APK with pinned Android build-tools 35.0.0
         shell: python
         run: |
           import hashlib, json, os, re, subprocess, tempfile
@@ -103,22 +103,24 @@ jobs:
                                    abi='arm64-v8a', fileName=apk_name, size=apk.stat().st_size, sha256=apk_sha,
                                    signingCertificateSha256=[cert], debuggable=False, testOnly=False)
           assert manifest == expected_manifest
-          builds = Path(os.environ['ANDROID_HOME']) / 'build-tools'
-          tools = max((p for p in builds.iterdir() if re.fullmatch(r'\d+\.\d+\.\d+', p.name) and (p/'apksigner').is_file()), key=lambda p: tuple(map(int, p.name.split('.'))))
-          def run(argv):
-              return subprocess.run([str(a) for a in argv], check=True, capture_output=True, text=True).stdout
-          signed = run([tools/'apksigner', 'verify', '--verbose', '--print-certs', apk])
-          assert re.findall(r'^Signer #\d+ certificate SHA-256 digest: ([0-9a-f]+)$', signed, re.M) == [cert]
-          assert 'Verified using v2 scheme (APK Signature Scheme v2): true' in signed or 'Verified using v3 scheme (APK Signature Scheme v3): true' in signed
-          badging = run([tools/'aapt2', 'dump', 'badging', apk])
-          assert re.search(r"^package: name='dev\.mobilecodex\.app' versionCode='76' versionName='0\.4\.1'", badging, re.M)
-          assert "sdkVersion:'29'" in badging and re.findall(r'^native-code:\s*(.*)$', badging, re.M) == ["'arm64-v8a'"]
-          assert 'application-debuggable' not in badging and 'application-testOnly' not in badging
-          xml = run([tools / 'aapt2', 'dump', 'xmltree', apk, '--file', 'AndroidManifest.xml'])
-          assert 'E: application' in xml
-          for name in ['debuggable', 'testOnly']:
-              flags = re.findall(r'A: android:' + name + r'\([^\n]*', xml)
-              assert all(re.fullmatch(r'A: android:' + name + r'\(0x[0-9a-fA-F]+\)=\(type 0x12\)0x0\s*', flag) for flag in flags)
+          # Use the same pinned Android tools as the release and compare the actual downloaded APK.
+          import importlib.util, shutil
+          sdk = Path(os.environ['ANDROID_HOME'])
+          tools = sdk / 'build-tools' / '35.0.0'
+          if not (tools / 'apksigner').is_file():
+              manager = shutil.which('sdkmanager') or str(sdk / 'cmdline-tools' / 'latest' / 'bin' / 'sdkmanager')
+              subprocess.run([manager, 'build-tools;35.0.0'], check=True)
+          source = 'https://raw.githubusercontent.com/nokryong/mobile-codex/2fc161f1bef71ce88c156914f057cce9393db880/'
+          pinned = {"tools/prepare_update_release.py":"9bb11d01b957eb8417c0e97fa7353c8003bf6a1188da705fa7f47c96b1f643a2","tools/release-policy.json":"bc245c7e7ed75f71c64d301925b2df4575eb8826c7e659bde9b1011c1f5415d4"}
+          for path, expected in pinned.items():
+              with urlopen(source + path, timeout=20) as response:
+                  data = response.read(20000)
+              assert hashlib.sha256(data).hexdigest() == expected
+              (directory / Path(path).name).write_bytes(data)
+          spec = importlib.util.spec_from_file_location('release_inspector', directory / 'prepare_update_release.py')
+          module = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+          assert module.inspect_apk(apk, tools, previous_version_code=75, expected=expected_manifest) == expected_manifest
           print('Verified public download:', files[apk_name]['browser_download_url'])
           print('APK bytes:', apk.stat().st_size, 'SHA-256:', apk_sha)
           print('APK signature certificate SHA-256:', cert)
