@@ -26,7 +26,7 @@ final class AccountProfiles {
         ensureDirectory(profilesRoot);
         recoverInterruptedSwitch();
         recoverInterruptedAddLogin();
-        restoreActiveIfMissing();
+        restoreActiveIfMissing(activeKey());
     }
 
     String activeKey() {
@@ -38,9 +38,10 @@ final class AccountProfiles {
 
     /** Only the presence of a saved login is needed for background startup. */
     boolean hasSavedLogin() { return liveAuth.isFile(); }
-    boolean activeNeedsLogin() {
+    boolean needsIsolatedRelogin() {
         String key = activeKey();
-        return !key.isBlank() && readMetadata(new File(profilesRoot, key)).optBoolean("needsLogin", false);
+        return !key.isEmpty() && readMetadata(new File(profilesRoot, key)).optBoolean("needsLogin", false)
+            && (hasSavedLogin() || savedAuthForMissingLive(key) != null);
     }
 
     JSONArray list() {
@@ -122,15 +123,16 @@ final class AccountProfiles {
 
     /** Prepare after the caller has already snapshotted live auth. */
     JSONObject prepareAddLogin(JSONObject account, boolean alreadySnapshotted) throws IOException {
-        requireLoginFile(liveAuth, t("현재 로그인 정보를 찾지 못했습니다."));
         String previousKey = activeKey();
-        boolean previouslyNeedsLogin = validKey(previousKey) && readMetadata(profileDirectory(previousKey)).optBoolean("needsLogin", false);
-        JSONObject profile = alreadySnapshotted
+        boolean restored = restoreActiveIfMissing(previousKey);
+        requireLoginFile(liveAuth, t("현재 로그인 정보를 찾지 못했습니다."));
+        // A restored snapshot already belongs to the marked profile. A stale account/read
+        // result must not reidentify it or overwrite another profile's saved credentials.
+        JSONObject profile = alreadySnapshotted || restored
             ? publicProfile(previousKey, readMetadata(profileDirectory(previousKey)), true)
-            : saveCurrent(account, true);
+            : saveCurrentForAddLogin(account);
         String key = profile.optString("key");
         if (key.isBlank()) throw new IOException(t("현재 로그인 정보를 찾지 못했습니다."));
-        if (previouslyNeedsLogin) markNeedsLogin(key);
         String homeName = ".pending-login-" + UUID.randomUUID();
         File home = child(root, homeName);
         ensureDirectory(home);
@@ -281,11 +283,19 @@ final class AccountProfiles {
         if (!key.isEmpty()) removeTree(profileDirectory(key));
     }
 
-    private void restoreActiveIfMissing() throws IOException {
-        String key = activeKey();
-        if (liveAuth.isFile() || key.isEmpty()) return;
-        File source = new File(profileDirectory(key), AUTH);
-        if (source.isFile()) copyAtomic(source, liveAuth);
+    private File savedAuthForMissingLive(String key) {
+        if (key.isEmpty() || !Files.notExists(liveAuth.toPath(), LinkOption.NOFOLLOW_LINKS)) return null;
+        File directory = new File(profilesRoot, key);
+        if (!Files.isDirectory(directory.toPath(), LinkOption.NOFOLLOW_LINKS)) return null;
+        File source = new File(directory, AUTH);
+        return Files.isRegularFile(source.toPath(), LinkOption.NOFOLLOW_LINKS) ? source : null;
+    }
+
+    private boolean restoreActiveIfMissing(String key) throws IOException {
+        File source = savedAuthForMissingLive(key);
+        if (source == null) return false;
+        copyAtomic(source, liveAuth);
+        return true;
     }
 
     private void recoverInterruptedSwitch() throws IOException {

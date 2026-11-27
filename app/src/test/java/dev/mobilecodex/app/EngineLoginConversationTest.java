@@ -155,6 +155,25 @@ public class EngineLoginConversationTest {
         assertTrue(threadCalls.isEmpty());
         handle("auth.cancel", obj()); assertEquals(home, engine.processHomeForTest());
     }
+    @Test public void accountAddRecoversMissingLiveAuthBeforeRequestingTheDeviceCode() throws Exception {
+        assertMissingLiveLoginIsolated("auth.add");
+    }
+    @Test public void markedReloginWithMissingLiveAuthStillUsesAnIsolatedHome() throws Exception {
+        profiles.markNeedsLogin(originalKey);
+        assertMissingLiveLoginIsolated("auth.login");
+    }
+    private void assertMissingLiveLoginIsolated(String action) throws Exception {
+        create(true);
+        Files.delete(new File(home, "auth.json").toPath());
+        assertEquals("login-test", handle(action, obj()).getString("loginId"));
+        File pending = engine.processHomeForTest();
+        assertNotEquals(home, pending);
+        assertFalse(new File(pending, "auth.json").exists());
+        assertArrayEquals(originalAuth, Files.readAllBytes(new File(home, "auth.json").toPath()));
+        handle("auth.cancel", obj());
+        assertOriginalAccount();
+        assertFalse(pending.exists());
+    }
     @Test public void revokedAccountReloginAlsoSkipsConversationRestore() throws Exception {
         profiles.markNeedsLogin(originalKey); create(true);
         assertEquals("login-test", handle("auth.login", obj()).getString("loginId"));
