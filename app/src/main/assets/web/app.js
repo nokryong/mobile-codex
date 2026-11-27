@@ -778,9 +778,13 @@
   }
   async function copyText(text, btn, normalText = t('복사'), copiedText = t('복사됨!')) {
     const finish = () => {
+      clearTimeout(btn._copyResetTimer);
+      btn.classList.add('copied');
       btn.textContent = copiedText;
-      setTimeout(() => {
+      btn.prepend(icon('check'));
+      btn._copyResetTimer = setTimeout(() => {
         if (btn.isConnected) {
+          btn.classList.remove('copied');
           btn.textContent = normalText;
           btn.prepend(icon('copy'));
         }
@@ -2332,12 +2336,15 @@
   $('prompt').addEventListener('focus', () => { if (following) frame(() => { if (following) scrollLatest(); }); });
   $('composer').addEventListener('focusin', updateComposerExpansion);
   $('composer').addEventListener('focusout', () => frame(updateComposerExpansion));
-  $('composer').addEventListener('click', e => { if (! $('composer').classList.contains('composer-expanded') && e.target === $('composer')) $('prompt').focus(); });
+  $('composer').addEventListener('click', e => { if (!$('composer').classList.contains('composer-expanded') && !e.target.closest('button')) $('prompt').focus(); });
   $('prompt').addEventListener('click', () => queryAutocomplete());
+  const topbarEl = document.querySelector('.topbar');
+  function syncTopbarElevation() { topbarEl?.classList.toggle('scrolled', $('chat-scroll').scrollTop > 8); }
   $('chat-scroll').addEventListener('scroll', () => {
     const area = $('chat-scroll'), upward = area.scrollTop < historyView.top;
     historyView.top = area.scrollTop; following = area.scrollHeight - area.scrollTop - area.clientHeight < 80;
     $('jump-latest').hidden = following || !state.messages.length;
+    syncTopbarElevation();
     if (upward && area.scrollTop <= 160) loadEarlierMessages();
   }, {passive:true});
   $('chat-scroll').addEventListener('wheel', e => { if (e.deltaY < 0 && $('chat-scroll').scrollTop <= 160) { following = false; loadEarlierMessages(); } }, {passive:true});
@@ -2348,7 +2355,12 @@
   on('voice-input', startVoiceInput);
   on('dictation-done', () => call('voice.stop'));
   on('dictation-cancel', () => call('voice.cancel'));
-  on('jump-latest', scrollLatest); on('composer-options', () => {
+  on('jump-latest', () => {
+    const area = $('chat-scroll');
+    if (matchMedia('(prefers-reduced-motion: reduce)').matches || typeof area.scrollTo !== 'function') scrollLatest();
+    else area.scrollTo({top: area.scrollHeight, behavior: 'smooth'});
+  });
+  on('composer-options', () => {
     optionsSummary(); showModelPanel(false, false); show('model-picker');
     $('composer-options').setAttribute('aria-expanded', 'true');
     updateComposerExpansion(); sizeModelPicker(); $('model-picker-model').focus({preventScroll:true});
@@ -2502,9 +2514,45 @@
   window.visualViewport?.addEventListener('resize', viewportChanged);
   window.addEventListener('pagehide', saveDraft);
   document.addEventListener('visibilitychange', () => { if (document.hidden) saveDraft(); else recoverVoiceInput(); });
+  let edgeSwipe = null;
+  document.addEventListener('touchstart', e => {
+    if (e.touches.length !== 1 || dialogs.length || !matchMedia('(max-width:760px)').matches) { edgeSwipe = null; return; }
+    if (e.target.closest('pre, .table-wrap, input[type="range"]')) { edgeSwipe = null; return; }
+    const t0 = e.touches[0], open = document.body.classList.contains('sidebar-open');
+    if ((!open && t0.clientX <= 28) || open) edgeSwipe = {x: t0.clientX, y: t0.clientY, open, time: Date.now()};
+    else edgeSwipe = null;
+  }, {passive:true});
+  document.addEventListener('touchend', e => {
+    if (!edgeSwipe || e.changedTouches.length !== 1) { edgeSwipe = null; return; }
+    const t1 = e.changedTouches[0], dx = t1.clientX - edgeSwipe.x, dy = t1.clientY - edgeSwipe.y, dt = Date.now() - edgeSwipe.time;
+    const gesture = edgeSwipe; edgeSwipe = null;
+    if (dt > 550 || Math.abs(dx) < 48 || Math.abs(dx) < Math.abs(dy) * 1.4) return;
+    if (!gesture.open && dx > 0) sidebar(true);
+    else if (gesture.open && dx < 0) sidebar(false);
+  }, {passive:true});
+  document.addEventListener('touchcancel', () => { edgeSwipe = null; }, {passive:true});
   document.addEventListener('keydown', e => {
     if (dialogs.at(-1) === 'image-dialog' && !$('image-stage').classList.contains('zoomed') && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) { e.preventDefault(); changeImage(e.key === 'ArrowRight' ? 1 : -1); }
     if (e.key === 'Escape' && !dialogs.length) window.mobileCodexBack();
+    const editing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || '') || document.activeElement?.isContentEditable;
+    if (!dialogs.length && !e.isComposing && e.keyCode !== 229) {
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'b') {
+        e.preventDefault();
+        if (!e.repeat) {
+          if (matchMedia('(max-width:760px)').matches) sidebar(!document.body.classList.contains('sidebar-open'));
+          else document.body.classList.toggle('sidebar-collapsed');
+        }
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && e.shiftKey && e.key.toLowerCase() === 'o') {
+        e.preventDefault();
+        if (!e.repeat) newChat('');
+        return;
+      }
+      if (!editing && !e.ctrlKey && !e.metaKey && !e.altKey && e.key === '/') {
+        e.preventDefault(); $('prompt').focus(); return;
+      }
+    }
     if (e.key !== 'Tab' || !document.body.classList.contains('sidebar-open')) return;
     const controls = [...$('sidebar').querySelectorAll('button:not(:disabled)')], first = controls[0], last = controls.at(-1);
     if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }

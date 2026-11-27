@@ -5,13 +5,15 @@
 .agent-avatar {
   display: inline-flex; align-items: center; justify-content: center; flex: none;
   width: 24px; height: 24px; border-radius: var(--r-full);
-  background: var(--solid); color: var(--on-solid); font-size: 12px; font-weight: 700; line-height: 1;
+  background: var(--solid); color: var(--on-solid);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .24), var(--shadow-xs);
+  font-size: 12px; font-weight: 700; line-height: 1;
 }
-.agent-avatar[data-agent="codex"] { position: relative; background: var(--surface); color: transparent; box-shadow: inset 0 0 0 1px var(--border); }
+.agent-avatar[data-agent="codex"] { position: relative; background: var(--surface); color: transparent; box-shadow: inset 0 0 0 1px var(--border), var(--shadow-xs); }
 .agent-avatar[data-agent="codex"]::before { content: ""; position: absolute; inset: 18%; background: url("codex-logo.png") center / contain no-repeat; }
 html[data-theme=dark] .agent-avatar[data-agent="codex"]::before { filter: brightness(0) invert(1); }
-.agent-avatar[data-agent="claude"] { background: #c96442; color: #fff; }
-.agent-avatar[data-agent="gemini"] { background: #3b6ef5; color: #fff; }
+.agent-avatar[data-agent="claude"] { background: linear-gradient(155deg, #d6714d, #b85636); color: #fff; }
+.agent-avatar[data-agent="gemini"] { background: linear-gradient(155deg, #5282ff, #2f5ee6); color: #fff; }
 
 .agents-toggle .agent-avatars { display: inline-flex; align-items: center; }
 .agents-toggle .agent-avatar { width: 20px; height: 20px; font-size: 10px; box-shadow: 0 0 0 2px var(--bg); }
@@ -56,7 +58,9 @@ html[data-theme=dark] .agent-avatar[data-agent="codex"]::before { filter: bright
 
 /* ---------- Invite sheet ---------- */
 .invite-list { display: flex; flex-direction: column; gap: var(--s-2); margin: var(--s-4) 0 var(--s-2); }
-.invite-row { padding: var(--s-2) var(--s-3); border-radius: var(--r-lg); background: var(--fill-1); box-shadow: inset 0 0 0 1px var(--border); }
+.invite-row { padding: var(--s-2) var(--s-3); border-radius: var(--r-lg); background: var(--fill-1); box-shadow: inset 0 0 0 1px var(--border), var(--rim); transition: background-color var(--fast) ease, box-shadow var(--fast) ease; }
+.invite-row:has(input:checked) { background: var(--surface); box-shadow: inset 0 0 0 1px var(--border-strong), var(--shadow-xs); }
+html[data-theme=dark] .invite-row:has(input:checked) { background: var(--fill-2); }
 .invite-label { display: flex; align-items: center; gap: var(--s-3); min-height: 48px; cursor: pointer; }
 .invite-label input { width: 20px; height: 20px; flex: none; accent-color: var(--solid); }
 .invite-label .agent-avatar { width: 30px; height: 30px; font-size: 13px; }

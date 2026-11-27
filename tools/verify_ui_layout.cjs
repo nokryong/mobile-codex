@@ -59,14 +59,17 @@ async function checkComposer(page) {
  await page.locator('#prompt').focus();
  await page.waitForFunction(()=>document.getElementById('composer')?.classList.contains('composer-expanded'));
  const result=await page.evaluate(()=>{
-  const ids=['add-attachment','composer-folder','composer-options','fast-mode','voice-input','send'];
+  const ids=['add-attachment','composer-folder','composer-options','fast-mode','voice-input','live-start','send'];
   const bounds=id=>{const r=document.getElementById(id).getBoundingClientRect();return {id,x:r.x,y:r.y,right:r.right,bottom:r.bottom,width:r.width,height:r.height};};
-  return {width:innerWidth,height:innerHeight,scrollWidth:document.documentElement.scrollWidth,controls:ids.map(bounds),composer:bounds('composer'),header:bounds('header-project'),chat:bounds('chat-scroll')};
+  const attachment=bounds('add-attachment');
+  const attachmentHit=document.elementFromPoint(attachment.x+attachment.width/2,attachment.y+attachment.height/2)?.closest('button')?.id;
+  return {width:innerWidth,height:innerHeight,scrollWidth:document.documentElement.scrollWidth,controls:ids.map(bounds),composer:bounds('composer'),header:bounds('header-project'),chat:bounds('chat-scroll'),attachmentHit};
  });
  assert.ok(result.scrollWidth<=result.width,`Horizontal overflow at ${result.width}px`);
  assert.ok(result.composer.bottom<=result.height+1,'Composer outside resized viewport');
  assert.ok(result.composer.y>result.header.bottom,'Composer overlaps header');
  assert.ok(result.chat.height>0,'Chat lost its scroll area');
+ assert.equal(result.attachmentHit,'add-attachment','Decorative Live control must not cover the attachment button');
  for(const button of result.controls){
   assert.ok(button.width>=43.5&&button.height>=43.5,`${button.id} touch target ${button.width}×${button.height}`);
   assert.ok(button.x>=0&&button.right<=result.width+1,`${button.id} outside viewport`);
